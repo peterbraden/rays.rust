@@ -2743,6 +2743,12 @@
           ]
         },
         {
+          "name": "close_level",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Full scale, without levels: a camera within 2 km of the ground adds a patch five times finer than the finest (30 m under the default 150 m), about the ground it sees, so the relief there is simulated rather than noise."
+        },
+        {
           "name": "focus",
           "kind": "vec3",
           "default": null,

@@ -4425,7 +4425,10 @@ impl SceneFile {
         if s.camera["above_ground"].as_bool() == Some(true)
             && let Some(l) = s.objects.iter().find(|o| o["type"].as_str() == Some("landscape")) {
             let at = |k: &str| SceneFile::parse_vec3_def(&s.camera, k, Vector3::zeros());
-            if let Some(p) = crate::terrain::object::above_ground(l, &[at("location"), at("lookat")]) {
+            // With the camera, so its world is nested about the same ground as the scene's.
+            let mut l = l.clone();
+            l["camera"] = s.camera.clone();
+            if let Some(p) = crate::terrain::object::above_ground(&l, &[at("location"), at("lookat")]) {
                 let json = |v: &Vector3<f64>| serde_json::json!([v.x, v.y, v.z]);
                 println!("Camera: {:.1} m above the ground, at [{:.1}, {:.1}, {:.1}]", at("location").y, p[0].x, p[0].y, p[0].z);
                 s.camera["location"] = json(&p[0]);

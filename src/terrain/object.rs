@@ -637,8 +637,27 @@ pub fn levels(o: &Value, globe: f64) -> Vec<Level> {
 /// looks over (`world::Focus`).
 fn focus(o: &Value) -> Focus {
     if o.get("focus").is_some() { return Focus::Point(SceneFile::parse_vec3(&o["focus"])); }
+    camera(o, false)
+}
+
+/// The scene's camera (passed in as `camera`) as a focus, its height `above_ground` or not.
+fn camera(o: &Value, above_ground: bool) -> Focus {
     let location = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.));
-    Focus::Camera { location, lookat: SceneFile::parse_vec3_def(&o["camera"], "lookat", location) }
+    Focus::Camera { location, lookat: SceneFile::parse_vec3_def(&o["camera"], "lookat", location), above_ground }
+}
+
+/// The camera that adds a close level to the world when it is near the ground
+/// (`world::close_level`): unless the scene gives its `levels`, or `"close_level": false`.
+fn close(o: &Value, above_ground: bool) -> Option<Focus> {
+    (o.get("levels").is_none() && o["close_level"].as_bool().unwrap_or(true)).then(|| camera(o, above_ground))
+}
+
+/// The spacing of the finest patch a world has (m), or the domain's without patches.
+fn finest_spacing(o: &Value, patches: &[crate::terrain::simulation::Terrain]) -> f64 {
+    patches.first().and_then(|t| match t.domain.layout {
+        crate::terrain::domain::Layout::Patch { spacing, .. } => Some(spacing),
+        _ => None,
+    }).unwrap_or_else(|| number(&o["domain"], "spacing", 750.))
 }
 
 /// A landscape's `"cache"`: the directory its world is kept in.
@@ -646,32 +665,6 @@ pub fn world_directory(o: &Value) -> Option<&std::path::Path> {
     o["cache"].as_str().map(std::path::Path::new)
 }
 
-/// A landscape at full scale over the whole planet (see `scenery`):
-///
-/// - `domain`: the site at the scene's origin: `{"lat", "lon"}` or `{"near": "mountains"}`
-///   (or `"volcanoes"`, `"coast"`), and the finest patch's `cells` and `spacing`.
-/// - `planet`: `{"cells": 64}`, cells per face edge of the whole planet's simulation (rivers
-///   and hillslopes, no glaciers), or `false` for its noise topography alone.
-/// - `levels`: patches nested about the `focus` (see `levels`; `[]` for none, as from orbit,
-///   where the planet's own relief is drawn down to the domain's `spacing`), each driven at its edge by the
-///   one around it. Glaciers and meandering channels only run on the finest (`"glacier"` and
-///   `"channels"` as for a patch): at kilometres per cell the ice can't drain down valleys
-///   narrower than a cell, and every river's bends are smaller than one.
-/// - `focus`: a scene point to centre the patches on; by default the ground the scene's camera
-///   (passed in as `camera`) looks over. Patches are snapped to an eighth of their width, so
-///   nearby cameras share them (and their cache).
-/// - `cache`: the world directory: the plates, the climate, the site and each simulation are
-///   kept there by key and taken from there when they are found, with a manifest of the
-///   stages (`world`, which builds all of them). Without it they are built in memory.
-/// - The mesh: `resolution` (vertices along a clipmap ring), `min_spacing` (m), `globe` (cells
-///   per face edge beyond the rings), `roughness` of the detail below the finest cells.
-/// - Ground cover: `snowline` and `treeline` (m; by default from the climate, by latitude),
-///   `min_river_width` (m); or `"material"`, a material for the ground but rivers and lakes,
-///   whose graphs' `field` nodes read the simulations (blended between patches) and the climate.
-/// - `displacement`: a graph displacing the ground about the camera at render time, as on a
-///   `terrain` (see `displaced_patch`), with `displacement_detail`, `vertical_displacement`
-///   and so on as there; `displacement_reach` (m, default 1000) out from under the camera on
-///   each side, on a heightfield of `displacement_spacing` (m, default 2).
 /// Scene points `y` metres above the ground under each (`x`, `y`, `z`) of `points`, on the
 /// full-scale landscape `o` (a camera's `"above_ground"`, `SceneFile::from_scenefile`): its
 /// world is built (from its `cache`, if it has one and was built before; a landscape without a
@@ -686,19 +679,23 @@ pub fn above_ground(o: &Value, points: &[Vector3<f64>]) -> Option<Vec<Vector3<f6
     let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
     let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
     let levels = levels(o, globe_spacing);
-    let finest = levels.first().map_or(number(&o["domain"], "spacing", 750.), |l| l.spacing);
+    let focus = match focus(o) {
+        Focus::Camera { location, lookat, .. } => Focus::Camera { location, lookat, above_ground: true },
+        f => f,
+    };
     let description = Description {
         params, site: site_of(&o["domain"]), time: number(o, "time", 0.), planet_cells, levels,
-        focus: focus(o), exaggeration: p.exaggeration,
+        focus, exaggeration: p.exaggeration, close: close(o, true),
     };
     let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
     let frame = world.frame.clone();
     let World { planet, globe, patches, .. } = world;
+    let finest = finest_spacing(o, &patches);
     let layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width)).collect();
     let relief = Relief::new(Arc::new(layers), &planet, radius, p.roughness, finest);
     Some(points.iter().map(|q| {
         let (d, _) = frame.on_planet(&Vector3::new(q.x, 0., q.z));
-        let h = relief.height(&d, relief.slope(&d), 1.);
+        let h = relief.height(&d, &relief.slope(&d), 1.);
         frame.to_scene(&d, h + q.y)
     }).collect())
 }
@@ -718,6 +715,36 @@ fn scenery_params(o: &Value) -> SceneryParams {
     p
 }
 
+/// A landscape at full scale over the whole planet (see `scenery`):
+///
+/// - `domain`: the site at the scene's origin: `{"lat", "lon"}` or `{"near": "mountains"}`
+///   (or `"volcanoes"`, `"coast"`), and the finest patch's `cells` and `spacing`.
+/// - `planet`: `{"cells": 64}`, cells per face edge of the whole planet's simulation (rivers
+///   and hillslopes, no glaciers), or `false` for its noise topography alone.
+/// - `levels`: patches nested about the `focus` (see `levels`; `[]` for none, as from orbit,
+///   where the planet's own relief is drawn down to the domain's `spacing`), each driven at its edge by the
+///   one around it. Glaciers and meandering channels only run on the finest (`"glacier"` and
+///   `"channels"` as for a patch): at kilometres per cell the ice can't drain down valleys
+///   narrower than a cell, and every river's bends are smaller than one.
+/// - `close_level`: without `levels`, a camera within `world::CLOSE_HEIGHT` of the ground adds a
+///   patch five times finer than the finest, about the ground it sees (`world::close_level`;
+///   with the finest's glaciers, `world::take_glaciers`), unless this is `false`: below the finest cells the relief is synthetic, and up close a
+///   simulation's gullies and spurs look far less made than the synthetic's smooth forms.
+/// - `focus`: a scene point to centre the patches on; by default the ground the scene's camera
+///   (passed in as `camera`) looks over. Patches are snapped to an eighth of their width, so
+///   nearby cameras share them (and their cache).
+/// - `cache`: the world directory: the plates, the climate, the site and each simulation are
+///   kept there by key and taken from there when they are found, with a manifest of the
+///   stages (`world`, which builds all of them). Without it they are built in memory.
+/// - The mesh: `resolution` (vertices along a clipmap ring), `min_spacing` (m), `globe` (cells
+///   per face edge beyond the rings), `roughness` of the detail below the finest cells.
+/// - Ground cover: `snowline` and `treeline` (m; by default from the climate, by latitude),
+///   `min_river_width` (m); or `"material"`, a material for the ground but rivers and lakes,
+///   whose graphs' `field` nodes read the simulations (blended between patches) and the climate.
+/// - `displacement`: a graph displacing the ground about the camera at render time, as on a
+///   `terrain` (see `displaced_patch`), with `displacement_detail`, `vertical_displacement`
+///   and so on as there; `displacement_reach` (m, default 1000) out from under the camera on
+///   each side, on a heightfield of `displacement_spacing` (m, default 2).
 fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
     let p = scenery_params(o);
     let radius = params.planet.radius;
@@ -725,30 +752,30 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
     let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
     let levels = levels(o, globe_spacing);
-    let finest = levels.first().map_or(number(&o["domain"], "spacing", 750.), |l| l.spacing);
 
     // The world: the planet, the site, and the simulations nested about the focus, each
     // driving the next at its edge (`world`), kept in the `cache` directory if there is one.
     let description = Description {
         params: params.clone(), site: site_of(&o["domain"]), time, planet_cells, levels,
-        focus: focus(o), exaggeration: p.exaggeration,
+        focus: focus(o), exaggeration: p.exaggeration, close: close(o, false),
     };
     let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
     let frame = world.frame.clone();
+    let finest = finest_spacing(o, &world.patches);
     if let Some(t) = world.patches.first() {
         if let Some(path) = o["map"].as_str() { write_map(t, path, 2048); }
         if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(t, path, 2048); }
         if let Some(path) = o["rain_map"].as_str() { map::write_rain_map(t, path, 2048); }
         if let Some(path) = o["height_map"].as_str() && let Some((lo, hi)) = map::write_height_map(t, path) {
             say(format!("Landscape: heights of its finest patch, {} cells of {} m, from {:.1} to {:.1} m in {}",
-                t.domain.len(), description.levels[0].spacing, lo, hi, path));
+                t.domain.len(), finest, lo, hi, path));
         }
         // Where the glaciers are, to frame them.
         let ice = (0..t.domain.len()).filter(|&i| t.ice[i] >= crate::terrain::simulation::ICE_FREE);
         let cells = ice.clone().count();
         if let Some(i) = ice.max_by(|&a, &b| t.ice[a].total_cmp(&t.ice[b])) {
             let at = frame.to_scene(&t.domain.dirs[i], t.surface()[i]);
-            let spacing = description.levels[0].spacing;
+            let spacing = finest;
             say(format!("Landscape: glaciers cover {:.0} km²; the thickest ice, {:.0} m, is at [{:.0}, {:.0}, {:.0}]",
                 cells as f64 * spacing * spacing / 1e6, t.ice[i], at.x, at.y, at.z));
         }
@@ -762,7 +789,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
     let (foot, height) = frame.on_planet(&view.location);
-    let ground = relief.height(&foot, relief.slope(&foot), 1.);
+    let ground = relief.height(&foot, &relief.slope(&foot), 1.);
     say(format!("Landscape: the camera is {:.1} m above the ground under it ({:.1} m above sea level)", height - ground, ground));
     let (o, displacement) = &procedural_displacement(o, height - ground, params.planet.seed);
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
@@ -921,8 +948,8 @@ fn write_cover_map(ground: &Ground, relief: &Relief, frame: &crate::terrain::sce
         let d = frame.dir(x, z);
         let slope = relief.slope(&d);
         let local = 2. * half / width as f64;
-        let h = relief.height(&d, slope, local);
-        let normal = (frame.to_scene(&relief.normal(&d, slope, local), 0.) - frame.centre()).normalize();
+        let h = relief.height(&d, &slope, local);
+        let normal = (frame.to_scene(&relief.normal(&d, &slope, local), 0.) - frame.centre()).normalize();
         let c = ground.albedo(&frame.to_scene(&d, h), &normal);
         let encode = |v: f64| (v.clamp(0., 1.).powf(1. / 2.2) * 255.) as u8;
         [encode(c.rgb.x), encode(c.rgb.y), encode(c.rgb.z)]

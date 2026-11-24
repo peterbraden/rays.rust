@@ -20,6 +20,7 @@
 //! | `site` | where the scene's origin is on the planet | plates | `site-<key>.json` |
 //! | `planet` | the whole planet's erosion (`simulation`) | plates, climate | `planet-<key>-<years>.json` |
 //! | `patch <spacing> m` | a nested patch's, coarsest first | the stage around it, plates, climate | `patch-<key>-<years>.json` |
+//! | `patch <spacing> m` | a close level's, for a camera near the ground (`close_level`), last | the finest patch, plates, climate | `patch-<key>-<years>.json` |
 //!
 //! The planet's relief below the crust's grid is noise evaluated where it is asked for
 //! (`planet`), so it has no state and no stage: `plates` is all of the planet that is kept.
@@ -382,10 +383,12 @@ impl Site {
 
 /// What the patches are centred on, as scene points: one given, or the ground a camera looks
 /// over (below it, moved towards where it looks by up to half the finest patch's half-width).
+/// A camera `above_ground` has its location's height above the ground, not the sea (a scene
+/// camera's `"above_ground"`, before it is placed on the world this builds).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Focus {
     Point(Vector3<f64>),
-    Camera { location: Vector3<f64>, lookat: Vector3<f64> },
+    Camera { location: Vector3<f64>, lookat: Vector3<f64>, above_ground: bool },
 }
 
 impl Focus {
@@ -393,7 +396,7 @@ impl Focus {
     pub fn centre(&self, frame: &Frame, ahead: f64) -> Vector3<f64> {
         match self {
             Focus::Point(p) => frame.on_planet(p).0,
-            Focus::Camera { location, lookat } => {
+            Focus::Camera { location, lookat, .. } => {
                 let (foot, _) = frame.on_planet(location);
                 let (x, z) = frame.tangent(&foot);
                 let (lx, lz) = frame.tangent(&frame.on_planet(lookat).0);
@@ -427,7 +430,18 @@ pub struct Description {
     pub focus: Focus,
     /// The scene's vertical exaggeration (it places the focus).
     pub exaggeration: f64,
+    /// The scene's camera (a `Focus::Camera`), if one close to the ground (`CLOSE_HEIGHT`) is to
+    /// add a patch `CLOSE_FINER` times finer than the finest level about the ground it sees
+    /// (`close_level`).
+    pub close: Option<Focus>,
 }
+
+/// A focus camera within this height of the ground, metres, sees the relief finer than the
+/// finest level's cells: its gullies and spurs are drawn from a simulation of their own.
+pub const CLOSE_HEIGHT: f64 = 2000.;
+
+/// How much finer the close level is than the finest.
+pub const CLOSE_FINER: f64 = 5.;
 
 impl Description {
     /// The names of the stages a build of this goes through, in order.
@@ -536,6 +550,41 @@ impl Builder<'_> {
         let path = self.store.path(&file)?;
         if !path.exists() { draw(path.to_str()?); }
         Some(file)
+    }
+
+
+    /// Evolve the patch `name` of level `l` about `centre`, driven at its edge by the last of
+    /// `built` (named in `outer`, with its corners' heights before it evolved), and add it.
+    #[allow(clippy::too_many_arguments)]
+    fn patch(&mut self, d: &Description, name: &str, l: &Level, (glaciers, channels): (bool, bool), centre: &Vector3<f64>, frame: &Frame,
+        outer: &mut Option<(String, Vec<f64>)>, built: &mut Vec<Terrain>) -> Result<(), Stopped>
+    {
+        let (params, time, radius) = (&d.params, d.time, d.params.planet.radius);
+        let (fx, fz) = frame.tangent(centre);
+        let begun = Instant::now();
+        let width = l.cells as f64 * l.spacing;
+        let snap = |c: f64| (c / (width / 8.)).round() * (width / 8.);
+        let (lat, lon) = Domain::lat_lon(&frame.dir(snap(fx), snap(fz)));
+        let mut lp = params.clone();
+        if !glaciers { lp.glacier = None; }
+        if !channels { lp.channels = None; }
+        let own = format!("{:?} {:?} {:?} {} {:?} {:?}", lp, lat, lon, l.cells, l.spacing, time);
+        let around: Vec<&str> = outer.iter().map(|(n, _)| n.as_str()).chain(["plates", "climate"]).collect();
+        let (key, reads) = self.chain(&["patch", &own], &around);
+        let mut t = Terrain::new(Domain::patch(lat, lon, l.cells, l.spacing, radius), lp);
+        let initial = scenery::corner_heights(&t);
+        if let (Some(around), Some((_, before)), true) = (built.last(), &*outer, time > 0.) {
+            // The edge follows the change the simulation around it went through there.
+            let after = scenery::corner_heights(around);
+            t.boundary_rate = (0..t.domain.len()).map(|i| {
+                if !t.domain.boundary[i] { return 0.; }
+                let d = t.domain.dirs[i];
+                (scenery::sample(&around.domain, &after, &d) - scenery::sample(&around.domain, before, &d)) / time
+            }).collect();
+        }
+        *outer = Some((name.to_string(), initial));
+        built.push(self.evolve(name, &key, reads, t, time, begun)?);
+        Ok(())
     }
 
     /// The planet: its plates, from the directory or simulated.
@@ -741,42 +790,60 @@ fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&
     }
     let finest_half = d.levels.first().map_or(0., |l| l.cells as f64 * l.spacing / 2.);
     let centre = d.focus.centre(&frame, 0.5 * finest_half);
-    let (fx, fz) = frame.tangent(&centre);
     for (k, l) in d.levels.iter().enumerate().rev() {
-        let begun = Instant::now();
-        let name = d.patch_name(k);
-        let width = l.cells as f64 * l.spacing;
-        let snap = |c: f64| (c / (width / 8.)).round() * (width / 8.);
-        let (lat, lon) = Domain::lat_lon(&frame.dir(snap(fx), snap(fz)));
-        let mut lp = params.clone();
-        if k > 0 {
-            // Glaciers and meandering channels are both finer than a coarse patch's cells:
-            // they only run on the finest, where they are drawn.
-            lp.glacier = None;
-            lp.channels = None;
-        }
-        let own = format!("{:?} {:?} {:?} {} {:?} {:?}", lp, lat, lon, l.cells, l.spacing, time);
-        let around: Vec<&str> = outer.iter().map(|(n, _)| n.as_str()).chain(["plates", "climate"]).collect();
-        let (key, reads) = b.chain(&["patch", &own], &around);
-        let mut t = Terrain::new(Domain::patch(lat, lon, l.cells, l.spacing, radius), lp);
-        let initial = scenery::corner_heights(&t);
-        if let (Some(around), Some((_, before)), true) = (built.last(), &outer, time > 0.) {
-            // The edge follows the change the simulation around it went through there.
-            let after = scenery::corner_heights(around);
-            t.boundary_rate = (0..t.domain.len()).map(|i| {
-                if !t.domain.boundary[i] { return 0.; }
-                let d = t.domain.dirs[i];
-                (scenery::sample(&around.domain, &after, &d) - scenery::sample(&around.domain, before, &d)) / time
-            }).collect();
-        }
-        outer = Some((name.clone(), initial));
-        built.push(b.evolve(&name, &key, reads, t, time, begun)?);
+        // Glaciers and meandering channels are both finer than a coarse patch's cells: they
+        // only run on the finest, where they are drawn.
+        b.patch(d, &d.patch_name(k), l, (k == 0, k == 0), &centre, &frame, &mut outer, &mut built)?;
+    }
+    if let (Some(l), Some(camera)) = (close_level(d, &frame, built.last()), &d.close) {
+        let centre = camera.centre(&frame, 0.25 * l.cells as f64 * l.spacing);
+        // Its glaciers are the finest level's: ice moving over cells this fine needs steps
+        // too short to run (25 times as many as there for the same cells), and the ice's
+        // surface is smooth at a few hundred metres anyway.
+        b.patch(d, &format!("patch {} m", l.spacing), &l, (false, true), &centre, &frame, &mut outer, &mut built)?;
+        let n = built.len();
+        let (around, close) = built.split_at_mut(n - 1);
+        take_glaciers(&mut close[0], &around[n - 2]);
     }
     let mut patches = built;
     let globe = d.planet_cells.map(|_| patches.remove(0));
     patches.reverse();
     let manifest_path = b.manifest_file.as_deref().and_then(|f| b.store.path(f));
     Ok(World { site, frame, planet, climate, globe, patches, manifest: b.manifest, manifest_path })
+}
+
+/// The close level `d` adds (`Description::close_level`), if its focus is a camera within
+/// `CLOSE_HEIGHT` of the ground of `finest`, the finest patch built: as many cells as the finest
+/// level, `CLOSE_FINER` times finer.
+fn close_level(d: &Description, frame: &Frame, finest: Option<&Terrain>) -> Option<Level> {
+    let (Some(Focus::Camera { location, above_ground, .. }), Some(l), Some(t)) = (&d.close, d.levels.first(), finest) else { return None };
+    let height = if *above_ground { location.y } else {
+        let (foot, h) = frame.on_planet(location);
+        h - scenery::sample(&t.domain, &scenery::corner_heights(t), &foot)
+    };
+    (height < CLOSE_HEIGHT).then_some(Level { cells: l.cells, spacing: l.spacing / CLOSE_FINER })
+}
+
+/// Give `close`, a close level evolved without glaciers, those of `around`, the patch around it:
+/// where `around` has ice, its ice, and its bed and sediment beneath, fading into `close`'s own
+/// over the ice's first 30 m of thickness; and its till wherever it has more (moraines left by
+/// the ice, as a field: their relief is too fine for `around`).
+fn take_glaciers(close: &mut Terrain, around: &Terrain) {
+    if around.params.glacier.is_none() { return; }
+    let corners = |v: &[f64]| scenery::corner_values(around, v);
+    let (ice, bed, sediment, till) = (corners(&around.ice), corners(&around.bed), corners(&around.sediment), corners(&around.till));
+    for i in 0..close.domain.len() {
+        let d = close.domain.dirs[i];
+        let at = |c: &[f64]| scenery::sample(&around.domain, c, &d);
+        let h = at(&ice).max(0.);
+        if h > 0. {
+            let w = crate::procedural::nubis_clouds::smoothstep(0., 30., h);
+            close.bed[i] += w * (at(&bed) - close.bed[i]);
+            close.sediment[i] += w * (at(&sediment).max(0.) - close.sediment[i]);
+            close.ice[i] = h;
+        }
+        close.till[i] = close.till[i].max(at(&till).min(close.sediment[i]));
+    }
 }
 
 /// What `survey` finds of a world.
@@ -815,8 +882,8 @@ mod tests {
         Description {
             params, site: Site::Mountains, time: 3000., planet_cells: Some(6),
             levels: vec![Level { cells: 16, spacing: 1000. }, Level { cells: 12, spacing: 5000. }],
-            focus: Focus::Camera { location: Vector3::new(0., 3000., 0.), lookat: Vector3::new(0., 0., -1000.) },
-            exaggeration: 1.,
+            focus: Focus::Camera { location: Vector3::new(0., 3000., 0.), lookat: Vector3::new(0., 0., -1000.), above_ground: false },
+            exaggeration: 1., close: None,
         }
     }
 

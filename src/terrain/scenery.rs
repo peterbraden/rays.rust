@@ -24,12 +24,18 @@
 //!
 //! ## Detail below the grid
 //!
-//! Below the finest simulation's resolution, fractal noise adds the relief no simulation
+//! Below the finest simulation's resolution, synthetic relief adds what no simulation
 //! resolves, in proportion to the local slope: rough on mountainsides, little on valley floors
 //! and plains. This is "amplification" of a coarse terrain (as in Guérin et al., "Sparse
-//! representation of terrains for procedural modeling", Computer Graphics Forum 35(2), 2016), in
-//! its simplest form: warped ridged noise, for crests and spurs between gullies. It is drawn
-//! down to whatever spacing the mesh has at that point.
+//! representation of terrains for procedural modeling", Computer Graphics Forum 35(2), 2016),
+//! shaped as water shapes slopes: gullies running straight down the large-scale slope, with
+//! narrow beds and broad spurs rounded by creep, each octave running down the sides of the
+//! coarser ones' so they branch (`Relief::gullies`, after the "erosion noise" of Clay John and
+//! Fewes), and a little plain noise to break their lines. (Isotropic ridged noise, which this
+//! replaced, rose in rounded mounds and crests going every way, which read as made.) It is drawn
+//! down to whatever spacing the mesh has at that point, and no finer than `RELIEF_FINEST`. Up
+//! close, the world adds a simulation five times finer than its finest about the camera
+//! (`world::close_level`), so the gullies a few hundred metres apart are eroded, not drawn.
 //!
 //! ## Adaptive resolution: a clipmap about the camera
 //!
@@ -175,9 +181,13 @@ fn catmull_rom(a: f64, b: f64, c: f64, d: f64, t: f64) -> f64 {
 /// Surface height (ground plus ice) at each of a domain's cell corners: the mean of the cells
 /// meeting there.
 pub fn corner_heights(t: &Terrain) -> Vec<f64> {
-    let surface = t.surface();
+    corner_values(t, &t.surface())
+}
+
+/// A field `v` of `t`'s cells at its domain's corners, each the mean of the cells about it.
+pub fn corner_values(t: &Terrain, v: &[f64]) -> Vec<f64> {
     t.domain.corner_cells.iter()
-        .map(|cells| cells.iter().map(|&c| surface[c]).sum::<f64>() / cells.len() as f64)
+        .map(|cells| cells.iter().map(|&c| v[c]).sum::<f64>() / cells.len() as f64)
         .collect()
 }
 
@@ -307,6 +317,11 @@ impl Layer {
 }
 
 /// Heights of the landscape, from its layers and the planet's own topography.
+/// The large-scale surface's slope at a point: its gradient (uphill, metres per metre, in the
+/// planet's frame, along the surface) and the steepness, its length up to 1.5.
+#[derive(Clone, Copy, Debug)]
+pub struct Slope { pub steepness: f64, pub gradient: Vector3<f64> }
+
 pub struct Relief {
     pub layers: Arc<Vec<Layer>>,
     planet: Planet,
@@ -315,7 +330,6 @@ pub struct Relief {
     finest: f64,
     roughness: f64,
     noise: SeededNoise,
-    ridges: SeededNoise,
 }
 
 /// The longest wavelength of synthetic detail is a power of two metres, so the octaves are the
@@ -323,7 +337,7 @@ pub struct Relief {
 const LONGEST_DETAIL: f64 = 65536.;
 
 /// ... and the shortest, metres: below it the ground's own detail (`terrain::detail`), drawn
-/// from its geology, takes over. (The ridged noise down to the displaced patches' centimetre
+/// from its geology, takes over. (Synthetic relief, ridged noise then, down to the displaced patches' centimetre
 /// cells raised sharp ridges a metre high a few metres apart on steep faces, which the ground's
 /// detail then stood on as fins.)
 const RELIEF_FINEST: f64 = 12.;
@@ -337,7 +351,6 @@ impl Relief {
             layers, radius, finest, roughness,
             planet: Planet::new(planet.params.clone()),
             noise: SeededNoise::new(seed.wrapping_add(0x5ce7e)),
-            ridges: SeededNoise::new(seed.wrapping_add(0x41d9e)),
         }
     }
 
@@ -375,19 +388,24 @@ impl Relief {
     }
 
     /// The slope of the large-scale surface at `d`, over about a cell of the finest layer.
-    pub fn slope(&self, d: &Vector3<f64>) -> f64 {
+    pub fn slope(&self, d: &Vector3<f64>) -> Slope {
         let (t1, t2) = Relief::tangents(d);
         let e = self.finest;
         let gx = self.base(&self.step(d, &t1, &t2, e, 0.)) - self.base(&self.step(d, &t1, &t2, -e, 0.));
         let gz = self.base(&self.step(d, &t1, &t2, 0., e)) - self.base(&self.step(d, &t1, &t2, 0., -e));
-        (gx.hypot(gz) / (2. * e)).min(1.5)
+        let gradient = (t1 * gx + t2 * gz) / (2. * e);
+        Slope { steepness: gradient.norm().min(1.5), gradient }
     }
 
     /// Synthetic relief at `d`, for a surface of slope `slope`, drawn down to wavelengths the
-    /// mesh's spacing `local` there can carry.
-    pub fn detail(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
+    /// mesh's spacing `local` there can carry: gullies down the slope (`gullies`), and a little
+    /// noise to break them up.
+    pub fn detail(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
         let p = d * self.radius;
         let mut sum = 0.;
+        // The slope as the gullies so far leave it: each octave's run down the sides of the
+        // coarser ones, so they branch.
+        let mut gradient = slope.gradient;
         let mut wavelength = LONGEST_DETAIL;
         let mut octave = 0.;
         while wavelength >= local.max(RELIEF_FINEST) {
@@ -397,21 +415,63 @@ impl Relief {
             let carried = 1. - smoothstep(wavelength / 4., wavelength / 2., local);
             let w = (1. - resolved) * carried;
             if w > 0. {
-                // Warped ridged noise: sharp crests and spurs between gullies, with a little
-                // plain noise to break them up.
+                let amplitude = w * self.roughness * wavelength;
+                let (g, dg) = self.gullies(&p, d, &gradient, wavelength, octave);
+                // As deep as their slope allows: on a slope s, gullies a wavelength apart are
+                // about a tenth of it deep per unit of slope; none on the flat.
+                let depth = 0.1 * amplitude * slope.steepness;
+                sum += depth * g;
+                gradient += dg * depth;
+                // Noise everywhere, a little more on slopes, to break the gullies' lines.
                 let q = (p + Vector3::new(31.7, 17.3, 5.1) * (octave * wavelength)) / wavelength;
-                let warp = Vector3::new(
-                    self.noise.noise(q * 0.5 + Vector3::new(3.1, 0.7, 7.7)),
-                    self.noise.noise(q * 0.5 + Vector3::new(5.3, 2.9, 0.4)),
-                    self.noise.noise(q * 0.5 + Vector3::new(9.4, 4.2, 1.3)));
-                let r = (1. - self.ridges.noise(q + warp * 0.6).abs()).powi(2);
-                let n = 1.4 * (r - 0.45) + 0.4 * self.noise.noise(q * 1.7);
-                sum += w * self.roughness * wavelength / 4. * n;
+                sum += 0.06 * amplitude * (0.15 + slope.steepness) * self.noise.noise(q * 1.3);
             }
             wavelength /= 2.;
             octave += 1.;
         }
-        sum * (0.05 + slope)
+        sum
+    }
+
+    /// Gullies `wavelength` apart running down a surface of slope `gradient` (uphill, metres per
+    /// metre) at `p` (`d` from the planet's centre), from -1 in their beds to 1 on the spurs
+    /// between, and their gradient (per metre). Erosion's pattern (as in Fewes's "erosion
+    /// noise", after Clay John's): waves across the slope from points scattered on a lattice of
+    /// the wavelength, each fading with distance, so they run straight down the slope and are
+    /// broken where one point's waves give way to another's. The beds are narrow and the spurs
+    /// broad and rounded, as creep leaves them.
+    fn gullies(&self, p: &Vector3<f64>, d: &Vector3<f64>, gradient: &Vector3<f64>, wavelength: f64, octave: f64) -> (f64, Vector3<f64>) {
+        let g = gradient - d * d.dot(gradient);
+        let steep = g.norm();
+        if steep < 1e-6 { return (0., Vector3::zeros()); }
+        let across = d.cross(&(g / steep));
+        let q = p / wavelength;
+        let cell = q.map(f64::floor);
+        let (mut v, mut dv, mut total) = (0., Vector3::zeros(), 0.);
+        let seed = (octave as u64).wrapping_mul(0x632b_e59b_d9b4_e019) ^ 0x9e37_79b9;
+        for i in -1..=1 {
+            for j in -1..=1 {
+                for k in -1..=1 {
+                    let c = cell + Vector3::new(i as f64, j as f64, k as f64);
+                    let mut h = seed;
+                    for x in [c.x, c.y, c.z] { h = (h ^ (x as i64 as u64)).wrapping_mul(0xbf58_476d_1ce4_e5b9); h ^= h >> 29; }
+                    let r = |s: u32| ((h >> s) & 0xffff) as f64 / 65535.;
+                    let at = c + Vector3::new(r(0), r(16), r(32));
+                    let o = q - at;
+                    let weight = (-2. * o.norm_squared()).exp();
+                    if weight < 1e-4 { continue; }
+                    let phase = std::f64::consts::TAU * (o.dot(&across) + r(48));
+                    v += weight * phase.cos();
+                    dv -= across * (weight * phase.sin() * std::f64::consts::TAU / wavelength);
+                    total += weight;
+                }
+            }
+        }
+        if total <= 0. { return (0., Vector3::zeros()); }
+        let (v, dv) = (v / total, dv / total);
+        // Narrow beds, broad spurs: a profile rising steeply out of each bed.
+        let shaped = 1. - 2. * (1. - (0.5 + 0.5 * v).clamp(0., 1.)).powf(1.5);
+        let slope = 1.5 * (1. - (0.5 + 0.5 * v).clamp(0., 1.)).sqrt();
+        (shaped, dv * slope)
     }
 
     /// The wind-blown sand at `d`, metres, blended between the layers as their surfaces are,
@@ -479,7 +539,7 @@ impl Relief {
 
     /// The surface's height at `d` with detail down to spacing `local`, given its large-scale
     /// slope there.
-    pub fn height(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
+    pub fn height(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
         let (sand, wind) = self.sand(d);
         // Drifting sand buries the ground's small relief.
         let buried = 1. - 0.8 * smoothstep(0.5, 4., sand);
@@ -488,7 +548,7 @@ impl Relief {
 
     /// The surface's normal at `d` (outwards, in planet coordinates), by finite differences
     /// over the mesh's spacing.
-    pub fn normal(&self, d: &Vector3<f64>, slope: f64, local: f64) -> Vector3<f64> {
+    pub fn normal(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> Vector3<f64> {
         let (t1, t2) = Relief::tangents(d);
         let e = local / 2.;
         let h = |a: f64, b: f64| self.height(&self.step(d, &t1, &t2, a, b), slope, local);
@@ -636,7 +696,7 @@ impl crate::procedural::heightmap::HeightSource for Surface<'_> {
         let mut y = 0.;
         for _ in 0..4 {
             let (d, h) = at(y);
-            y += (self.relief.height(&d, slope, spacing) - h) * self.frame.exaggeration;
+            y += (self.relief.height(&d, &slope, spacing) - h) * self.frame.exaggeration;
         }
         y
     }
@@ -728,8 +788,8 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams,
     // Heights and normals.
     let shaped: Vec<(Vector3<f64>, Vector3<f64>)> = vertices.par_iter().map(|v| {
         let slope = relief.slope(&v.d);
-        let h = relief.height(&v.d, slope, v.local);
-        let n = relief.normal(&v.d, slope, v.local);
+        let h = relief.height(&v.d, &slope, v.local);
+        let n = relief.normal(&v.d, &slope, v.local);
         // Rotated into the scene: to_scene is a rotation about the planet's centre.
         let normal_scene = frame.to_scene(&n, 0.) - frame.centre();
         (frame.to_scene(&v.d, h), normal_scene.normalize())
@@ -1500,12 +1560,12 @@ mod tests {
         for (x0, z0) in [(0., 0.), (140e3, -70e3)] {
             let local = Local::under(&f, x0, z0);
             let (d, h) = f.on_planet(&local.origin);
-            let ground = r.height(&d, r.slope(&d), 2.) - h;
+            let ground = r.height(&d, &r.slope(&d), 2.) - h;
             // The synthetic detail, which the rings carry less of than the patch, grows with
             // the slope (`Relief::detail`), and so may their difference near the patch's edge.
             // The octaves the rings leave out, up to about twice their cells (a few metres here),
             // sum to about half that wavelength times (0.05 + slope); with a margin.
-            let tolerance = 6. * (0.05 + r.slope(&d));
+            let tolerance = 6. * (0.05 + r.slope(&d).steepness);
             let view = Viewpoint { location: local.to_scene(&Vector3::new(0., ground + 50., 0.)) };
             let clipmap = Clipmap::new(&r, &f, &view, &p);
             let surface = Surface { relief: &r, frame: &f, local: &local, clipmap: &clipmap, cell: 2. };

@@ -69,9 +69,12 @@ fit refines a preset's colours; it doesn't choose them.
 
 Better still, as a search's cost grows with its dimensions (CMA-ES wants of the order of a
 hundred evaluations per dimension), a preset's colours can be fitted together:
-`{"kind": "colours", "paths": [...]}` searches four numbers for all of them, gains on red,
-green and blue (`gain`, default 0.5 to 2 each) and a contrast about their mean lightness
-(`contrast`, default 0.5 to 2), keeping the colours' relations as their author gave them.
+`{"kind": "colours", "paths": [...]}` searches four numbers for all of them, as for one colour:
+a gain on their lightness (`gain`, default 0.5 to 2), shifts of their tints along red-green and
+blue-yellow (within `chroma`, default 0.12, of the author's), and a contrast about their mean
+lightness (`contrast`, default 0.5 to 2), keeping the colours' relations as their author gave
+them. (Gains on red, green and blue apiece let a group's hue wander anywhere: grey lichen
+turned blue, ochre turned pink.)
 
     scripts/fit-material.py scree|spec.json [--iterations 30] [--resolution 160] [--samples 8] [--record] [-o out_dir]
 
@@ -197,23 +200,31 @@ class Problem:
                 self.slots.append((p, None))
 
     def group_bounds(self, p, c):
-        lo, hi = p.get("gain", [0.5, 2.]) if c < 3 else p.get("contrast", [0.5, 2.])
-        return lo, hi
+        """The group's numbers: a gain on lightness, two tint shifts, a contrast."""
+        if c in (1, 2):
+            chroma = p.get("chroma", 0.12)
+            return -chroma, chroma
+        return p.get("gain", [0.5, 2.]) if c == 0 else p.get("contrast", [0.5, 2.])
 
     def group_value(self, p, c, u):
         lo, hi = self.group_bounds(p, c)
         u = min(max(u, 0.), 1.)
+        if c in (1, 2):
+            return lo + u * (hi - lo)
         return math.exp(math.log(lo) + u * (math.log(hi) - math.log(lo)))
 
     def apply_group(self, preset, p, values):
-        """Gains and contrast applied to every colour of the group, from the preset's own."""
-        gains, contrast = values[:3], values[3]
+        """The gain, tint shifts and contrast applied to every colour of the group, from the
+        preset's own."""
+        gain, shift_a, shift_b, contrast = values
         own = [get(self.preset, path) for path in p["paths"]]
         mean = sum(sum(c) / 3. for c in own) / len(own)
         for path, colour in zip(p["paths"], own):
-            light = sum(colour) / 3.
-            scale = (mean + contrast * (light - mean)) / light if light > 0 else 1.
-            put(preset, path, [round(max(v * g * scale, 0.), 4) for v, g in zip(colour, gains)])
+            light, a, b = self.tints(colour)
+            light = gain * (mean + contrast * (light - mean))
+            a, b = a + shift_a, b + shift_b
+            rgb = [light * (1. + a + 0.5 * b), light * (1. - a + 0.5 * b), light * (1. - b)]
+            put(preset, path, [round(max(v, 0.), 4) for v in rgb])
 
     def bounds(self, p):
         if p.get("kind") == "color":
@@ -266,7 +277,7 @@ class Problem:
         for p, c in self.slots:
             if isinstance(c, tuple):
                 lo, hi = self.group_bounds(p, c[1])
-                x.append((0. - math.log(lo)) / (math.log(hi) - math.log(lo)))
+                x.append(0.5 if c[1] in (1, 2) else (0. - math.log(lo)) / (math.log(hi) - math.log(lo)))
                 continue
             if "field" in p:
                 v = usage.get(p["field"], p.get("default", 1.))

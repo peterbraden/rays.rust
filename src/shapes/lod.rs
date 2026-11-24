@@ -1245,6 +1245,12 @@ const CARD_TOLERANCE: f64 = 0.15;
 /// shadow a ray leaving it (`Clusters::lit`), whatever its size.
 const CROSSED_FROM: usize = 64;
 
+/// What the research settings make of a tree's levels (`crossed_from`, `self_lit_from`), for a
+/// cache's key (`procedural::tree_cache`): a level made under one setting isn't another's.
+pub fn settings() -> String {
+    format!("crossed from {}, self-lit from {}", crossed_from(), self_lit_from())
+}
+
 /// `CROSSED_FROM`, or `$LOD_CROSSED` for research (a large number for single cards only).
 fn crossed_from() -> usize {
     static FROM: std::sync::OnceLock<usize> = std::sync::OnceLock::new();

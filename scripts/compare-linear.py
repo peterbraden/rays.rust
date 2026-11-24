@@ -2,7 +2,7 @@
 """Compare two linear renders (.exr) of the same scene by mean luminance, overall and binned by
 the depth image of the first, eg. a level-of-detail render against full detail.
 
-    scripts/compare-linear.py test.exr reference.exr depth.exr [--bins 6] [--mask-below 0]
+    scripts/compare-linear.py test.exr reference.exr depth.exr [--bins 6] [--clamp 0.999]
 
 Prints, per depth bin, the pixels in it and the ratio of the mean luminances (test / reference),
 with a standard error by the jackknife over rows, and the ratio of the medians. Both images are

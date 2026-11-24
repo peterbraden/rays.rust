@@ -15,8 +15,9 @@
 //!   named, not hashed, so after changing one, empty the cache.
 //!
 //! A tree's key is the FNV hash of everything that makes it (`world::key`): its parameters,
-//! its seed, its forest entry (which names its materials) and those materials as the scene
-//! defines them (the leaves' albedo shapes their cards' shadowing), with the level format
+//! its seed, its forest entry (which names its materials), those materials as the scene
+//! defines them (the leaves' albedo shapes their cards' shadowing) and the research settings
+//! of how levels are made (`lod::settings`), with the level format
 //! (`lod::MAGIC`'s number, in `decode`) checked on reading. A tree whose header is there is never
 //! grown; one whose header or a level is missing is grown, and what was missing is written. A
 //! level is used as decoded from its bytes whether it was read or just made, so a render is the
@@ -165,6 +166,11 @@ impl TreeCache {
     /// Writes `bytes` whole, then renames them into place, so a reader never sees part of a
     /// file; a failure is reported and otherwise ignored (the tree is made again next time).
     fn write(&self, file: &str, bytes: &[u8]) {
+        // (In a browser there are no files to write: the cache is read only, through
+        // `assets`, from what the page provides.)
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
         let path = self.dir.join(file);
         #[cfg(not(target_arch = "wasm32"))]
         let process = std::process::id();

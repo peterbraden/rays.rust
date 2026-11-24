@@ -718,15 +718,22 @@ impl<'a> Air<'a> {
     }
 
     /// `segment`, in `steps` steps if given.
+    /// How many steps a view ray's stretch from `start` to `end` is integrated in: a quarter of
+    /// the haze's scale height each, 4 to `DEFAULT_NUM_SAMPLES`. Aerial perspective
+    /// (`segment`) and the light shadow takes from it (`single_scattering_steps`) share it, so
+    /// what crepuscular rays take away is what was put in (the shader's `segment` and
+    /// `crepuscular_samples` likewise).
+    fn steps(&self, start: f64, end: f64) -> usize {
+        ((end - start) / (0.25 * self.sky.mie_thickness)).ceil().clamp(4., DEFAULT_NUM_SAMPLES as f64) as usize
+    }
+
     fn segment_in(&self, origin: &Vector3<f64>, d: &Vector3<f64>, distance: f64, steps: Option<usize>) -> (Vector3<f64>, Vector3<f64>) {
         let r = Ray { ro: *origin, rd: *d };
         let (start, end) = match self.sky.view_ray_span(&r) {
             Some((start, end)) if start < distance => (start, end.min(distance)),
             _ => return (Vector3::repeat(1.), Vector3::zeros()),
         };
-        let steps = steps.unwrap_or_else(|| {
-            ((end - start) / (0.25 * self.sky.mie_thickness)).ceil().clamp(4., DEFAULT_NUM_SAMPLES as f64) as usize
-        });
+        let steps = steps.unwrap_or_else(|| self.steps(start, end));
         let mut depth = Depths::default();
         let (mut rayleigh, mut mie, mut multiple) = (Vector3::zeros(), Vector3::zeros(), Vector3::zeros());
         for (t, step) in self.sky.span_samples(&r, start, end, steps) {
@@ -761,7 +768,7 @@ impl<'a> Air<'a> {
         let (rayleigh, mie) = (SkyMaterial::rayleigh_phase(mu), SkyMaterial::mie_phase(mu, self.sky.mie_anisotropy));
         let scale = self.sky.brightness * SKY_CALIBRATION;
         let mut depth = Depths::default();
-        self.sky.span_samples(&r, start, end, DEFAULT_NUM_SAMPLES).into_iter().map(|(t, step)| {
+        self.sky.span_samples(&r, start, end, self.steps(start, end)).into_iter().map(|(t, step)| {
             let p = origin + d * t;
             let here = self.sky.depths((p - self.sky.earth.center).norm() - self.sky.earth.radius, step);
             depth = depth + here * 0.5;

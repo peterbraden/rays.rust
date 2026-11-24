@@ -148,12 +148,12 @@ impl crate::graph::Fields for ObjectFields {
         self.0.medium.fields()?.biome(p)
     }
 }
-/// A part of a tree, as detail to make levels of, and its medium (`SceneFile::tree_details`).
 /// The detail a forest's `"lod"` drops by default, in pixels: since its coarse levels shadow
 /// themselves, 2 is within 1% of full detail's brightness, with 38% less memory and about 15%
 /// less render time than 1 (docs/research/learned-lod/stage7.md).
 pub const FOREST_LOD_PIXELS: f64 = 2.;
 
+/// A part of a tree, as detail to make levels of, and its medium (`SceneFile::tree_details`).
 pub type TreeDetail = (crate::shapes::lod::Detail, Box<dyn Medium + Sync + Send>);
 
 /// The scene file's named geometries, `"geometries": {"dragon": {"type": "mesh", ...}}`. Wherever
@@ -1336,9 +1336,11 @@ impl SceneFile {
         let placements = match cache {
             Some(cache) => {
                 let mut forest = o.clone();
+                // (Nor its `"camera"`, which the scene gives every forest for its levels.)
                 if let Some(f) = forest.as_object_mut() {
                     f.remove("lod");
                     f.remove("cache");
+                    f.remove("camera");
                 }
                 let key = crate::world::key(&["forest placements", &forest.to_string(),
                     &Value::Object(geometries.definitions().clone()).to_string()]);
@@ -1398,7 +1400,8 @@ impl SceneFile {
                     .flat_map(|v| match v { Value::Array(a) => a.clone(), Value::Null => vec![], v => vec![(*v).clone()] })
                     .map(|v| { let n = SceneFile::parse_string(&v); format!("{n}={}", materials.get(&n).map_or(String::new(), |m| m.to_string())) })
                     .collect();
-                crate::world::key(&["forest tree", &format!("{p:?}"), &tree_seed.to_string(), &entry.to_string(), &named.join(";")])
+                crate::world::key(&["forest tree", &format!("{p:?}"), &tree_seed.to_string(), &entry.to_string(), &named.join(";"),
+                    &crate::shapes::lod::settings()])
             });
             // The tree grown, only if something it makes isn't kept.
             let shape = std::sync::OnceLock::new();

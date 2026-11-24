@@ -2639,6 +2639,8 @@ pub fn crepuscular_samples(s: &Scene, found: &PathState, rng: &mut u32) -> (Vec4
     let mu = d.dot(a.sun);
     let (rayleigh, mie) = (rayleigh_phase(mu), mie_phase(mu, a.g));
     let scale = a.brightness * SKY_CALIBRATION;
+    // As many steps as `segment` takes, which this light is taken from.
+    let steps = ((end - start) / (0.25 * a.mie_height)).ceil().clamp(4.0, SKY_STEPS as f32) as u32;
     // Each step's light (`Air::single_scattering_steps`), twice over: for the total, then to
     // find the steps the samples fall in.
     let mut total = 0.0;
@@ -2649,8 +2651,8 @@ pub fn crepuscular_samples(s: &Scene, found: &PathState, rng: &mut u32) -> (Vec4
     while pass < 2 {
         let mut depth = Vec3::ZERO;
         let mut k = 0;
-        while k < SKY_STEPS {
-            let (t, step) = span_sample(&a, o, d, start, end, SKY_STEPS, k);
+        while k < steps {
+            let (t, step) = span_sample(&a, o, d, start, end, steps, k);
             let p = o + d * t;
             let here = depths(&a, altitude(&a, p), step);
             depth += here * 0.5;

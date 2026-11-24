@@ -638,16 +638,6 @@ impl Carve {
         self.grid.get(&key).into_iter().flatten().map(|&k| &self.segments[k as usize])
     }
 
-    /// The lake a river passes through at `q`, if any: its level, and how far its surface
-    /// reaches from the river's line.
-    pub fn in_lake(&self, q: Point) -> Option<(f64, f64)> {
-        self.near_any(q).filter(|s| s.a.kind == Kind::Lake && s.b.kind == Kind::Lake).find_map(|s| {
-            let (t, r) = nearest_on(s.a.node.p, s.b.node.p, q);
-            let (half, level, _) = s.at(t);
-            (r < half + SHORE).then_some((level, half + SHORE))
-        })
-    }
-
     /// The carved surface at `q`: the bed in the channel, the banks beside it; None away from
     /// rivers. With it, the half width of the river nearest.
     pub fn surface(&self, q: Point) -> Option<(f64, f64)> { self.surface_deeper(q, 0., 0.) }
@@ -851,70 +841,56 @@ pub struct Rivers {
     pub courses: Vec<Course>,
     pub skeleton: Skeleton,
     pub carve: std::sync::OnceLock<Carve>,
-    /// Each cell's lake level, if it is under a lake (`lakes_of`).
-    pub lakes: Vec<Option<f64>>,
-    /// Each course's nodes' lake levels.
-    lake_nodes: Vec<Vec<Option<f64>>>,
-    /// How deep the lakes are at the grid's corners, metres: each corner the mean of its cells'
-    /// water depths (0 for dry cells), so sampled smoothly the floor shelves from the shore
-    /// to the basin's depth (`shelf`).
-    pub shelf_corners: Vec<f64>,
-    /// The lake cells and the ring about them: centre (patch coordinates), half side and level.
-    pub lake_cells: Vec<(Point, f64, f64)>,
+    /// Where water stands on the ground as drawn (`terrain::basins`), once levelled.
+    pub basins: std::sync::OnceLock<crate::terrain::basins::Basins>,
+    /// The patch's half side and the basins' grid spacing, metres.
+    extent: f64,
+    step: f64,
+    /// Where the simulation's water flows: from every cell to the one it drains to, over the
+    /// simulation's own filled surface, as points and heights every few metres. Cut into the
+    /// drawn ground's basins (`basins::Basins::build`), so the drawn ground's smoothing, which
+    /// closes small valleys off, doesn't make lakes the simulation drains.
+    paths: Vec<(Point, f64)>,
 }
 
-/// Water this much deeper than the ground (metres) is a lake.
-pub const LAKE_DEPTH: f64 = 1.;
+pub use crate::terrain::basins::LAKE_DEPTH;
 
-/// The lakes of patch `t`: the simulation's ground filled to the levels its basins overflow
-/// at, by the flow routing's Priority-Flood over the whole grid (`flow::route`; Barnes et al.),
-/// so a lake spills where its rim is lowest in any direction, not only along its river. Each
-/// cell's lake level, where the water stands more than `LAKE_DEPTH` over it; none under ice.
-pub fn lakes_of(t: &Terrain) -> Vec<Option<f64>> {
-    let n = t.domain.len();
-    let f = crate::terrain::flow::route(&t.domain, &t.bed, &t.outlets(), &vec![1.; n]);
-    (0..n).map(|i| (f.filled[i] - t.bed[i] > LAKE_DEPTH && t.ice[i] < ICE_FREE && !t.sea[i]).then_some(f.filled[i])).collect()
+/// Every cell's flow path to the cell it drains to, by the simulation's routing over its filled
+/// surface (`flow::route`), as points `spacing` apart with heights interpolated along it.
+fn flow_paths(t: &Terrain, spacing: f64) -> Vec<(Point, f64)> {
+    let d = &t.domain;
+    let n = d.len();
+    let f = crate::terrain::flow::route(d, &t.bed, &t.outlets(), &vec![1.; n]);
+    let mut out = vec![];
+    for i in 0..n {
+        let r = f.receiver[i];
+        if r == i { continue; }
+        let (a, b) = (cell_point(d, i), cell_point(d, r));
+        let steps = (dist(a, b) / spacing).ceil().max(1.) as usize;
+        for s in 0..=steps {
+            let u = s as f64 / steps as f64;
+            out.push(([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u], f.filled[i] + (f.filled[r] - f.filled[i]) * u));
+        }
+    }
+    out
 }
 
 impl Rivers {
-    /// How deep the lake's floor lies under its surface at direction `d` (`shelf_corners`).
-    pub fn shelf(&self, domain: &Domain, d: &Vector3<f64>) -> f64 {
-        crate::terrain::scenery::sample(domain, &self.shelf_corners, d).max(0.)
-    }
-
     pub fn new(t: &Terrain, h: &Hydraulics) -> Rivers {
-        let mut courses = courses(t, h);
-        let lakes = lakes_of(t);
-        let depth: Vec<f64> = (0..t.domain.len()).map(|i| lakes[i].map_or(0., |l| (l - t.bed[i]).max(0.))).collect();
-        let shelf_corners = t.domain.corner_cells.iter().map(|cs| cs.iter().map(|&c| depth[c]).sum::<f64>() / cs.len() as f64).collect();
-        let lake_nodes: Vec<Vec<Option<f64>>> = courses.iter().map(|c| c.nodes.iter().map(|n| lakes[point_cell(&t.domain, n.p)]).collect()).collect();
-        // Where a river crosses a lake, its valley floor is the lake's surface, not the lake's
-        // deep floor: the drawn ground is blended towards a river's bed (`Relief::base`), and
-        // the lake's floor is deepened under its water anyway (`Relief::height`); blended to the
-        // floor, the ground beside a lake (outside its cells, with no water over it) fell into
-        // pits as deep as the lake.
-        for (c, k) in courses.iter_mut().zip(&lake_nodes) {
-            for (n, l) in c.nodes.iter_mut().zip(k) { if let Some(l) = l { n.bed = n.bed.max(*l); } }
-        }
-        let half = 0.5 * t.domain.min_spacing();
-        // The lakes' cells and the ring of cells about them, at the lake's level: the drawn
-        // ground is smoothed between cells, so about a lake it can dip below the level, and
-        // water fills it there too (rays would otherwise pass under the edge of the water).
-        let mut level: BTreeMap<usize, f64> = BTreeMap::new();
-        for i in 0..t.domain.len() {
-            let Some(l) = lakes[i] else { continue };
-            // The rim's cells, not the outlet's: below the level, water flows out there.
-            let rim = t.domain.links(i).iter().map(|k| k.to).filter(|&c| lakes[c].is_some() || t.bed[c] >= l - LAKE_DEPTH);
-            for c in std::iter::once(i).chain(rim) {
-                let e = level.entry(c).or_insert(f64::NEG_INFINITY);
-                *e = e.max(if lakes[c].is_some() { lakes[c].unwrap() } else { l });
-            }
-        }
-        let lake_cells = level.into_iter().map(|(i, l)| (cell_point(&t.domain, i), half, l)).collect();
-        Rivers { skeleton: Skeleton::new(&courses), courses, carve: std::sync::OnceLock::new(), lakes, lake_nodes, lake_cells, shelf_corners }
+        let courses = courses(t, h);
+        let (extent, step) = match t.domain.layout {
+            Layout::Patch { n, spacing, .. } => (0.5 * n as f64 * spacing, spacing / 8.),
+            Layout::Sphere { .. } => (0., 1.),
+        };
+        let paths = if extent > 0. { flow_paths(t, step / 2.) } else { vec![] };
+        Rivers { skeleton: Skeleton::new(&courses), courses, carve: std::sync::OnceLock::new(), basins: std::sync::OnceLock::new(), extent, step, paths }
     }
 
-    /// Level the courses over `ground` (patch point, spacing → height, metres), unless done.
+    /// Level the courses over `ground` (patch point, spacing → height, metres, as drawn),
+    /// unless done: each river's level from the ground at its centre and banks, less its
+    /// freeboard, never rising downstream (its channel cut through the ground's bumps), but
+    /// for deep basins along it; then where water stands on the ground (`basins`), the
+    /// channels breaching it; and through the lakes that leaves, the lakes' levels.
     pub fn level(&self, ground: impl Fn(Point, f64) -> f64 + Sync) {
         if self.carve.get().is_some() { return; }
         use rayon::prelude::*;
@@ -928,26 +904,31 @@ impl Rivers {
                 let (nx, nz) = (-dz / len * o, dx / len * o);
                 let local = (n.half / 2.).max(1.);
                 let centre = ground(n.p, local);
-                let g = centre
-                    .min(ground([n.p[0] + nx, n.p[1] + nz], local))
-                    .min(ground([n.p[0] - nx, n.p[1] - nz], local))
-                    .min(n.bed);
+                // The ground on the river's line and banks, and the simulation's own bed there:
+                // routed by the simulation's fill, its only basins are real ones, where the
+                // drawn ground's bumps across a valley (synthetic relief, smoothing) aren't.
+                let g = centre.min(ground([n.p[0] + nx, n.p[1] + nz], local)).min(ground([n.p[0] - nx, n.p[1] - nz], local)).min(n.bed);
                 (g - n.freeboard, centre)
             }).collect()
         }).collect();
         let raw: Vec<Vec<f64>> = sampled.iter().map(|c| c.iter().map(|x| x.0).collect()).collect();
         let drawn: Vec<Vec<f64>> = sampled.iter().map(|c| c.iter().map(|x| x.1).collect()).collect();
-        let lake: Vec<Vec<bool>> = self.lake_nodes.iter().map(|l| l.iter().map(|x| x.is_some()).collect()).collect();
+        // The rivers cut their channels (their levels never rising downstream), but for
+        // stretches where filling would stand deep: those are lakes.
+        let deep: Vec<Vec<bool>> = raw.iter().map(|r| lakes(r)).collect();
+        let cut = levels(&self.courses, &raw, &deep);
+        // Where water stands on the ground as drawn, the rivers' channels breaching it.
+        let channels: Vec<(Point, f64)> = self.courses.iter().zip(&cut).zip(&deep)
+            .flat_map(|((c, l), k)| c.nodes.iter().zip(l).zip(k).filter(|x| !*x.1).map(|((n, &l), _)| (n.p, l - 1.5 * n.depth)))
+            .chain(self.paths.iter().copied())
+            .collect();
+        let basins = self.basins.get_or_init(|| crate::terrain::basins::Basins::build(self.extent, self.step, 8. * self.step, |q| ground(q, self.step), &channels));
+        // The rivers' levels again, through the lakes the basins hold at the lakes' levels.
+        let lake_levels: Vec<Vec<Option<f64>>> = self.courses.iter().map(|c| c.nodes.iter().map(|n| basins.lake(n.p)).collect()).collect();
+        let lake: Vec<Vec<bool>> = lake_levels.iter().map(|l| l.iter().map(|x| x.is_some()).collect()).collect();
         let mut lv = levels(&self.courses, &raw, &lake);
-        // Lakes stand at their spill levels, and back water up the rivers flowing into them: a
-        // river runs no lower than the lake it feeds (else, from the deep bed of a glacial
-        // valley, it would run under the lake's surface).
-        for (l, k) in lv.iter_mut().zip(&self.lake_nodes) {
+        for (l, k) in lv.iter_mut().zip(&lake_levels) {
             for (x, f) in l.iter_mut().zip(k) { if let Some(f) = f { *x = *f; } }
-            if let Some(first) = k.iter().position(|f| f.is_some()) {
-                let lake = k[first].unwrap();
-                for x in l[..first].iter_mut() { *x = x.max(lake); }
-            }
         }
         let mut kind: Vec<Vec<Kind>> = lake.iter().map(|l| l.iter().map(|&k| if k { Kind::Lake } else { Kind::River }).collect()).collect();
         let found = falls(&self.courses, &mut lv, &mut kind);

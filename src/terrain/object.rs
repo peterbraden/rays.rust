@@ -636,44 +636,15 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
             finest && clipmap.local(x, z).is_some_and(|s| s < half)
         };
         let (mut vertices, mut tris) = carve.ribbon(keep);
-        // Lakes: a flat square at its level over each of their cells where this layer is drawn.
-        let rivers = l.rivers.as_ref().unwrap();
-        for &(c, half, level) in &rivers.lake_cells {
-            let d = patch_dir(&l.domain, c);
-            if !relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) { continue; }
-            let lake = rivers.lakes[crate::terrain::channel::point_cell(&l.domain, c)].is_some();
-            let n = 16;
-            let step = 2. * half / n as f64;
-            // Each piece's centre and corners must all be over ground the water would cover.
-            // A lake's own cells whole; its rim's only where the drawn ground (judged at full
-            // detail, with rivers' channels carved, as the mesh near the camera draws it) dips a
-            // few metres below the level: the smoothing's dips, which the water fills, not a river's
-            // gorge through the rim.
-            // A lake's own cells whole. Its rim's too, the smoothed ground there dipping below
-            // the level towards the lake's floor, except about the river out of it: where a
-            // river runs well below the lake within 400 m and has cut the ground there well
-            // below the level, that's its gorge, not the lake.
-            let under = |q: crate::terrain::channel::Point| {
-                if lake || carve.level(q, 800.).is_none_or(|(river, _, _)| river >= level - 3.) { return true; }
-                let m = patch_dir(&l.domain, q);
-                relief.height(&m, relief.slope(&m), 1.) >= level - 10.
-            };
-            let keep: Vec<bool> = (0..n * n).map(|k| {
-                let (x0, z0) = (c[0] - half + (k / n) as f64 * step, c[1] - half + (k % n) as f64 * step);
-                [[x0 + step / 2., z0 + step / 2.], [x0, z0], [x0 + step, z0], [x0, z0 + step], [x0 + step, z0 + step]].iter().all(|&q| under(q))
-            }).collect();
-            // A cell kept whole is one square.
-            let (n, step, keep) = if keep.iter().all(|&k| k) { (1, 2. * half, vec![true]) } else { (n, step, keep) };
-            for a in 0..n {
-                for b in 0..n {
-                    let (x0, z0) = (c[0] - half + a as f64 * step, c[1] - half + b as f64 * step);
-                    if !keep[a * n + b] { continue; }
-                    let e = if lake { 0.02 * half } else { 0.01 * step };
-                    let k = vertices.len();
-                    for (x, z) in [(x0 - e, z0 - e), (x0 + step + e, z0 - e), (x0 + step + e, z0 + step + e), (x0 - e, z0 + step + e)] { vertices.push(([x, z], level)); }
-                    tris.push([k, k + 1, k + 2]);
-                    tris.push([k, k + 2, k + 3]);
-                }
+        // Lakes: flat water at their levels over their cells of the drawn ground's basins
+        // (`terrain::basins`), where this layer is drawn.
+        if let Some(basins) = l.rivers.as_ref().and_then(|r| r.basins.get()) {
+            let finest = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) };
+            for (lo, hi, level) in basins.water(finest) {
+                let k = vertices.len();
+                for (x, z) in [(lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1])] { vertices.push(([x, z], level)); }
+                tris.push([k, k + 1, k + 2]);
+                tris.push([k, k + 2, k + 3]);
             }
         }
         let base = positions.len();
@@ -715,17 +686,17 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         Some(((at - view.location).norm(), at, node, seen))
     }).min_by(|a, b| a.0.total_cmp(&b.0));
     // The nearest lake, and a place on its shore to look across it from: walking out from
-    // the lake's cell until the ground rises above the water, eyes 1.7 m above it there,
-    // looking back over the cell.
+    // one of its stretches of water until the ground rises above it, eyes 1.7 m above the
+    // ground there, looking back across.
     let lake = relief.layers.iter().filter_map(|l| {
         let r = l.rivers.as_ref()?;
         let (foot, _) = frame.on_planet(&view.location);
         let q = crate::terrain::rivers::patch_point(&l.domain, &foot)?;
         let ground = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.height(&d, relief.slope(&d), 1.) };
-        r.lake_cells.iter().filter(|(c, _, _)| {
-            let d = patch_dir(&l.domain, *c);
-            relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l))
-        }).filter_map(|&(c, half, level)| {
+        let finest = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) };
+        let cells: Vec<(crate::terrain::channel::Point, f64, f64)> = r.basins.get()?.water(finest).into_iter()
+            .map(|(lo, hi, level)| ([(lo[0] + hi[0]) / 2., (lo[1] + hi[1]) / 2.], 0.5 * (hi[1] - lo[1]), level)).collect();
+        cells.into_iter().filter_map(|(c, half, level)| {
             let dist = (c[0] - q[0]).hypot(c[1] - q[1]);
             // The shore: towards the camera first, then round.
             let toward = (q[1] - c[1]).atan2(q[0] - c[0]);

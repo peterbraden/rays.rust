@@ -505,7 +505,11 @@ impl SceneFile {
             let entries = v["color_map"].as_array().filter(|a| !a.is_empty())
                 .unwrap_or_else(|| panic!("a pattern texture needs a \"color_map\": [[value, colour], ...], got {}", v["color_map"]));
             let mut map: Vec<(f64, crate::textures::ColorTexture)> = entries.iter().map(|e| match e.as_array() {
-                Some(pair) if pair.len() == 2 && pair[0].is_number() => (pair[0].as_f64().unwrap(), SceneFile::parse_color_texture(&pair[1])),
+                Some(pair) if pair.len() == 2 && pair[0].is_number() => (pair[0].as_f64().unwrap(), match &pair[1] {
+                    // A number is a grey level: for roughness maps.
+                    Value::Number(g) => { let g = g.as_f64().unwrap(); Color::new(g, g, g).into() },
+                    c => SceneFile::parse_color_texture(c),
+                }),
                 _ => panic!("a color_map entry is [value, colour], got {}", e),
             }).collect();
             map.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1011,6 +1015,11 @@ impl SceneFile {
     /// "scale": 1 or [x, y, z], "octaves": 6 (wrinkles), "frequency": 1, "phase": 0 (ripples
     /// and waves, phase in cycles)}`.
     pub fn parse_bump(n: &Value) -> Bump {
+        // {"graph": node, "amount": 1}: relief from a function graph, in scene units.
+        if let Some(g) = n.get("graph") {
+            let graph = crate::graph::Graph::parse(g).unwrap_or_else(|e| panic!("normal graph: {}", e));
+            return Bump { pattern: Pattern::Graph(Arc::new(graph)), amount: SceneFile::parse_number(&n["amount"], 1.), scale: Vector3::repeat(1.) };
+        }
         let pattern = match n["pattern"].as_str() {
             Some("bumps") => Pattern::Bumps,
             Some("dents") => Pattern::Dents,
@@ -1019,7 +1028,7 @@ impl SceneFile {
                 frequency: SceneFile::parse_number(&n["frequency"], 1.), phase: SceneFile::parse_number(&n["phase"], 0.) },
             Some("waves") => Pattern::Waves {
                 frequency: SceneFile::parse_number(&n["frequency"], 1.), phase: SceneFile::parse_number(&n["phase"], 0.) },
-            _ => panic!("normal \"pattern\" must be \"bumps\", \"dents\", \"wrinkles\", \"ripples\" or \"waves\", got {}", n["pattern"]),
+            _ => panic!("normal \"pattern\" must be \"bumps\", \"dents\", \"wrinkles\", \"ripples\" or \"waves\" (or give a \"graph\"), got {}", n["pattern"]),
         };
         let scale = match &n["scale"] {
             Value::Number(s) => Vector3::repeat(s.as_f64().unwrap()),
@@ -3334,8 +3343,35 @@ impl SceneFile {
     /// Look up a material by name. None if there is no such material; panics if it exists but
     /// has an unknown type.
     pub fn parse_material_ref(key: &Value, materials: &Map<String, Value> ) -> Option<Box<dyn MaterialModel + Sync + Send>> {
+        // A material may be defined where it is used, rather than named.
+        if key.is_object() {
+            return Some(SceneFile::parse_material_definition(key, "(inline)", materials));
+        }
         let name = SceneFile::parse_string(key);
         let props = materials.get(&name)?;
+        Some(SceneFile::parse_material_definition(props, &name, materials))
+    }
+
+    /// A material from its definition (`name` for messages), bump mapped if it has a
+    /// `"normal"` (`bump::BumpedMaterial`: as an object's, see `parse_bump`), so its relief
+    /// goes wherever it does.
+    pub fn parse_material_definition(props: &Value, name: &str, materials: &Map<String, Value>) -> Box<dyn MaterialModel + Sync + Send> {
+        // {"type": "library", "name": ..., "scale", "seed"}: a ready-made material
+        // (`material::library`).
+        if props["type"].as_str() == Some("library") {
+            let expanded = crate::material::library::expand(props).unwrap_or_else(|e| panic!("material '{}': {}", name, e));
+            return SceneFile::parse_material_definition(&expanded, name, materials);
+        }
+        let m = SceneFile::parse_unbumped_material(props, name, materials)
+            .unwrap_or_else(|| panic!("Material '{}' has unknown type {}", name, props["type"]));
+        match props.get("normal") {
+            Some(n) if n.is_object() => Box::new(crate::material::bump::BumpedMaterial { inner: m, bump: SceneFile::parse_bump(n) }),
+            _ => m,
+        }
+    }
+
+    fn parse_unbumped_material(props: &Value, name: &str, materials: &Map<String, Value>) -> Option<Box<dyn MaterialModel + Sync + Send>> {
+        let name = name.to_string();
         if props["type"].as_str() == Some("noise") {
             return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
@@ -3388,10 +3424,7 @@ impl SceneFile {
                 SceneFile::parse_vec3_def(props, "up", Vector3::y()),
                 SceneFile::parse_number(&props["drift"], 0.3), seed)));
         }
-        match SceneFile::parse_material(props) {
-            Some(m) => Some(m),
-            None => panic!("Material '{}' has unknown type {}", name, props["type"]),
-        }
+        SceneFile::parse_material(props)
     }
 
     /// Look up a material that must exist; `context` names what references it.
@@ -3428,9 +3461,12 @@ impl SceneFile {
             } else {
                 Optics::Reflectance(SceneFile::parse_color_def(o, "reflectance", Color::new(0.9, 0.9, 0.9)))
             };
-            let r = SceneFile::parse_number(&o["roughness"], 0.);
+            // A roughness texture scales roughness_u and _v, 1 unless given.
+            let roughness_map = o["roughness"].is_object().then(|| SceneFile::parse_color_texture(&o["roughness"]));
+            let r = if roughness_map.is_some() { 1. } else { SceneFile::parse_number(&o["roughness"], 0.) };
             return Some(Box::new(Conductor {
                 optics,
+                roughness_map,
                 roughness: (SceneFile::parse_number(&o["roughness_u"], r), SceneFile::parse_number(&o["roughness_v"], r)),
                 tangent: SceneFile::parse_vec3_def(o, "tangent", Vector3::x()),
             }));
@@ -3507,7 +3543,8 @@ impl SceneFile {
             let d:Plastic = Plastic {
                 albedo: SceneFile::parse_color_texture(&o["albedo"]),
                 refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
-                roughness: SceneFile::parse_number(&o["roughness"], 0.),
+                roughness: if o["roughness"].is_object() { 0. } else { SceneFile::parse_number(&o["roughness"], 0.) },
+                roughness_map: o["roughness"].is_object().then(|| SceneFile::parse_color_texture(&o["roughness"])),
             };
             return Some(Box::new(d));
         }
@@ -5276,6 +5313,29 @@ mod tests {
         assert_eq!((s.image.width, s.image.height), (40, 2));
         let s = minimal_scene_sized("", None, Some(30));
         assert_eq!((s.image.width, s.image.height), (4, 30));
+    }
+
+    #[test]
+    fn test_materials_carry_their_own_bumps_and_may_be_inline() {
+        let s = minimal_scene(r#", "variables": { "veins": {"node": "wave", "shape": "triangle", "frequency": 4, "input": {"node": "gradient", "direction": [1, 0, 0]}} },
+            "materials": {
+                "STONE": { "type": "plastic", "albedo": {"pattern": "$veins", "color_map": [[0, [0.9, 0.9, 0.9]], [1, [0.2, 0.2, 0.2]]]},
+                           "roughness": {"node": "constant", "value": 0.3},
+                           "normal": {"graph": "$veins", "amount": 0.01} },
+                "WORN": { "type": "mix", "materials": ["STONE", { "type": "conductor", "metal": "Cu", "roughness": {"pattern": "$veins", "color_map": [[0, 0.1], [1, 0.5]]} }],
+                          "amount": 0.5 } },
+            "objects": [ { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "STONE" },
+                         { "type": "sphere", "location": [3, 0, 0], "radius": 1, "material": "WORN" } ]"#);
+        let r = Ray { ro: Vector3::new(0.1, 0.2, -5.), rd: Vector3::new(0., 0., 1.) };
+        let hit = s.objects.nearest_intersection(&r, f64::INFINITY, 0.).expect("hits the sphere");
+        let m = hit.object.medium.material_at(hit.point);
+        let n = m.shading_normal(&hit, &s).expect("the stone carries a bump");
+        assert!((n.norm() - 1.).abs() < 1e-9 && n.dot(&hit.normal) > 0.9 && n != hit.normal);
+        for x in [0., 3.] {
+            let r = Ray { ro: Vector3::new(x + 0.1, 0.2, -5.), rd: Vector3::new(0., 0., 1.) };
+            let c = crate::trace::trace(&r, 0, &s).1;
+            assert!(c.rgb.iter().all(|v| v.is_finite()));
+        }
     }
 
     #[test]

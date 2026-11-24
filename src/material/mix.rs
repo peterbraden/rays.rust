@@ -28,7 +28,12 @@ impl Mix {
 impl MaterialModel for Mix {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let which = (crate::geometry::rand() < self.amount_at(intersection, s)) as usize;
-        self.materials[which].scatter(r, intersection, s)
+        // The chosen material's own bump, if it has one (rust raised over pitted steel).
+        match self.materials[which].shading_normal(intersection, s) {
+            Some(n) if (n.dot(&r.rd) > 0.) == (intersection.normal.dot(&r.rd) > 0.) =>
+                self.materials[which].scatter(r, &Intersection { normal: n, ..*intersection }, s),
+            _ => self.materials[which].scatter(r, intersection, s),
+        }
     }
 
     fn is_emitter(&self) -> bool {

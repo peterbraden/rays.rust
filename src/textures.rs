@@ -515,7 +515,7 @@ impl ColorTexture {
             ColorTexture::Constant(c) => *c,
             ColorTexture::Image(m) => m.eval(i, s),
             ColorTexture::Graph(g) => {
-                let v = g.eval(&crate::graph::Context::at_hit(i));
+                let v = g.eval(&crate::graph::Context::at_hit_filtered(i, s));
                 Color::new(v, v, v)
             },
             ColorTexture::Slope(t) => { let a = t.amount(&i.point, &i.normal); Color::new(a, a, a) },

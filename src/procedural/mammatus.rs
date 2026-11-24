@@ -21,8 +21,7 @@
 //!    boundary, which noise ripples by `roughness` metres.
 
 use crate::na::{Vector2, Vector3};
-use crate::noise::{worley_hash, PerlinNoise};
-use crate::procedural::nubis_clouds::{lerp, smoothstep};
+use crate::noise::PerlinNoise;
 use crate::volume::DensityField;
 
 /// Rows of the hexagonal lattice are this far apart, for centres a unit apart.
@@ -117,130 +116,60 @@ impl Mammatus {
     }
 
     pub fn bottom(&self) -> f64 {
-        self.base - self.base_variation - self.sag - self.pouch_depth * 1.2 - self.roughness
-    }
-
-    /// The height of the anvil's base at (x, z), `inside` its edge.
-    fn local_base(&self, x: f64, z: f64, inside: f64) -> f64 {
-        let mut b = self.base;
-        if self.base_variation > 0. {
-            b += (self.noise.fbm(x / self.base_size, 0.13, z / self.base_size, 3, 0.5, 2.) - 0.5) * 2. * self.base_variation;
-        }
-        if self.sag > 0. {
-            b -= self.sag * smoothstep(0., self.sag_distance, inside);
-        }
-        b.min(self.top() - 1.)
+        self.recipe().bottom()
     }
 
     pub fn top(&self) -> f64 {
-        self.base + self.thickness + self.top_variation
+        self.recipe().top()
     }
 
-    /// The height of the anvil's top at (x, z).
-    fn local_top(&self, x: f64, z: f64) -> f64 {
-        let t = self.base + self.thickness;
-        if self.top_variation <= 0. {
-            return t;
-        }
-        t + (self.noise.fbm(x / self.base_size, 0.57, z / self.base_size, 3, 0.5, 2.) - 0.5) * 2. * self.top_variation
-    }
-
-    /// How far inside the anvil's ragged edge (x, z) lies.
-    fn inside_edge(&self, x: f64, z: f64) -> f64 {
-        let s = x * self.edge_direction.x + z * self.edge_direction.y;
-        let across = -x * self.edge_direction.y + z * self.edge_direction.x;
-        let ragged = (self.noise.fbm(across / 9000., 0.31, s / 9000., 4, 0.5, 2.) - 0.5) * 2. * self.edge_raggedness;
-        self.edge_distance + ragged - s
-    }
-
-    /// For the pouch cell around (x, z): how far out from its middle (0 to 1, where 1 is the
-    /// crease with the next), and its relative depth (0 for none).
-    fn pouch_at(&self, x: f64, z: f64) -> (f64, f64) {
-        let (u, v) = (x / self.pouch_size, z / self.pouch_size);
-        let warp = |o: f64| (self.noise.fbm(u * 0.3, o, v * 0.3, 2, 0.5, 2.) - 0.5) * 0.7;
-        let (u, v) = (u + warp(0.4), v + warp(0.8));
-        let jitter = 0.5 * (1. - self.regularity.clamp(0., 1.));
-        let j0 = (v / ROW).round() as i64;
-        let (mut f1, mut f2, mut nearest) = (f64::MAX, f64::MAX, (0i64, 0i64));
-        for j in j0 - 2..=j0 + 2 {
-            let shift = if j.rem_euclid(2) == 1 { 0.5 } else { 0. };
-            let i0 = (u - shift).round() as i64;
-            for i in i0 - 2..=i0 + 2 {
-                let h = |k: u32| worley_hash(i as u32, j as u32, 0, self.seed.wrapping_add(k)) - 0.5;
-                let c = Vector2::new(i as f64 + shift + 2. * jitter * h(0), j as f64 * ROW + 2. * jitter * h(1));
-                let d = (c - Vector2::new(u, v)).norm_squared();
-                if d < f1 {
-                    (f2, f1, nearest) = (f1, d, (i, j));
-                } else if d < f2 {
-                    f2 = d;
-                }
-            }
-        }
-        let to_edge = (f2.sqrt() - f1.sqrt()) / 2.;
-        let edge = (1. - 2. * to_edge).clamp(0., 1.);
-        let (i, j) = nearest;
-        let h = |k: u32| worley_hash(i as u32, j as u32, 0, self.seed.wrapping_add(k));
-        let depth = if h(2) < self.coverage { 0.55 + 0.45 * h(3) } else { 0. };
-        // Round rather than polygonal, still meeting the neighbours at the crease.
-        (lerp(2. * f1.sqrt(), edge, 0.5).min(1.), depth)
-    }
-
-    /// Fraction of `anvil_density` (above the base) or `pouch_density` (below), in [0, 1].
+    /// Fraction of `anvil_density` (above the base) or `pouch_density` (below), in [0, 1]: the
+    /// anvil thinning towards its ragged edge and its top over a soft underside, and below
+    /// its base the pouches, a warped lattice of cells each hanging as a rounded bag, deepest
+    /// in a band in from the edge and gathered into clusters
+    /// (`shared::mammatus::Mammatus::fraction`).
     pub fn fraction(&self, p: &Vector3<f64>) -> f64 {
-        if p.y < self.bottom() || p.y > self.top() {
-            return 0.;
+        self.recipe().fraction(&self.noise, p.x, p.y, p.z)
+    }
+}
+
+impl Mammatus {
+    /// The recipe, as the shared code takes it (`shared::mammatus::Mammatus`, where the
+    /// density is: the GPU's shader compiles the same functions at f32).
+    fn recipe(&self) -> shared::mammatus::Mammatus<f64> {
+        shared::mammatus::Mammatus {
+            base: self.base, thickness: self.thickness, base_variation: self.base_variation, base_size: self.base_size,
+            sag: self.sag, sag_distance: self.sag_distance, base_softness: self.base_softness, top_variation: self.top_variation,
+            anvil_density: self.anvil_density, pouch_density: self.pouch_density, pouch_size: self.pouch_size,
+            pouch_depth: self.pouch_depth, coverage: self.coverage, regularity: self.regularity, clustering: self.clustering,
+            cluster_size: self.cluster_size, edge_sharpness: self.edge_sharpness, roughness: self.roughness,
+            detail_size: self.detail_size, edge_direction: (self.edge_direction.x, self.edge_direction.y),
+            edge_distance: self.edge_distance, edge_raggedness: self.edge_raggedness, edge_taper: self.edge_taper,
+            center: (self.center.x, self.center.y), extent: self.extent, fade: self.fade, pouch_band: self.pouch_band,
+            seed: self.seed, perm: 0,
         }
-        let inside = self.inside_edge(p.x, p.z);
-        if inside <= 0. {
-            return 0.;
-        }
-        // Rounded and ragged, so that no edge of the region is a ruled line.
-        let region = if self.fade > 0. {
-            let from_centre = (Vector2::new(p.x, p.z) - self.center).norm() / self.extent;
-            let ragged = (self.noise.fbm(p.x / 9000., 0.91, p.z / 9000., 3, 0.5, 2.) - 0.5) * self.fade;
-            1. - smoothstep(1. - self.fade, 1., from_centre + ragged)
-        } else {
-            1.
-        };
-        if region <= 0. {
-            return 0.;
-        }
-        let taper = smoothstep(0., self.edge_taper, inside) * region;
-        let d = p / self.detail_size;
-        let ripple = (self.noise.fbm(d.x, d.y, d.z, 3, 0.5, 2.) - 0.5) * 2.;
-        let top = self.local_top(p.x, p.z);
-        let base = self.local_base(p.x, p.z, inside).min(top - 1.);
-        if p.y >= base {
-            // The anvil: thinning towards its edge, from the top down, and towards its top, and
-            // thickening over its soft underside.
-            let depth = top - base;
-            let h = (p.y - base) / depth;
-            let top = taper * (0.75 + 0.25 * ripple);
-            if h > 1. {
-                return 0.;
-            }
-            let underside = if self.base_softness > 0. { smoothstep(0., self.base_softness / depth, h + 0.3 * ripple * self.base_softness / depth) } else { 1. };
-            return (1. - smoothstep(top - 0.15, top, h)) * (0.85 + 0.15 * ripple) * underside;
-        }
-        let band = smoothstep(0., self.pouch_band, inside) * (1. - smoothstep(self.pouch_band, 3. * self.pouch_band, inside)).max(0.3);
-        let (t, depth) = self.pouch_at(p.x, p.z);
-        let clusters = self.noise.fbm(p.x / self.cluster_size, 0.77, p.z / self.cluster_size, 3, 0.5, 2.);
-        let depth = depth * lerp(1., smoothstep(0.3, 0.65, clusters), self.clustering);
-        let hang = self.pouch_depth * depth * band * taper * (1. - t * t).max(0.).sqrt();
-        // Height above the pouch's lower surface.
-        let above = p.y - (base - hang) + ripple * self.roughness;
-        smoothstep(0., self.edge_sharpness, above)
+    }
+
+    /// The layer as data, for the GPU's shader (`pathtrace::load_mammatus`, which has the
+    /// layout): the recipe's numbers in their fields' order, the seed's bits, then the
+    /// permutation.
+    pub fn export(&self) -> Vec<f32> {
+        let r = self.recipe();
+        let mut out: Vec<f32> = [
+            r.base, r.thickness, r.base_variation, r.base_size, r.sag, r.sag_distance, r.base_softness, r.top_variation,
+            r.anvil_density, r.pouch_density, r.pouch_size, r.pouch_depth, r.coverage, r.regularity, r.clustering,
+            r.cluster_size, r.edge_sharpness, r.roughness, r.detail_size, r.edge_direction.0, r.edge_direction.1,
+            r.edge_distance, r.edge_raggedness, r.edge_taper, r.center.0, r.center.1, r.extent, r.fade, r.pouch_band,
+        ].iter().map(|&v| v as f32).collect();
+        out.push(f32::from_bits(self.seed));
+        out.extend(self.noise.permutation().iter().map(|&p| p as f32));
+        out
     }
 }
 
 impl DensityField for Mammatus {
     fn density(&self, p: &Vector3<f64>) -> f64 {
-        let f = self.fraction(p);
-        if f <= 0. {
-            return 0.;
-        }
-        let base = self.local_base(p.x, p.z, self.inside_edge(p.x, p.z)).min(self.local_top(p.x, p.z) - 1.);
-        if p.y >= base { self.anvil_density * f } else { self.pouch_density * f }
+        self.recipe().density(&self.noise, p.x, p.y, p.z)
     }
 
     fn majorant(&self) -> f64 {
@@ -249,34 +178,11 @@ impl DensityField for Mammatus {
 
     /// Two slabs, the pouches' and the anvil's, and nothing beyond the anvil's ragged edge.
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
-        let ahead = p + d * 0.01;
-        let to_y = |y: f64| if d.y != 0. { (y - ahead.y) / d.y } else { f64::INFINITY };
-        let positive = |t: f64| if t > 0. { t } else { f64::INFINITY };
-        // Beyond the furthest the edge reaches: empty until the ray comes back inside it.
-        let s = ahead.x * self.edge_direction.x + ahead.z * self.edge_direction.y;
-        let ds = d.x * self.edge_direction.x + d.z * self.edge_direction.y;
-        let limit = self.edge_distance + self.edge_raggedness;
-        if s > limit {
-            let back = if ds < 0. { (s - limit) / -ds } else { f64::INFINITY };
-            return (0., back + 0.01);
-        }
-        let leave = if ds > 0. { (limit - s) / ds } else { f64::INFINITY };
-        let (lo, hi) = (self.bottom(), self.top());
-        // With a varying base, the pouches and the anvil share one slab; otherwise each has its
-        // own, either side of the base.
-        let flat = self.base_variation <= 0. && self.sag <= 0.;
-        let (m, slab) = if ahead.y < lo {
-            (0., if d.y > 0. { to_y(lo) } else { f64::INFINITY })
-        } else if ahead.y > hi {
-            (0., if d.y < 0. { to_y(hi) } else { f64::INFINITY })
-        } else if !flat {
-            (self.majorant(), positive(to_y(lo)).min(positive(to_y(hi))))
-        } else if ahead.y < self.base {
-            (self.pouch_density, positive(to_y(lo)).min(positive(to_y(self.base))))
-        } else {
-            (self.anvil_density, positive(to_y(self.base)).min(positive(to_y(hi))))
-        };
-        (m, slab.min(leave) + 0.01)
+        self.recipe().majorant_from(p.x, p.y, p.z, d.x, d.y, d.z)
+    }
+
+    fn export(&self) -> Option<crate::volume::FieldExport> {
+        Some(crate::volume::FieldExport::Mammatus { record: Mammatus::export(self), radius: 0. })
     }
 }
 

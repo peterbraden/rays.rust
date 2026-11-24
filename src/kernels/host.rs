@@ -48,21 +48,23 @@ use crate::wavefront::integrator::{host_vertex, HostVertex};
 use pathtrace::glam::{Vec3, Vec4};
 use pathtrace::{PathState, PATH_ACTIVE, PATH_DIRECTIONAL, PATH_HOST, PATH_LIGHTS_COUNTED, PATH_SCATTERED, PATH_SPECULAR};
 
-/// A waiting path (`PATH_HOST`) of `pixel`'s sample `sample`, after its vertex: with its next
+/// A waiting path (`PATH_HOST`) of `pixel`'s sample `sample`, in the frame about `origin`
+/// (`kernels::origin`), after its vertex: with its next
 /// ray and queued to go on, or ended.
-pub fn shade(s: &Scene, flat: &FlatScene, p: &PathState, pixel: u32, sample: u32) -> PathState {
+pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, pixel: u32, sample: u32) -> PathState {
     let mut next = *p;
     let flags = p.state.y & !(PATH_HOST | PATH_ACTIVE);
     next.state.y = flags;
     next.state.z = 0;
     next.hit = Vec4::ZERO;
     let f64s = |v: Vec3| Vector3::new(v.x as f64, v.y as f64, v.z as f64);
-    let ray = Ray { ro: f64s(p.o.truncate()), rd: f64s(p.d.truncate()).normalize() };
+    // (The kernels' frame is about `origin`; the scene's own code is in the world's.)
+    let ray = Ray { ro: f64s(p.o.truncate()) + origin, rd: f64s(p.d.truncate()).normalize() };
     // The hit again, on the primitive the kernel found but in f64: a point on the surface to
     // the precision the renderer's materials offset their rays by. (A ray that grazed the
     // primitive in f32 and misses it in f64 ends here: its vertex was an edge's.)
     let prim = p.state.z;
-    let Some(hit) = flat.refine(prim, &ray) else { return next };
+    let Some(hit) = flat.refine(prim, &ray, p.hit.x as f64) else { return next };
     let depth = p.beta.w as u32;
     let mut v = HostVertex {
         ray,
@@ -74,6 +76,7 @@ pub fn shade(s: &Scene, flat: &FlatScene, p: &PathState, pixel: u32, sample: u32
         directional: p.state.y & PATH_DIRECTIONAL != 0,
         prev_pdf: p.d.w as f64,
         scattered: p.state.y & PATH_SCATTERED != 0,
+        volume: volume_state(flat, p.state.y),
         done: false,
     };
     let stream = crate::sobol::hash(s.render.seed ^ 0x686f_7374, ((pixel as u64) << 16) | depth as u64);
@@ -83,10 +86,36 @@ pub fn shade(s: &Scene, flat: &FlatScene, p: &PathState, pixel: u32, sample: u32
     if v.done {
         return next;
     }
-    next.o = f32s(&v.ray.ro).extend(p.o.w);
+    // The next ray leaves from where the scene's own code put it, off the surface by what
+    // f64 needs; the kernels' f32 rounds a point by up to 6e-8 of its distance from the
+    // render's origin, which far off is more than that (64 m at Saturn's 1.5 million km: the ray would
+    // start on either side of its rings). So further off, on the side it leaves by.
+    let side = if v.ray.rd.dot(&hit.geometric) >= 0. { hit.geometric } else { -hit.geometric };
+    let from = v.ray.ro - origin;
+    let from = from + side * (4e-6 * (1. + from.amax()));
+    next.o = f32s(&from).extend(p.o.w);
     next.d = f32s(&v.ray.rd).extend(v.prev_pdf as f32);
     next.beta = f32s(&v.beta.rgb).extend(v.depth as f32);
     let flag = |on: bool, bit: u32| if on { bit } else { 0 };
-    next.state.y = PATH_ACTIVE | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
+    // (A surface leaves what the path has done in media as it was.)
+    next.state.y = (p.state.y & (pathtrace::PATH_MEDIA | pathtrace::PATH_PROVEN)) | PATH_ACTIVE | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
     next
+}
+
+/// What a path with these flags has done in media, as the scene's own code keeps it
+/// (`volume::resume_path`): how many times it has scattered there, and the factor on every
+/// medium's density that the one it last scattered in set for its segments, as the kernels
+/// read it (`pathtrace::segment_scale`).
+fn volume_state(flat: &FlatScene, flags: u32) -> (u32, f64) {
+    let last = (flags >> pathtrace::PATH_MEDIUM_SHIFT) & 0xff;
+    if last == 0 {
+        return (0, 1.);
+    }
+    let scatterings = (flags >> pathtrace::PATH_SCATTERINGS_SHIFT) & 0xff;
+    let medium = &flat.media[last as usize - 1];
+    let scale = match medium.reduced {
+        Some((from, reduced)) if scatterings >= from => reduced,
+        _ => medium.scale,
+    };
+    (scatterings.max(1), scale)
 }

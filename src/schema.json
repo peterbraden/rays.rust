@@ -101,9 +101,9 @@
         {
           "name": "integrator",
           "kind": "enum",
-          "default": "path",
-          "doc": "The path tracer, or its wavefront form (paths traced in batches).",
-          "options": ["path", "wavefront"]
+          "default": "auto",
+          "doc": "What renders the scene: the first of the GPU, the wavefront kernels on the CPU and the recursive path tracer that can (auto), or one of them by name.",
+          "options": ["auto", "path", "wavefront", "gpu"]
         },
         {
           "name": "sampler",
@@ -153,9 +153,14 @@
           "kind": "enum",
           "default": "perspective",
           "doc": "The kind of camera.",
-          "options": ["perspective", "orthographic", "spherical", "realistic"]
+          "options": ["perspective", "orthographic", "isometric", "spherical", "realistic"]
         },
-        {"name": "location", "kind": "vec3", "required": true, "doc": "Position of the camera."},
+        {
+          "name": "location",
+          "kind": "vec3",
+          "default": null,
+          "doc": "Position of the camera. Required, except by isometric, which takes only its distance from lookat."
+        },
         {
           "name": "lookat",
           "kind": "vec3",
@@ -173,13 +178,19 @@
           "name": "aperture",
           "kind": "number",
           "default": 0.2,
-          "doc": "Perspective: lens radius in scene units, for depth of field; 0 for a pinhole."
+          "doc": "Perspective, orthographic and isometric: lens radius in scene units, for depth of field; 0 for a pinhole. The orthographic cameras default to 0, and blur by aperture × |depth − focus| / focus, depth measured from the camera's plane."
+        },
+        {
+          "name": "blur",
+          "kind": "number",
+          "default": null,
+          "doc": "Orthographic and isometric, instead of aperture: the blur's radius per unit of depth away from the plane of focus (the aperture is blur × focus_distance), so the look doesn't change with the camera's distance. Around 0.01-0.05 for a model's shallow focus."
         },
         {
           "name": "focus_distance",
           "kind": "number",
           "default": null,
-          "doc": "Perspective and realistic: distance in focus; default the distance to lookat."
+          "doc": "Perspective, orthographic, isometric and realistic: distance in focus; default the distance to lookat."
         },
         {
           "name": "astigmatism",
@@ -206,7 +217,25 @@
           "name": "height",
           "kind": "number",
           "default": null,
-          "doc": "Orthographic: height of the rectangle seen, scene units; default what the perspective camera sees at lookat."
+          "doc": "Orthographic: height of the rectangle seen, scene units; default what the perspective camera sees at lookat. Required by isometric."
+        },
+        {
+          "name": "azimuth",
+          "kind": "number",
+          "default": 45,
+          "doc": "Isometric: the direction the camera looks from, degrees round up from x towards z."
+        },
+        {
+          "name": "elevation",
+          "kind": "number",
+          "default": 35.264389682754654,
+          "doc": "Isometric: the camera's angle above the ground, degrees; the default, atan(1/√2), is true isometric, 30 gives pixel art's 2:1 diamonds, 90 a plan."
+        },
+        {
+          "name": "distance",
+          "kind": "number",
+          "default": null,
+          "doc": "Isometric: how far back from lookat the view starts; default the distance of location, or twice the height. Nothing nearer is seen."
         },
         {
           "name": "mapping",

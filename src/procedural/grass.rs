@@ -1754,10 +1754,16 @@ impl GrassField {
 
     /// Nearest hit: t (multiples of the ray direction), the blade, and s along it.
     fn nearest(&self, r: &Ray) -> Option<(f64, usize, f64)> {
+        self.nearest_within(r, f64::NEG_INFINITY, f64::INFINITY)
+    }
+
+    /// The nearest hit from `from` to `to` (multiples of the ray direction): only the cells
+    /// over that stretch are walked.
+    fn nearest_within(&self, r: &Ray, from: f64, to: f64) -> Option<(f64, usize, f64)> {
         if self.blades.is_empty() { return None }
         let invrd = Vector3::new(1. / r.rd.x, 1. / r.rd.y, 1. / r.rd.z);
         let mut best: Option<(f64, usize, f64)> = None;
-        walk_grid(&self.cells, self.bounds.min.y, self.bounds.max.y, r, |ix, iz, t0, t1| {
+        crate::procedural::heightmap::walk_grid_within(&self.cells, self.bounds.min.y, self.bounds.max.y, r, from.max(0.), to, |ix, iz, t0, t1| {
             let c = iz * self.cells.nx + ix;
             let (lo, hi) = self.ranges[c];
             if !ray_spans(r, t0, t1, lo as f64, hi as f64) {
@@ -1766,11 +1772,13 @@ impl GrassField {
             // Allow for rounding at cell boundaries: a hit just outside this cell is also in
             // the next, so accepting it here can't skip a nearer one.
             let eps = 1e-9 * (1. + t1.abs());
+            // (Within the stretch asked for: from its start, and no further than its end.)
+            let lo = (t0 - eps).max(from);
             for &i in self.cell_items(c) {
                 let b = &self.blades[i as usize];
-                let limit = best.map_or(t1 + eps, |x| x.0);
-                if !b.bounds_hit(r, &invrd, t0 - eps, limit) { continue }
-                if let Some((t, s)) = b.intersect(&self.looks[b.look as usize], r, t0 - eps, limit) {
+                let limit = best.map_or(t1 + eps, |x| x.0).min(to);
+                if !b.bounds_hit(r, &invrd, lo, limit) { continue }
+                if let Some((t, s)) = b.intersect(&self.looks[b.look as usize], r, lo, limit) {
                     best = Some((t, i as usize, s));
                 }
             }
@@ -1814,6 +1822,19 @@ impl Geometry for GrassGeometry {
             point: r.ro + r.rd * t,
             normal: self.field.blades[i].normal_at(s),
         })
+    }
+
+    /// Only the cells over `[min, max)` are walked: a shadow ray stops at its light, and a
+    /// hit found once is found again (`FlatScene::refine`) without the walk to it.
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        let len = r.rd.norm();
+        let (t, i, s) = self.field.nearest_within(r, min / len, max / len)?;
+        Some(RawIntersection { part: 0,
+            face: 0,
+            dist: t * len,
+            point: r.ro + r.rd * t,
+            normal: self.field.blades[i].normal_at(s),
+        }).filter(|x| x.dist >= min && x.dist < max)
     }
 
     fn bounds(&self) -> BBox {

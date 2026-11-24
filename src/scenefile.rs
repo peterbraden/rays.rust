@@ -574,7 +574,16 @@ impl SceneFile {
     ///   at or `"focus_distance"`; `"astigmatism": {"cylinder": power, "axis": degrees,
     ///   "seidel": power}` (`camera::Astigmatism`), powers in reciprocal scene units.
     /// - `"orthographic"`: parallel rays from a rectangle `"height"` tall (by default what the
-    ///   perspective camera sees at the point looked at).
+    ///   perspective camera sees at the point looked at); through a thin lens of radius
+    ///   `"aperture"` (default 0, all in focus) focused at the point looked at or
+    ///   `"focus_distance"`, which blurs by aperture × |depth - focus| / focus; or by `"blur"`
+    ///   × |depth - focus| (the aperture `"blur"` × focus), the same however far back it is.
+    /// - `"isometric"`: an orthographic camera looking at `"lookat"` from `"azimuth"` degrees
+    ///   round `"up"` (default 45, from x towards z) and `"elevation"` degrees above the ground
+    ///   (default `camera::ISOMETRIC_ELEVATION`, 35.26°, true isometric; 30° gives pixel art's
+    ///   2:1 diamonds), a rectangle `"height"` tall, from `"distance"` back (default the distance
+    ///   of `"location"`, which is optional and otherwise sets nothing, or twice the height), and
+    ///   the orthographic camera's `"aperture"`; see `SceneFile::axonometric`.
     /// - `"spherical"`: every direction, `"mapping": "equirectangular"` (the default) or
     ///   `"equal_area"`.
     /// - `"realistic"`: rays traced through a lens (`lens`): `"lens"`, a built-in name
@@ -586,6 +595,7 @@ impl SceneFile {
     /// With `"motion": {"location", "lookat", "up"}`, the camera moves to that pose (each key
     /// defaulting to the start's) while the shutter is open.
     pub fn parse_camera(c: Value, width: u32, height: u32) -> Box<dyn camera::Camera + Sync> {
+        let c = SceneFile::axonometric(c);
         let location = SceneFile::parse_vec3(&c["location"]);
         let lookat = SceneFile::parse_vec3(&c["lookat"]);
         let up = SceneFile::parse_vec3(&c["up"]);
@@ -617,7 +627,13 @@ impl SceneFile {
             },
             Some("orthographic") => {
                 let h = c["height"].as_f64().unwrap_or_else(|| angle().tan() * (lookat - location).norm());
-                Box::new(camera::OrthographicCamera::new(placement, h, aspect))
+                let focus = c["focus_distance"].as_f64().unwrap_or((lookat - location).norm());
+                let aperture = match (c["blur"].as_f64(), c["aperture"].as_f64()) {
+                    (Some(_), Some(_)) => panic!("An orthographic camera takes \"blur\" or \"aperture\", not both"),
+                    (Some(b), None) => b * focus,
+                    (None, a) => a.unwrap_or(0.),
+                };
+                Box::new(camera::OrthographicCamera::new(placement, h, aspect).with_lens(aperture, focus))
             },
             Some("spherical") => Box::new(camera::SphericalCamera::new(placement, match c["mapping"].as_str() {
                 None | Some("equirectangular") => camera::SphereMapping::Equirectangular,
@@ -632,8 +648,41 @@ impl SceneFile {
                     .unwrap_or_else(|e| panic!("Realistic camera: {}", e));
                 Box::new(cam)
             },
-            Some(t) => panic!("Unknown camera type '{}': expected \"perspective\", \"orthographic\", \"spherical\" or \"realistic\"", t),
+            Some(t) => panic!("Unknown camera type '{}': expected \"perspective\", \"orthographic\", \"isometric\", \"spherical\" or \"realistic\"", t),
         }
+    }
+
+    /// An `"isometric"` camera as the orthographic camera it is, its `"location"` placed by its
+    /// azimuth, elevation and distance (`camera::isometric_direction`), so everything that
+    /// reads the camera's position (the sky, level of detail, lightning) sees where it is. Any
+    /// other camera is returned as it is.
+    pub fn axonometric(mut c: Value) -> Value {
+        if c["type"].as_str() != Some("isometric") {
+            return c;
+        }
+        let lookat = SceneFile::parse_vec3(&c["lookat"]);
+        let up = SceneFile::parse_vec3_def(&c, "up", Vector3::y());
+        let height = c["height"].as_f64().unwrap_or_else(|| panic!("An isometric camera needs a \"height\": the height of the view, in scene units"));
+        let distance = match (c["distance"].as_f64(), c.get("location")) {
+            (Some(d), _) => d,
+            (None, Some(l)) => (SceneFile::parse_vec3(l) - lookat).norm(),
+            (None, None) => 2. * height,
+        };
+        assert!(distance > 0., "An isometric camera's distance from what it looks at must be positive");
+        let back = camera::isometric_direction(up, SceneFile::parse_number(&c["azimuth"], 45.),
+            SceneFile::parse_number(&c["elevation"], camera::ISOMETRIC_ELEVATION)) * distance;
+        let json = |v: Vector3<f64>| serde_json::json!([v.x, v.y, v.z]);
+        c["type"] = serde_json::json!("orthographic");
+        c["location"] = json(lookat + back);
+        c["up"] = json(up);
+        if let Some(m) = c.get_mut("motion") {
+            // It slides, keeping its direction.
+            let end = SceneFile::parse_vec3_def(m, "lookat", lookat);
+            m["lookat"] = json(end);
+            m["location"] = json(end + back);
+            m["up"] = json(up);
+        }
+        c
     }
 
     /// A lens (`lens::LensSystem`): a built-in name or a pbrt `.dat` file, with `"blades"` (and
@@ -4355,6 +4404,7 @@ impl SceneFile {
     }
 
     pub fn from_scenefile(mut s: SceneFile) -> Scene {
+        s.camera = SceneFile::axonometric(std::mem::take(&mut s.camera));
         SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
         SceneFile::lightning_follows_sun(&s.sun, &mut s.objects);
         let max_bounding = BBox::new( // TODO
@@ -4488,12 +4538,13 @@ impl SceneFile {
                 spectral: s.spectral.as_bool().unwrap_or(false),
                 shutter: SceneFile::parse_shutter(&s.shutter),
                 motion,
-                wavefront: match s.integrator.as_str() {
-                    None | Some("path") => false,
-                    Some("wavefront") | Some("gpu") => true,
-                    Some(x) => panic!("Unknown integrator '{}': expected \"path\", \"wavefront\" or \"gpu\"", x),
+                integrator: match s.integrator.as_str() {
+                    None | Some("auto") => crate::scene::Integrator::Auto,
+                    Some("path") => crate::scene::Integrator::Path,
+                    Some("wavefront") => crate::scene::Integrator::Wavefront,
+                    Some("gpu") => crate::scene::Integrator::Gpu,
+                    Some(x) => panic!("Unknown integrator '{}': expected \"auto\", \"path\", \"wavefront\" or \"gpu\"", x),
                 },
-                gpu: s.integrator.as_str() == Some("gpu"),
                 adaptive: SceneFile::parse_adaptive(&s.adaptive),
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
@@ -5295,6 +5346,41 @@ mod tests {
         assert!(pinhole.excludes(&at(60.)));
         assert!(SceneFile::parse_view(&serde_json::json!({"type": "orthographic",
             "image_width": 100, "image_height": 100})).is_none());
+    }
+
+    #[test]
+    fn test_isometric_cameras_are_placed_orthographic_cameras() {
+        let c = SceneFile::axonometric(serde_json::json!({"type": "isometric", "lookat": [1, 0, 1], "height": 4}));
+        assert_eq!(c["type"], "orthographic");
+        let back = SceneFile::parse_vec3(&c["location"]) - Vector3::new(1., 0., 1.);
+        // Twice the height away, along (1, 1, 1).
+        assert!((back - Vector3::new(8., 8., 8.) / 3f64.sqrt()).norm() < 1e-9, "{}", back);
+        let cam = SceneFile::parse_camera(serde_json::json!({"type": "isometric", "lookat": [0, 0, 0],
+            "location": [0, 0, 10], "azimuth": 225, "height": 2}), 100, 100);
+        let r = cam.get_ray(0.5, 0.5, 0., 0.);
+        // Only the location's distance counts: from azimuth 225°, it looks down along (1, -1, 1).
+        assert!((r.ro.norm() - 10.).abs() < 1e-9 && (r.rd - Vector3::new(1., -1., 1.).normalize()).norm() < 1e-9, "{:?}", r);
+        // Through a lens, focused at lookat.
+        let cam = SceneFile::parse_camera(serde_json::json!({"type": "isometric", "lookat": [0, 0, 0],
+            "height": 2, "distance": 10, "aperture": 0.5}), 100, 100);
+        for _ in 0..16 {
+            let r = cam.get_ray(0.5, 0.5, 0., 0.);
+            let t = r.rd.dot(&(-r.ro));
+            assert!((r.ro + r.rd * t).norm() < 1e-9, "{:?}", r);
+        }
+        // "blur" blurs alike from any distance: a point 1 beyond focus by a disc of radius 0.1.
+        for distance in [5., 50.] {
+            let cam = SceneFile::parse_camera(serde_json::json!({"type": "isometric", "lookat": [0, 0, 0],
+                "height": 2, "distance": distance, "blur": 0.1, "elevation": 90}), 100, 100);
+            let widest = (0..256).map(|_| {
+                let r = cam.get_ray(0.5, 0.5, 0., 0.);
+                let t = (-1. - r.ro.y) / r.rd.y;
+                (r.ro + r.rd * t).xz().norm()
+            }).fold(0f64, f64::max);
+            assert!(widest > 0.08 && widest <= 0.1 + 1e-9, "{} at {}", widest, distance);
+        }
+        let other = serde_json::json!({"type": "orthographic", "location": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]});
+        assert_eq!(SceneFile::axonometric(other.clone()), other);
     }
 
     #[test]

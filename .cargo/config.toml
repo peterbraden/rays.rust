@@ -1,0 +1,7 @@
+# x86-64 builds are for x86-64-v3 (AVX2, FMA, BMI2: Intel since Haswell, 2013; AMD since
+# Excavator, 2015): the same images to the byte, and up to a quarter quicker where there is
+# arithmetic to vectorise (plan.md section 15). On an older processor the binary stops with an
+# illegal instruction: build with RUSTFLAGS="-C target-cpu=x86-64" there (RUSTFLAGS replaces
+# these). Other architectures (aarch64, wasm32) are untouched.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v3"]

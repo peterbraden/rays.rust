@@ -1244,6 +1244,7 @@ impl SceneFile {
             patchiness: SceneFile::parse_number(&o["patchiness"], 0.5),
             max_slope: SceneFile::parse_number(&o["max_slope"], 35.),
             variants: SceneFile::parse_int(&o["variants"], 3).max(1),
+            clustering: SceneFile::parse_number(&o["clustering"], 0.),
         };
         let entries = o["species"].as_array().filter(|e| !e.is_empty())
             .unwrap_or_else(|| panic!("a forest needs a list of \"species\""));
@@ -1536,6 +1537,7 @@ impl SceneFile {
             patchiness: SceneFile::parse_number(&o["patchiness"], 0.3),
             max_slope: SceneFile::parse_number(&o["max_slope"], 90.),
             variants: items.iter().map(|i| i.models.len()).max().unwrap_or(1),
+            clustering: SceneFile::parse_number(&o["clustering"], 0.),
         };
         let ground = |x: f64, z: f64| footing.at(x, z);
         let density = Footing::parse_rule(o, "scatter").or_else(|| o.get("density")

@@ -231,9 +231,9 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
             s += blown * 0.15 * fbm(FractalStyle::Perlin, 12., 2., 0.4);
         }
         if pan > 0. {
-            // Polygons a couple of metres across, the cracks between them a few centimetres
-            // deep.
-            s += pan * -0.05 * (1. - smoothstep(0., 0.08, stones(CellStyle::Edges, 2., 0xc1)));
+            // Polygons a metre or two across, the cracks between them a few centimetres wide
+            // and deep.
+            s += pan * -0.03 * (1. - smoothstep(0., 0.025, stones(CellStyle::Edges, 1.5, 0xc1)));
         }
         h += loose * s;
     }

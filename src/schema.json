@@ -7699,6 +7699,12 @@
           "doc": "How strongly species grow in separate stands, 0 for evenly mixed."
         },
         {
+          "name": "clustering",
+          "kind": "number",
+          "default": 0,
+          "doc": "0 for trees spread evenly, up to 1 for clumps with open ground between."
+        },
+        {
           "name": "max_slope",
           "kind": "number",
           "default": 35,
@@ -8335,6 +8341,7 @@
         {"name": "clearings", "kind": "number", "default": 0, "doc": "The share of the area left clear.", "min": 0, "max": 1},
         {"name": "patch_size", "kind": "number", "default": 20, "doc": "Size of the patches items grow in, m.", "min": 0},
         {"name": "patchiness", "kind": "number", "default": 0.3, "doc": "How strongly items keep to their patches.", "min": 0, "max": 1},
+        {"name": "clustering", "kind": "number", "default": 0, "doc": "0 for copies spread evenly, up to 1 for clumps with open ground between (as rockfall leaves its blocks).", "min": 0, "max": 1},
         {"name": "items", "kind": "json", "required": true, "doc": "What to strew: a list of {geometry or boulder, material, weight, spacing, size, sink, align, tilt}."}
       ]
     },

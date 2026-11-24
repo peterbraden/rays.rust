@@ -439,7 +439,9 @@ impl Relief {
         let carried = 1. - smoothstep(DUNE_SPACING / 6., DUNE_SPACING / 3., local);
         if carried <= 0. { return 0.; }
         let Some((downwind, side)) = wind else { return 0. };
-        if sand < 0.5 { return 0.; }
+        // Dunes fade in with the sand, so the ground doesn't step where it begins.
+        let fade = smoothstep(0.2, 1.5, sand);
+        if fade <= 0. { return 0.; }
         // Distances along and across the wind, in the patch's own frame.
         let p = d * self.radius;
         let (along, across) = (p.dot(&downwind), p.dot(&side));
@@ -463,7 +465,7 @@ impl Relief {
         let present = if cover >= 1. { 1. } else { smoothstep(threshold - 0.1, threshold + 0.1, crests(1., 1.5, 1.9)) };
         // The sand the dunes take is taken from the surface beneath them, which already
         // stands on all of it.
-        carried * (present * height * (profile + 0.5) - sand.min(0.5 * height * cover))
+        carried * fade * (present * height * (profile + 0.5) - sand.min(0.5 * height * cover))
     }
 
     /// The surface's height at `d` with detail down to spacing `local`, given its large-scale
@@ -1048,7 +1050,9 @@ impl Ground {
         // clay is damp or dust has blown over it.
         let playa = self.playa(p);
         if playa > 0. {
-            let extent = smoothstep(0.35, 0.65, playa + 0.3 * (n(600., 0.25) - 0.5)) * smoothstep(0.96, 0.99, flat);
+            // (A playa is level by nature: only its shores and the sides of its own cracks are
+            // steep, and the crust covers those.)
+            let extent = smoothstep(0.35, 0.65, playa + 0.3 * (n(600., 0.25) - 0.5)) * smoothstep(0.5, 0.7, flat);
             if extent > 0. {
                 let salt = smoothstep(0.35, 0.6, n(900., 0.75) + 0.3 * playa);
                 let crust = mix(colour(CLAY_PAN), colour(SALT), salt);
@@ -1237,6 +1241,31 @@ mod tests {
         let coarse = Terrain::new(Domain::patch(lat + 0.01, lon, 16, 4000., params.planet.radius), params.clone());
         let globe = Terrain::new(Domain::sphere(16, params.planet.radius), params);
         (planet, Arc::new(vec![Layer::new(fine, 0.), Layer::new(coarse, 0.), Layer::new(globe, 0.)]), (lat, lon))
+    }
+
+    #[test]
+    fn test_dunes_fade_in_with_the_sand() {
+        // Sand thickening from nothing across a patch: the dunes' relief changes by no more
+        // than their slopes allow from one metre to the next, even where the sand begins.
+        let mut params = TerrainParams::default();
+        params.planet.radius = 6.36e6;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = (20., 10.);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 16, 1000., params.planet.radius), params.clone());
+        let n = t.domain.len();
+        let east: Vec<f64> = (0..n).map(|k| (k % 16) as f64).collect();
+        t.sediment = east.iter().map(|x| (x - 6.).max(0.) * 0.5).collect();
+        t.sand = t.sediment.clone();
+        t.wind = (0., 1.);
+        let relief = Relief::new(Arc::new(vec![Layer::new(t, 0.)]), &planet, params.planet.radius, 0., 1000.);
+        let frame = Frame::new(lat, lon, params.planet.radius, 1.);
+        // Across the wind (which blows north), from no sand to several metres.
+        for row in 0..8 {
+            let z = -2000. + 500. * row as f64;
+            let h: Vec<f64> = (0..5000).map(|k| relief.dunes(&frame.dir(-3500. + k as f64, z), 5.)).collect();
+            let steepest = h.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0., f64::max);
+            assert!(steepest < 0.3, "row {}: a step of {} m", row, steepest);
+        }
     }
 
     #[test]

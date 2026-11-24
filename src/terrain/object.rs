@@ -891,7 +891,7 @@ pub fn boulders(o: &Value, landscape: &SceneObject) -> Option<(Value, Value)> {
     let scatter = json!({
         "type": "scatter", "seed": seed.wrapping_add(17), "surface": "landscape",
         "area": {"min": [camera.x - reach, camera.z - reach], "max": [camera.x + reach, camera.z + reach]},
-        "spacing": 4, "density": density,
+        "spacing": 3, "clustering": 0.65, "density": density,
         "items": [{"boulder": {"angularity": angularity, "detail": 4}, "variants": 6, "size": [0.15, 1.8],
                    "sink": 0.2, "tilt": 15, "material": BOULDER_MATERIAL}]});
     let material = json!({"type": "rock", "preset": style, "seed": seed});

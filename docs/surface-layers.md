@@ -69,6 +69,7 @@ value otherwise; either moved first by a `breakup`; `default`, 0, on surfaces wi
 | `hardness` | How hard that rock is to rivers, from -1.4 (sediment) to 1.5 (basalt) |
 | `playa` | 0 to 1: the dry floor of a closed basin, where its terminal lake comes and goes (docs/geology.md) |
 | `till` | Glacial sediment, metres: till beneath the ice and moraines at its margins (part of `sediment`) |
+| `bedrock` | The rock beneath any sediment at the point's height, by number as `rock` |
 | `sand` | Wind-blown sand, metres: sand sheets and dune fields (part of `sediment`) |
 
 Each is kept at the simulation's cell corners and interpolated by Catmull-Rom splines, so

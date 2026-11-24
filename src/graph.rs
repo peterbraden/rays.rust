@@ -129,6 +129,9 @@ pub enum Field {
     /// Wind-blown sand, metres thick: sand sheets and dune fields (`terrain::aeolian`), part
     /// of `sediment`.
     Sand,
+    /// The bedrock (`terrain::geology::Rock`, by number as `rock`) at the point's height,
+    /// beneath any sediment or lava over it: what the scree there broke from.
+    Bedrock,
 }
 
 impl Field {
@@ -150,7 +153,8 @@ impl Field {
             "playa" => Field::Playa,
             "till" => Field::Till,
             "sand" => Field::Sand,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, hardness, playa, till or sand", s)),
+            "bedrock" => Field::Bedrock,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, bedrock, hardness, playa, till or sand", s)),
         })
     }
 }

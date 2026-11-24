@@ -68,7 +68,9 @@
 //! - `map`: also write a shaded relief map to this PNG path; `geology_map`: also write one
 //!   coloured by the rock exposed; `rain_map`: one coloured by the rain (for a full-scale
 //!   landscape, each of the finest patch); `cover_map` (full scale): the ground cover's albedo
-//!   seen from above about the site, to check what it makes of the simulations.
+//!   seen from above about the site, to check what it makes of the simulations; `height_map`:
+//!   the surface's heights as a 16-bit PNG (of the finest patch), north up, their range printed,
+//!   for finding ground to look at.
 //!
 //! Water is not part of the terrain: add a plane at y = 0 (patch) or a sphere (planet).
 
@@ -600,6 +602,9 @@ pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> 
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
     if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(&t, path, 2048); }
     if let Some(path) = o["rain_map"].as_str() { map::write_rain_map(&t, path, 2048); }
+    if let Some(path) = o["height_map"].as_str() && let Some((lo, hi)) = map::write_height_map(&t, path) {
+        println!("Terrain: heights from {:.1} to {:.1} m in {}", lo, hi, path);
+    }
     let place = Placement {
         scale: number(o, "scale", 1000.),
         exaggeration: number(o, "exaggeration", 1.),
@@ -733,6 +738,10 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         if let Some(path) = o["map"].as_str() { write_map(t, path, 2048); }
         if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(t, path, 2048); }
         if let Some(path) = o["rain_map"].as_str() { map::write_rain_map(t, path, 2048); }
+        if let Some(path) = o["height_map"].as_str() && let Some((lo, hi)) = map::write_height_map(t, path) {
+            say(format!("Landscape: heights of its finest patch, {} cells of {} m, from {:.1} to {:.1} m in {}",
+                t.domain.len(), description.levels[0].spacing, lo, hi, path));
+        }
         // Where the glaciers are, to frame them.
         let ice = (0..t.domain.len()).filter(|&i| t.ice[i] >= crate::terrain::simulation::ICE_FREE);
         let cells = ice.clone().count();
@@ -823,8 +832,8 @@ pub const BOULDER_MATERIAL: &str = "landscape boulders";
 ///   carried, sorted by nothing);
 /// - none on sand, playas, alluvial flats or ice.
 ///
-/// They are the rock most often bare about the camera (rays cast down onto the ground in a grid
-/// over the area), in its `rock` material style and shape: granite and gneiss rounded by
+/// They are the bedrock most common about the camera (beneath any sediment, which the scree
+/// broke from; found by rays cast down onto the ground in a grid over the area), in its `rock` material style and shape: granite and gneiss rounded by
 /// weathering, sandstone, limestone and quartzite blocky along their joints and beds, shale and
 /// schist in slabs, basalt in angular columns. They reach as far as they show: 30 times the
 /// camera's height out, from 60 to 300 m.
@@ -852,7 +861,7 @@ pub fn boulders(o: &Value, landscape: &SceneObject) -> Option<(Value, Value)> {
         for i in 0..12 {
             let (x, z) = (camera.x + (i as f64 / 11. - 0.5) * 2. * reach, camera.z + (j as f64 / 11. - 0.5) * 2. * reach);
             if let Some(hit) = down(x, z, camera.y + 1e4)
-                && let Some(r) = fields.field(Field::Rock, &hit.point) {
+                && let Some(r) = fields.field(Field::Bedrock, &hit.point) {
                 counts[(r.round() as usize).min(8)] += 1;
             }
         }

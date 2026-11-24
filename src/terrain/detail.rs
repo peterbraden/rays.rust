@@ -146,7 +146,7 @@ pub fn local_bound(c: &Context, slope: f64, half: f64, heights: (f64, f64), nois
         let alluvium = most(k0.alluvium, k1.alluvium);
         let blown = most(k0.blown, k1.blown);
         let pan = most(k0.pan, k1.pan);
-        change += loose * (scree * 0.5
+        change += loose * (scree * 0.12
             + glacial * (1.5 * lip(Perlin, 25., 2., 0.5) + 0.9)
             + alluvium * (0.3 * lip(Perlin, 30., 3., 0.5) + 0.04 * lip(Perlin, 0.4, 0.05, 0.6))
             + blown * 0.15 * lip(Perlin, 12., 2., 0.4)
@@ -194,16 +194,25 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
         let ledges = if rock == Rock::Sediment { 0. } else { 0.7 * hardness.clamp(-1.5, 1.5) * steep(25., 50.) };
         let texture = match rock {
             // Rounded blocks and domes.
-            Rock::Granite => 1.2 * stones(CellStyle::Stones, 4., 0x61) + 1.0 * fbm(FractalStyle::Billow, 18., 0.5, 0.5),
+            // Domes, and corestones weathered out in places (tors), not everywhere.
+            Rock::Granite => {
+                let tors = smoothstep(0.3, 0.55, fbm(FractalStyle::Perlin, 40., 10., 0.5));
+                0.8 * tors * stones(CellStyle::Stones, 4., 0x61) + 1.0 * fbm(FractalStyle::Billow, 18., 0.5, 0.5)
+            }
             // Ribs along the foliation, and crumbling between.
             Rock::Gneiss => 0.8 * fbm(FractalStyle::Ridged, 5., 0.1, 0.55),
             Rock::Schist => 0.6 * fbm(FractalStyle::Ridged, 3., 0.05, 0.6),
             // Blocks bounded by joints: the joints are grooves.
             Rock::Sandstone | Rock::Quartzite => {
-                -0.5 * (1. - smoothstep(0., 0.12, stones(CellStyle::Edges, 3., 0x71))) + 0.3 * fbm(FractalStyle::Perlin, 6., 0.1, 0.5)
+                let k = keep(0.5);
+                -0.5 * k * joints(c, noise, 3.) + 0.3 * fbm(FractalStyle::Perlin, 6., 0.1, 0.5)
             }
             // Solution flutes and pits.
-            Rock::Limestone => 0.5 * fbm(FractalStyle::Ridged, 1.5, 0.03, 0.6) - 0.3 * stones(CellStyle::Stones, 2.5, 0x81),
+            // Solution flutes, and pans dissolved in patches.
+            Rock::Limestone => {
+                let pans = smoothstep(0.2, 0.5, fbm(FractalStyle::Perlin, 25., 5., 0.5));
+                0.5 * fbm(FractalStyle::Ridged, 1.5, 0.03, 0.6) - 0.15 * pans * stones(CellStyle::Stones, 2.5, 0x81)
+            }
             // Fine crumbling.
             Rock::Shale => 0.25 * fbm(FractalStyle::Perlin, 1., 0.03, 0.6),
             // Columns: their tops cells, their joints grooves.
@@ -217,7 +226,9 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
     if loose > 0. {
         let mut s = 0.;
         if scree > 0. {
-            s += scree * (0.35 * stones(CellStyle::Stones, 0.6, 0xa1) + 0.15 * stones(CellStyle::Stones, 0.25, 0xa3));
+            // A talus slope is a plane at the angle of repose, rough at the scale of its
+            // stones, not lumpy.
+            s += scree * (0.08 * stones(CellStyle::Stones, 0.5, 0xa1) + 0.04 * stones(CellStyle::Stones, 0.2, 0xa3));
         }
         if glacial > 0. {
             // Hummocks, and boulders in patches.
@@ -238,6 +249,23 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
         h += loose * s;
     }
     amplitude * ((1. - ice) * h.clamp(-REACH, REACH) + ice * glacier)
+}
+
+/// How deep in a joint `c` is, 0 to 1: two sets of nearly parallel vertical joints, at right
+/// angles to each other (as joints in bedded rock form, across the beds and each other), about
+/// `spacing` metres apart, the spacing and the joints' line wandering a little; each joint a
+/// groove a few centimetres wide where weathering has opened it.
+fn joints(c: &Context, noise: &SeededNoise, spacing: f64) -> f64 {
+    let p = c.p;
+    // The sets' directions turn slowly across the country.
+    let angle = 0.6 * noise.noise(p / 300. + crate::na::Vector3::new(4.1, 0.7, 2.3));
+    let (a, b) = ((angle.cos(), angle.sin()), (-angle.sin(), angle.cos()));
+    let groove = |dir: (f64, f64), s: f64, o: f64| {
+        let u = (p.x * dir.0 + p.z * dir.1) / s + 0.25 * noise.noise(p / (4. * s) + crate::na::Vector3::new(o, 1.3, 0.2));
+        let d = (u - u.round()).abs() * s;
+        1. - smoothstep(0.02, 0.06, d)
+    };
+    groove(a, spacing, 7.7).max(groove(b, 1.6 * spacing, 3.1))
 }
 
 fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {

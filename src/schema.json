@@ -2787,6 +2787,12 @@
           "doc": "Full scale: also write a map of the whole planet here."
         },
         {
+          "name": "height_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Also write the surface's heights as a 16-bit PNG here (for a full-scale landscape, of the finest patch), north up, lowest black to highest white; the range is printed."
+        },
+        {
           "name": "cover_map",
           "kind": "path",
           "default": null,

@@ -130,6 +130,13 @@ impl SimFields {
     pub fn rock(&self, domain: &Domain, d: &Vector3<f64>, h: f64) -> Rock {
         let s = |v: &[f64]| sample(domain, v, d);
         if s(&self.sediment) > 0.5 { return Rock::Sediment; }
+        self.bedrock(domain, d, h)
+    }
+
+    /// The rock beneath any sediment at direction `d`, `h` metres above sea level: lava where
+    /// it is thicker than half a metre, else the bedrock at that height.
+    pub fn bedrock(&self, domain: &Domain, d: &Vector3<f64>, h: f64) -> Rock {
+        let s = |v: &[f64]| sample(domain, v, d);
         if s(&self.lava) > 0.5 { return Rock::Basalt; }
         let structure = Structure::from_array(std::array::from_fn(|k| s(&self.structure[k])));
         self.column.rock(&structure, structure.coordinate(h, s(&self.exhumed)))
@@ -152,6 +159,7 @@ impl SimFields {
             Field::Snowline => h - s(&self.snowline),
             Field::Treeline => h - (s(&self.snowline) - TREELINE_BELOW_SNOWLINE),
             Field::Rock => self.rock(domain, d, h).index() as f64,
+            Field::Bedrock => self.bedrock(domain, d, h).index() as f64,
             Field::Hardness => -self.rock(domain, d, h).scores().0,
             Field::Precipitation => s(&self.precipitation).max(0.),
             Field::Playa => s(&self.playa).clamp(0., 1.),

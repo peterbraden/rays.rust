@@ -136,6 +136,21 @@ pub fn write_geology_map(t: &Terrain, path: &str, width: usize) {
     });
 }
 
+/// Write a patch's surface (its ground and ice) to `path` as a 16-bit greyscale PNG, a pixel a
+/// cell, north up, from its lowest (black) to its highest (white), and return those heights,
+/// metres: for finding ground to look at. None for a whole planet.
+pub fn write_height_map(t: &Terrain, path: &str) -> Option<(f64, f64)> {
+    let Layout::Patch { n, .. } = t.domain.layout else { return None };
+    let surface = t.surface();
+    let (lo, hi) = surface.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &h| (a.min(h), b.max(h)));
+    let img = image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_fn(n as u32, n as u32, |x, y| {
+        let h = surface[(n - 1 - y as usize) * n + x as usize];
+        image::Luma([((h - lo) / (hi - lo).max(1e-9) * 65535.).round() as u16])
+    });
+    img.save(path).unwrap();
+    Some((lo, hi))
+}
+
 /// Write a map of the rain at the last step to `path`, as `write_map` but coloured by the rain
 /// (`Terrain::precipitation`): browns where it is dry, through greens, to blues where it is
 /// wettest (from 0 to 4000 mm a year, on a square-root scale).

@@ -1116,6 +1116,8 @@ impl crate::graph::Fields for Ground {
             },
             // A rock's number can't be blended between simulations.
             Field::Rock => return self.rock(&d, h).map(|r| r.index() as f64),
+            Field::Bedrock => return self.layers.iter().find(|l| l.weight(&d) > 0.5).or(self.layers.last())
+                .map(|l| l.fields.bedrock(&l.domain, &d, h).index() as f64),
             Field::Hardness => return self.rock(&d, h).map(|r| -r.scores().0),
             _ => {},
         }

@@ -5,8 +5,8 @@
 //! wavefront renderer is pbrt-v4's GPU renderer).
 //!
 //! The shader is Rust: the crate `shaders/pathtrace`, compiled to SPIR-V by rust-gpu
-//! (`scripts/build-shaders.sh`, on rust-gpu's pinned nightly; the renderer stays on stable and
-//! includes the committed `pathtrace.spv`), which wgpu translates for the device (naga), for
+//! (`scripts/build-shaders.sh`, run by `build.rs`, on rust-gpu's pinned nightly; the renderer
+//! stays on stable and includes the `pathtrace.spv` it writes), which wgpu translates for the device (naga), for
 //! Metal too. The same crate is also built for the CPU: its structs are these buffers'
 //! layouts (so the two sides can't drift), and the tests run its functions, and its whole
 //! `radiance`, on the CPU against the renderer's own and the GPU's.

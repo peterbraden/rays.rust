@@ -123,7 +123,7 @@ Before merging, weigh:
   - the switches `LOD_CROSSED` and `LOD_SELF_LIT_FROM` (both in the cache's key);
   - the ignored harness tests in `src/shapes/lod_research.rs`;
   - `scripts/lod-suite.py`, `compare-linear.py` and `lod-comparison-sheets.py`.
-- **Size.** Most of the diff is the regenerated shader (`src/gpu/pathtrace.wgsl`) and these notes.
+- **Size.** Much of the diff is these notes and the research harness; the shader's change is a few lines (`crepuscular_samples`), now built by `build.rs` rather than committed.
 - **Not done:** the demo PNGs weren't re-rendered.
 
 ## Is any of it research?

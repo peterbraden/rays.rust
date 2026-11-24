@@ -645,6 +645,20 @@ impl SceneFile {
                 };
                 Box::new(camera::OrthographicCamera::new(placement, h, aspect).with_lens(aperture, focus))
             },
+            Some("isometric") => {
+                // (Only an unwrapped one is left isometric by `axonometric`.) The flat camera
+                // looks at the map's centre, `distance` (default 50 km) back.
+                let (origin, centre, radius) = SceneFile::unwrapping(&c["unwrap"]);
+                let mut flat = c.clone();
+                let map = flat.as_object_mut().unwrap();
+                for k in ["unwrap", "location", "motion"] { map.remove(k); }
+                map.insert("lookat".into(), serde_json::json!([
+                    radius * (centre.1 - origin.1).to_radians(), 0., -radius * (centre.0 - origin.0).to_radians()]));
+                map.insert("up".into(), serde_json::json!([0, 1, 0]));
+                let distance = SceneFile::parse_number(&c["distance"], 50_000.);
+                map.insert("distance".into(), serde_json::json!(distance));
+                Box::new(camera::UnwrappedCamera::new(SceneFile::parse_camera(flat, width, height), origin, radius, distance))
+            },
             Some("spherical") => Box::new(camera::SphericalCamera::new(placement, match c["mapping"].as_str() {
                 None | Some("equirectangular") => camera::SphereMapping::Equirectangular,
                 Some("equal_area") => camera::SphereMapping::EqualArea,
@@ -670,6 +684,19 @@ impl SceneFile {
         if c["type"].as_str() != Some("isometric") {
             return c;
         }
+        if let Some(u) = c.get("unwrap").cloned() {
+            // Seen from everywhere at once: to the rest of the scene, a camera `height` above
+            // the map's centre, looking down at it.
+            let (origin, centre, radius) = SceneFile::unwrapping(&u);
+            let height = c["height"].as_f64().unwrap_or_else(|| panic!("An isometric camera needs a \"height\": the height of the view, in scene units"));
+            let (p, _) = camera::UnwrappedCamera::place_on(origin, radius, centre.0, centre.1, 0.);
+            let (above, axes) = camera::UnwrappedCamera::place_on(origin, radius, centre.0, centre.1, height);
+            let json = |v: Vector3<f64>| serde_json::json!([v.x, v.y, v.z]);
+            c["location"] = json(above);
+            c["lookat"] = json(p);
+            c["up"] = json(-axes.column(2).into_owned());
+            return c;
+        }
         let lookat = SceneFile::parse_vec3(&c["lookat"]);
         let up = SceneFile::parse_vec3_def(&c, "up", Vector3::y());
         let height = c["height"].as_f64().unwrap_or_else(|| panic!("An isometric camera needs a \"height\": the height of the view, in scene units"));
@@ -693,6 +720,19 @@ impl SceneFile {
             m["up"] = json(up);
         }
         c
+    }
+
+    /// An isometric camera's `"unwrap"`: (`"origin"`, the latitude and longitude of the scene's
+    /// origin, default [0, 0]; `"center"`, those of the image's centre, default the origin;
+    /// `"radius"`, the planet's, default `planet::EARTH_RADIUS`).
+    fn unwrapping(u: &Value) -> ((f64, f64), (f64, f64), f64) {
+        let ll = |v: &Value, def: (f64, f64)| match v.as_array() {
+            Some(a) if a.len() == 2 => (a[0].as_f64().unwrap(), a[1].as_f64().unwrap()),
+            None => def,
+            _ => panic!("An unwrapped camera's \"origin\" and \"center\" are [latitude, longitude] in degrees"),
+        };
+        let origin = ll(&u["origin"], (0., 0.));
+        (origin, ll(&u["center"], origin), SceneFile::parse_number(&u["radius"], crate::planet::EARTH_RADIUS))
     }
 
     /// A lens (`lens::LensSystem`): a built-in name or a pbrt `.dat` file, with `"blades"` (and
@@ -4532,6 +4572,17 @@ impl SceneFile {
     }
 
     pub fn from_scenefile(mut s: SceneFile) -> Scene {
+        if s.camera["unwrap"] == serde_json::json!(true) {
+            s.camera["unwrap"] = serde_json::json!({});
+        }
+        if s.camera["type"].as_str() == Some("isometric") && s.camera["unwrap"].is_object() && s.camera["unwrap"].get("origin").is_none() {
+            // Unwrapped about a landscape's site, where it says.
+            let site = s.objects.iter().filter(|o| o["type"].as_str() == Some("landscape"))
+                .find_map(|o| Some((o["domain"]["lat"].as_f64()?, o["domain"]["lon"].as_f64()?)));
+            if let Some((lat, lon)) = site {
+                s.camera["unwrap"]["origin"] = serde_json::json!([lat, lon]);
+            }
+        }
         s.camera = SceneFile::axonometric(std::mem::take(&mut s.camera));
         SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
         SceneFile::lightning_follows_sun(&s.sun, &mut s.objects);

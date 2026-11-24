@@ -199,6 +199,10 @@ impl Geometry for AnimatedTransform {
         self.now().undisplaced(p, face)
     }
 
+    fn pattern_frame(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Affine3<f64>> {
+        self.now().pattern_frame(p, face)
+    }
+
     fn tolerance(&self) -> f64 {
         self.now().tolerance()
     }

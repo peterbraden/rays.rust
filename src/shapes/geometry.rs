@@ -182,6 +182,12 @@ pub trait Geometry: Sync{
     /// other shapes.
     fn undisplaced(&self, _p: &Vector3<f64>, _face: u32) -> Option<Undisplaced> { None }
 
+    /// The map from the scene's space to the shape's own at `p` (hit as part `face`), where it
+    /// was placed by a transform: solid textures are read there, so they move, turn and scale
+    /// with their object, as POV-Ray's do (a plank turned turns its grain). None where the
+    /// shape's space is the scene's.
+    fn pattern_frame(&self, _p: &Vector3<f64>, _face: u32) -> Option<Affine3<f64>> { None }
+
     /// The accuracy of this shape's hits, in its own units, beyond floating-point rounding: the
     /// tolerance of an iterative solver (an isosurface's `accuracy`), or 0 for shapes solved in
     /// closed form. See `Intersection::spawn_offset`.
@@ -235,6 +241,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { (**self).sample_surface(u) }
     fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<Vector2<f64>> { (**self).uv(p, face) }
     fn undisplaced(&self, p: &Vector3<f64>, face: u32) -> Option<crate::shapes::geometry::Undisplaced> { (**self).undisplaced(p, face) }
+    fn pattern_frame(&self, p: &Vector3<f64>, face: u32) -> Option<Affine3<f64>> { (**self).pattern_frame(p, face) }
     fn tolerance(&self) -> f64 { (**self).tolerance() }
     fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> { (**self).tangent(p, face) }
     fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> { (**self).sample_from(from, u) }

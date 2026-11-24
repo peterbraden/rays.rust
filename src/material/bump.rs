@@ -111,7 +111,9 @@ impl Bump {
             Pattern::Graph(g) => {
                 let c = crate::graph::Context::at_hit_filtered(i, s);
                 // Where a displaced surface was displaced from; the bump tilts the hit's normal.
-                self.perturb_graph(g, &crate::graph::Context { normal: *n, ..c }, n)
+                // The relief is read in the object's own space, as its colours are.
+                let frame = i.object.geometry.pattern_frame(&i.point, i.face);
+                self.perturb_graph(g, &crate::graph::Context { normal: *n, ..c }, n, frame.as_ref())
             },
             _ => self.perturb(&i.point, n),
         }
@@ -119,13 +121,18 @@ impl Bump {
 
     /// A graph's relief: n tilted against the graph's gradient along the surface, by central
     /// differences across the footprint.
-    fn perturb_graph(&self, g: &crate::graph::Graph, c: &crate::graph::Context, n: &Vector3<f64>) -> Vector3<f64> {
+    fn perturb_graph(&self, g: &crate::graph::Graph, c: &crate::graph::Context, n: &Vector3<f64>, frame: Option<&crate::na::Affine3<f64>>) -> Vector3<f64> {
         let a = if n.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
         let u = n.cross(&a).normalize();
         let v = n.cross(&u);
         // Half the footprint, but finer than the graph's finest detail where that is coarse.
         let e = (0.5 * c.filter).min(0.1 * g.finest()).max(1e-6);
-        let h = |p: Vector3<f64>| g.eval(&crate::graph::Context { p, ..*c });
+        // Heights in the object's units, scaled with it to the scene's.
+        let size = frame.map_or(1., |f| 1. / f.matrix().fixed_view::<3, 3>(0, 0).determinant().abs().cbrt().max(1e-300));
+        let h = |p: Vector3<f64>| {
+            let at = crate::graph::Context { p, ..*c };
+            g.eval(&frame.map_or(at, |f| at.in_frame(f))) * size
+        };
         let du = (h(c.p + u * e) - h(c.p - u * e)) / (2. * e);
         let dv = (h(c.p + v * e) - h(c.p - v * e)) / (2. * e);
         let tilted = n - (u * du + v * dv) * self.amount;
@@ -135,7 +142,7 @@ impl Bump {
     /// The normal at world point `p`, tilted from the surface normal `n` by the pattern.
     pub fn perturb(&self, p: &Vector3<f64>, n: &Vector3<f64>) -> Vector3<f64> {
         if let Pattern::Graph(g) = &self.pattern {
-            return self.perturb_graph(g, &crate::graph::Context::lifted(*p, *n), n);
+            return self.perturb_graph(g, &crate::graph::Context::lifted(*p, *n), n, None);
         }
         let q = p.component_div(&self.scale);
         let h = 1e-3;

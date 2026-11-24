@@ -196,6 +196,29 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// The context seen from a pattern's frame (`Geometry::pattern_frame`): its point mapped
+    /// there, its normal turned (by the inverse transpose) and its filter scaled.
+    pub fn in_frame(self, frame: &crate::na::Affine3<f64>) -> Context<'a> {
+        let linear: crate::na::Matrix3<f64> = frame.matrix().fixed_view::<3, 3>(0, 0).into();
+        let normals = linear.try_inverse().map_or(linear, |m| m.transpose());
+        Context {
+            p: frame.transform_point(&crate::na::Point3::from(self.p)).coords,
+            normal: (normals * self.normal).try_normalize(1e-12).unwrap_or(self.normal),
+            filter: self.filter * linear.determinant().abs().cbrt(),
+            ..self
+        }
+    }
+
+    /// As `at_hit_filtered`, in the hit object's own space (`Geometry::pattern_frame`), where
+    /// solid textures are read so that they go with their object.
+    pub fn at_hit_in_object(i: &'a crate::intersection::Intersection, s: &crate::scene::Scene) -> Context<'a> {
+        let c = Context::at_hit_filtered(i, s);
+        match i.object.geometry.pattern_frame(&i.point, i.face) {
+            Some(f) => c.in_frame(&f),
+            None => c,
+        }
+    }
+
     /// The same, on a surface with these fields.
     pub fn with_fields(self, fields: Option<&'a dyn Fields>) -> Context<'a> {
         Context { fields, ..self }

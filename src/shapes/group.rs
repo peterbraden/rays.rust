@@ -82,6 +82,10 @@ impl Geometry for Group {
         self.part(face).and_then(|(g, f)| g.tangent(p, f))
     }
 
+    fn pattern_frame(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Affine3<f64>> {
+        self.part(face).and_then(|(g, f)| g.pattern_frame(p, f))
+    }
+
     fn tolerance(&self) -> f64 {
         self.parts.iter().map(|p| p.tolerance()).fold(0., f64::max)
     }

@@ -182,6 +182,11 @@ impl Geometry for Transform {
         })
     }
 
+    fn pattern_frame(&self, p: &Vector3<f64>, face: u32) -> Option<Affine3<f64>> {
+        let local = self.inverse.transform_point(&Point3::from(*p)).coords;
+        Some(self.item.pattern_frame(&local, face).map_or(self.inverse, |f| f * self.inverse))
+    }
+
     fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> {
         let t = self.item.tangent(&self.inverse.transform_point(&Point3::from(*p)).coords, face)?;
         Some(self.transform.transform_vector(&t).normalize())

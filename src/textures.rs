@@ -412,7 +412,7 @@ impl PatternTexture {
     }
 
     pub fn eval(&self, i: &Intersection, s: &Scene) -> Color {
-        let v = self.pattern.eval(&crate::graph::Context::at_hit_filtered(i, s));
+        let v = self.pattern.eval(&crate::graph::Context::at_hit_in_object(i, s));
         let (a, b, t) = self.place(v);
         if t <= 0. || a == b {
             self.map[a].1.eval(i, s)

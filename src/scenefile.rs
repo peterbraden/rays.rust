@@ -5316,6 +5316,21 @@ mod tests {
     }
 
     #[test]
+    fn test_patterns_go_with_their_objects() {
+        let s = minimal_scene(r#", "objects": [
+            { "type": "sphere", "location": [0, 0, 0], "radius": 1 },
+            { "type": "sphere", "location": [0, 0, 0], "radius": 1, "transform": [{"rotate": [0, 0, 90]}, {"translate": [5, 0, 0]}] } ]"#);
+        let t = SceneFile::parse_color_texture(&serde_json::json!({"pattern": {"node": "gradient", "direction": [1, 0, 0]},
+            "color_map": [[-1, [0, 0, 0]], [1, [1, 1, 1]]]}));
+        let hit = |x: f64| s.objects.nearest_intersection(&Ray { ro: Vector3::new(x, 0.3, -5.), rd: Vector3::z() }, f64::INFINITY, 0.).unwrap();
+        // The sphere turned a quarter about z: its own x is the scene's y.
+        let (a, b) = (hit(0.), hit(5.));
+        let (ca, cb) = (t.eval(&a, &s), t.eval(&b, &s));
+        assert!((ca.rgb.x - 0.5).abs() < 1e-9, "{:?}", ca);
+        assert!((cb.rgb.x - 0.65).abs() < 1e-9, "{:?}", cb);
+    }
+
+    #[test]
     fn test_materials_carry_their_own_bumps_and_may_be_inline() {
         let s = minimal_scene(r#", "variables": { "veins": {"node": "wave", "shape": "triangle", "frequency": 4, "input": {"node": "gradient", "direction": [1, 0, 0]}} },
             "materials": {

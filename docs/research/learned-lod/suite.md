@@ -97,3 +97,44 @@ cards. For instance, simplified meshes of the twigs that keep each leaf where it
 1. **Self-shadowing that depends on the sun's elevation**, checked against `low-sun`.
 2. **The conifers' 2% excess coverage**, in the same harness that found it.
 3. **The heavy cases**, once memory allows. `sunlit`'s full detail may not fit in 15 GB.
+
+## Second run: self-shadowing that light and paths agree on
+
+After the first run, a review found the cards' self-shadowing applied to shadow rays only. A
+path's next ray left its cluster freely, so the two halves of each light estimate saw
+different crowns. Now the same draw stops both:
+- a stopped next ray scatters off one of the cluster's leaves (`CardSet::stopped`, stage 8);
+- the lit fraction is plain visibility, since the path now follows the light the leaves pass
+  on to each other;
+- the cards are told which vertex a ray leaves (`shapes::leaving`), so integrators agree.
+
+Same cases, references and settings, with both renders on the path tracer:
+
+| Case | `pixels` | FLIP, first run → now | Brightness, first run → now |
+|---|---|---|---|
+| aerial | 2 | 0.0614 → 0.0608 | +1.7% → −1.5% |
+| low | 2 | 0.0306 → 0.0304 | +0.1% → −0.0% |
+| nadir | 2 | 0.0624 → **0.0672** | −0.5% → −2.8% |
+| low-sun | 2 | 0.0445 → **0.0405** | +3.0% → −1.8% |
+| backlit | 2 | 0.0494 → 0.0489 | +1.2% → −1.5% |
+| broadleaf-autumn | 2 | 0.0776 → **0.0734** | +2.8% → −0.4% |
+| conifers | 2 | 0.0485 → 0.0486 | +1.8% → −0.8% |
+| sparse | 2 | 0.0393 → **0.0427** | −0.8% → −2.2% |
+| ground | 2 | 0.0409 → 0.0411 | +0.8% → +0.8% |
+
+Every setting's rows are in [suite.csv](suite.csv).
+
+**Reading it.**
+- **The low sun is fixed.** It was the worst case for brightness (+3.0%, and +8% in the far half
+  at `pixels: 4`). Now it is −1.8% with 9% lower FLIP. Broadleaves in autumn improve as much
+  (FLIP −5%).
+- **The bias has one sign now.** It was bright in most cases and dark in a few. Now every case
+  is within ±3% and mostly slightly dark, −1.5% to −2.8% from the air.
+- **Straight down and sparse forests got worse** (FLIP +8% and +9%). Both show most ground and
+  the tops of crowns.
+- **Eye height is unchanged.** Its nearest trees are full detail.
+
+**What the remaining darkness points to.** One visibility number per card, averaged over the
+sky, now shadows light from above a little too much. Light from straight above meets fewer of a
+cluster's leaves than light from lower down. A lit fraction by the light's elevation remains
+the candidate, now for light from above rather than below.

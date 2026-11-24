@@ -19,6 +19,21 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(start)]
 fn start() {
     remember_panics();
+    // A browser drops what Rust prints: say how a scene's build goes on the console instead,
+    // each stage as it starts and ends and every line meant for a person.
+    rays::world::set_reporter(Some(Box::new(|e: &rays::world::Progress| {
+        match &e.message {
+            Some(m) => console_log(m),
+            None if e.fraction <= 0. || e.fraction >= 1. => console_log(&format!("{}: {:.0}%", e.stage, e.fraction * 100.)),
+            None => {},
+        }
+    })));
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = log)]
+    fn console_log(s: &str);
 }
 
 /// Supply a file a scene refers to, under the path the scene uses (eg. "./demo/teapot.obj").
@@ -194,6 +209,15 @@ pub fn last_error() -> String {
 #[wasm_bindgen]
 pub fn schema() -> String {
     rays::schema::SCHEMA.to_string()
+}
+
+/// Where the worlds of a scene's full-scale landscapes are kept (`world-<key>.json` in each
+/// one's `cache`), for the page to fetch with the stages they list and `provide` before
+/// building the scene: a world built on the command line is then read rather than simulated.
+/// Empty for a scene that doesn't parse.
+#[wasm_bindgen]
+pub fn world_manifests(json: &str) -> Vec<String> {
+    serde_json::from_str(json).map(rays::scenefile::SceneFile::world_manifests).unwrap_or_default()
 }
 
 /// Encode summed linear samples (three per pixel) as RGBA bytes for display. `output` is the

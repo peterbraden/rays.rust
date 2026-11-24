@@ -4759,6 +4759,23 @@ impl SceneFile {
         Ok(doc)
     }
 
+    /// Where the worlds of the scene's full-scale landscapes are kept (their manifests,
+    /// `terrain::object::world_manifest`), whether built yet or not: for a host without a
+    /// filesystem to fetch and provide before building the scene. Each landscape sees the
+    /// scene's camera as `from_scenefile` gives it one.
+    pub fn world_manifests(doc: Value) -> Vec<String> {
+        let Ok(doc) = SceneFile::substitute_variables(doc) else { return vec![] };
+        let camera = SceneFile::axonometric(doc["camera"].clone());
+        doc["objects"].as_array().into_iter().flatten()
+            .filter(|o| o["type"].as_str() == Some("landscape"))
+            .filter_map(|o| {
+                let mut o = o.clone();
+                if o.get("camera").is_none() { o["camera"] = camera.clone(); }
+                crate::terrain::object::world_manifest(&o)
+            })
+            .collect()
+    }
+
     pub fn from_file(filename: &str, overrides: &Overrides) -> Scene {
         let doc = SceneFile::read_document(filename).unwrap_or_else(|e| panic!("{}", e));
         SceneFile::from_value_overridden(doc, overrides)

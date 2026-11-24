@@ -48,6 +48,11 @@ export async function instantiate() {
             return JSON.parse(guard(() => glue.schema()));
         },
 
+        /** The world manifests of the scene's full-scale landscapes (see web/src/lib.rs). */
+        worldManifests(json) {
+            return guard(() => glue.world_manifests(json));
+        },
+
         /** Give the contents of a file that scenes name by `path`. */
         addAsset(path, bytes) {
             guard(() => glue.provide(path, bytes));

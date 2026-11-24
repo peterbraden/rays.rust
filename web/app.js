@@ -120,7 +120,23 @@ function previewSize() {
 // The scene as the workers render it: at preview size, one sample per pixel per layer.
 function previewDoc() {
     const [w, h] = previewSize();
-    return { ...doc, width: w, height: h, samples_per_chunk: 1 };
+    const objects = Array.isArray(doc.objects) ? doc.objects.map(previewLandscape) : doc.objects;
+    return { ...doc, width: w, height: h, samples_per_chunk: 1, objects };
+}
+
+// A full-scale landscape is meshed for the preview no finer than this many vertices along
+// each ring of its clipmap (its `resolution`, 384 unless the scene says), and its globe half
+// as finely: a third of the time to build in the browser at 128, where meshing the scene's own
+// resolution took minutes, with the same shapes, the far ridges a little softer. The world
+// (its cache, src/world.rs) doesn't depend on the mesh, so it is shared with the full render.
+// `?landscape_resolution=` changes it.
+const PREVIEW_LANDSCAPE_RESOLUTION = Number(new URLSearchParams(location.search).get('landscape_resolution')) || 128;
+function previewLandscape(o) {
+    if (o?.type !== 'landscape' || o.scale !== undefined) { return o; }
+    if (o.resolution !== undefined && typeof o.resolution !== 'number') { return o; }   // a variable
+    const resolution = Math.min(o.resolution ?? 384, PREVIEW_LANDSCAPE_RESOLUTION);
+    const globe = typeof o.globe === 'number' ? Math.min(o.globe, Math.max(16, Math.round(resolution / 2))) : Math.max(16, Math.round(resolution / 2));
+    return { ...o, resolution, globe };
 }
 
 // Paths of files the scene refers to, wherever they appear.
@@ -131,6 +147,42 @@ function assetPaths(value, found = new Set()) {
         for (const v of Object.values(value)) { assetPaths(v, found); }
     }
     return found;
+}
+
+// The files of the scene's landscapes' worlds, as kept in their `cache` directories by the
+// command line: each world's manifest names a file for each of its stages (src/world.rs), and
+// given those the workers read the world rather than simulate it, which takes minutes. A
+// world that hasn't been built (no manifest) is simulated in the browser; `worldNote` says so.
+let worldNote = '';
+async function worldFiles(json) {
+    let manifests = [];
+    try {
+        manifests = encoder.worldManifests(json);
+    } catch (e) {
+        // The workers' build will say what is wrong with the scene; this instance is spent.
+        encoder = null;
+        instantiate().then(r => { encoder = r; });
+        return [];
+    }
+    const files = [];
+    const missing = [];
+    for (const path of manifests) {
+        let manifest;
+        try {
+            manifest = JSON.parse(new TextDecoder().decode(await fetchAsset(path)));
+        } catch (e) {
+            missing.push(path);
+            continue;
+        }
+        const dir = path.slice(0, path.lastIndexOf('/') + 1);
+        for (const stage of manifest.stages ?? []) {
+            if (stage.file) { files.push(dir + stage.file); }
+        }
+    }
+    worldNote = missing.length
+        ? `simulating the landscape's world here (slow): render the scene once with the command line to keep it in ${missing.map(p => p.slice(0, p.lastIndexOf('/'))).join(', ')}`
+        : '';
+    return files;
 }
 
 function fetchAsset(path) {
@@ -182,7 +234,8 @@ async function restartScene() {
     });
     const json = JSON.stringify(previewDoc());
     try {
-        const paths = [...assetPaths(doc)];
+        const paths = [...assetPaths(doc), ...(encoder ? await worldFiles(json) : [])];
+        if (mine !== gen) { return; }
         // A file that can't be fetched is left out: the scan above also finds paths in parts
         // of the file the renderer ignores, and if the file is needed the renderer says so.
         const files = await Promise.all(paths.map(p => fetchAsset(p).catch(() => null)));
@@ -521,7 +574,7 @@ function draw() {
 function updateStatus() {
     let text;
     if (stats.built < workers.length && !stats.rendering) {
-        text = `Building scene… (${stats.built}/${workers.length} workers)`;
+        text = `Building scene… (${stats.built}/${workers.length} workers)${worldNote ? ' · ' + worldNote : ''}`;
     } else {
         let samples = Infinity;
         for (const n of rowSamples) { samples = Math.min(samples, n); }

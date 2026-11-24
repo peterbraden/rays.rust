@@ -93,7 +93,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Modules organized by functionality (material, shapes, procedural)
 - Scene definitions stored in JSON files (in demo/ and demo/scenes/); other renderers' formats are translated into that JSON (`SceneFile::read_document`; see `scene-formats.md`)
 - Rendering progress tracking via indicatif
-- Sample scenes available in demo/scenes/ with corresponding .png outputs: scenes kept for their own sake (landscapes, skies, planets);
+- Sample scenes available in demo/scenes/ with corresponding .png outputs (refreshed only when the user asks): scenes kept for their own sake (landscapes, skies, planets);
   features that only need showing to work go into `demo/scenes/stress-test.json` (plots of
   shapes, materials, lights, media, plants and camera effects in one garden; spectral, light
   BVH, motion blur, realistic lens, flare and adaptive sampling at once), not new scenes.
@@ -109,6 +109,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Break complex features into smaller, sequential commits
 - Commit frequently to create checkpoints (after each logical change)
 - Run tests and linting before each commit
+- Don't commit images (`.png`, `.gif`, `.mp4`, `.exr`: renders, comparisons, screenshots) unless the user asks for that image to be committed. Every version of an image stays in the history for good, and re-renders have made the repository hundreds of megabytes. Rendering a scene overwrites its tracked `.png` beside it: `git restore` it (or `-o` to a scratch path) rather than committing it, and check `git status` before committing. Show renders to the user as files from a scratch directory instead
 - Create dedicated branches for each distinct feature
 - Write descriptive commit messages explaining the purpose of changes
 - Keep feature branches simple and focused on a single goal

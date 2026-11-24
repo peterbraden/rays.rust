@@ -47,8 +47,18 @@ impl Kinds {
         let steep = |from: f64, to: f64| smoothstep(from, to, slope);
         let ice = smoothstep(1., 5., field(Field::Ice));
         let sediment = field(Field::Sediment);
-        // Rock shows through thin sediment, and on slopes too steep to hold any.
-        let bare = (1. - smoothstep(0.1, 1.5, sediment)).max(steep(38., 50.));
+        // Rock shows through thin sediment where nothing grows over it, as the ground cover
+        // draws it (`scenery::Ground::cover`): on slopes too steep for soil to stay (about
+        // 35°), high above the treeline, and where it is too dry for plants (Köppen's arid
+        // threshold); elsewhere a thin soil and its turf smooth the rock's own relief away.
+        // And on slopes too steep to hold any sediment at all.
+        let high = f.field(Field::Treeline, &c.p).map_or(0., |t| smoothstep(300., 900., t));
+        let arid = match (f.field(Field::Precipitation, &c.p), f.field(Field::Temperature, &c.p)) {
+            (Some(rain), Some(t)) => 1. - smoothstep(0.8, 1.2, rain / (20. * t + 140.).max(100.)),
+            _ => 0.,
+        };
+        let exposed = steep(30., 40.).max(high).max(arid);
+        let bare = ((1. - smoothstep(0.1, 1.5, sediment)) * exposed).max(steep(38., 50.));
         let glacial = smoothstep(1., 4., field(Field::Till)) * smoothstep(0.5, 2., sediment);
         let blown = smoothstep(0.5, 3., field(Field::Sand));
         let pan = field(Field::Playa).clamp(0., 1.);

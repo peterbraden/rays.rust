@@ -898,14 +898,14 @@ impl SceneFile {
             if reusable { kept.insert(key, built); }
             let t = start.elapsed().as_secs_f64();
             if t >= 0.1 {
-                println!("- Built {} in {:.2} s", name, t);
+                SceneFile::say(format!("- Built {} in {:.2} s", name, t));
             }
          }
          for (i, fog) in fogs {
             let start = web_time::Instant::now();
             let ground: Vec<Arc<SceneObject>> = objects.iter().map(|(_, o)| o.clone()).collect();
             objects.push((i, Arc::new(SceneFile::parse_valley_fog(&fog, &ground))));
-            println!("- Built valley_fog in {:.2} s", start.elapsed().as_secs_f64());
+            SceneFile::say(format!("- Built valley_fog in {:.2} s", start.elapsed().as_secs_f64()));
          }
          if reuse { *KEPT_OBJECTS.lock().unwrap() = Some(kept); }
          objects
@@ -4597,9 +4597,18 @@ impl SceneFile {
         };
         // Tabulating the sky evaluates it, which needs the scene.
         if scene.render.sample_sky {
+            let start = web_time::Instant::now();
             scene.environment = crate::environment::Environment::build(&scene);
+            let t = start.elapsed().as_secs_f64();
+            if t >= 0.1 { SceneFile::say(format!("- Built the sky's sampling table in {:.2} s", t)); }
         }
         scene
+    }
+
+    /// A line about the build, for a person: printed, or given to the host's reporter
+    /// (`world::set_reporter`; a browser shows it on its console, where it can't print).
+    fn say(message: String) {
+        crate::world::report(&crate::world::Progress::note("scene", message));
     }
 
     /// The light BVH over a scene's sampled lights (`Scene::light_bvh`): its area lights, if
@@ -4784,7 +4793,7 @@ impl SceneFile {
         SceneFile::sky_cache(&mut objects);
         objects.iter()
             .filter(|o| o["type"].as_str() == Some("skysphere") && o["lut"].as_bool() != Some(false))
-            .filter_map(|o| Some(crate::skysphere::table_file(o["cache"].as_str()?, &crate::skysphere::parse_sky_params(o))))
+            .filter_map(|o| Some(crate::skysphere::table_file(o["cache"].as_str()?, o)))
             .collect()
     }
 

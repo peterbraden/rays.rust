@@ -120,23 +120,35 @@ function previewSize() {
 // The scene as the workers render it: at preview size, one sample per pixel per layer.
 function previewDoc() {
     const [w, h] = previewSize();
-    const objects = Array.isArray(doc.objects) ? doc.objects.map(previewLandscape) : doc.objects;
+    const objects = Array.isArray(doc.objects) ? doc.objects.map(o => previewSky(previewLandscape(o))) : doc.objects;
     return { ...doc, width: w, height: h, samples_per_chunk: 1, objects };
 }
 
-// A full-scale landscape is meshed for the preview no finer than this many vertices along
-// each ring of its clipmap (its `resolution`, 384 unless the scene says), and its globe half
-// as finely: a third of the time to build in the browser at 128, where meshing the scene's own
-// resolution took minutes, with the same shapes, the far ridges a little softer. The world
-// (its cache, src/world.rs) doesn't depend on the mesh, so it is shared with the full render.
-// `?landscape_resolution=` changes it.
-const PREVIEW_LANDSCAPE_RESOLUTION = Number(new URLSearchParams(location.search).get('landscape_resolution')) || 128;
+// The preview needs less precision than the full render, and is built at every page load.
+//
+// A full-scale landscape is meshed for it no finer than this many vertices along each ring of
+// its clipmap (its `resolution`, 384 unless the scene says), and its globe half as finely: at
+// 64, a twentieth of the triangles, built in a quarter of the time of 128, with the same
+// shapes and the ridgelines a little softer. The world (its cache, src/world.rs) doesn't
+// depend on the mesh, so it is shared with the full render. `?landscape_resolution=` changes
+// it.
+const PREVIEW_LANDSCAPE_RESOLUTION = Number(new URLSearchParams(location.search).get('landscape_resolution')) || 64;
 function previewLandscape(o) {
     if (o?.type !== 'landscape' || o.scale !== undefined) { return o; }
     if (o.resolution !== undefined && typeof o.resolution !== 'number') { return o; }   // a variable
     const resolution = Math.min(o.resolution ?? 384, PREVIEW_LANDSCAPE_RESOLUTION);
     const globe = typeof o.globe === 'number' ? Math.min(o.globe, Math.max(16, Math.round(resolution / 2))) : Math.max(16, Math.round(resolution / 2));
     return { ...o, resolution, globe };
+}
+
+// A sky's view table is built for the preview a quarter of the size each way (`lut_size`, 256
+// by 128 unless the scene says): a sixteenth of the work (0.34 s rather than 4.6 s on one
+// thread natively), and within 0.4% of the full table's sky everywhere (0.12% on average; the
+// table is smooth, the sun's glow being added after it). The full-size table kept in a cache
+// (19 MB) is then not fetched either: the preview's is a table of its own, built here.
+function previewSky(o) {
+    if (o?.type !== 'skysphere' || o.lut_size !== undefined || o.lut === false) { return o; }
+    return { ...o, lut_size: [64, 32] };
 }
 
 // Paths of files the scene refers to, wherever they appear.

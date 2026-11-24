@@ -96,11 +96,13 @@ integer, boolean, string, path, vec2, vec3, color, enum (with `options`), materi
 - A full-scale `landscape` reads its world from its `cache` directory, as the command line
   keeps it: the page asks the renderer for each world's manifest (`world_manifests`), fetches
   it and the stage files it lists, and provides them with the scene's other files, so a
-  world rendered once on the command line builds in seconds here (terrain-alpine.json: 8 s,
-  rather than 376 s simulating it). The sky's tables are kept and fetched the same way
-  (`cached_files`; in the landscape's cache unless the skysphere names its own). The preview meshes landscapes at a `resolution` of 128
-  (`?landscape_resolution=`), a third of the build; the world doesn't depend on it. Build
-  progress is on the browser's console.
+  world rendered once on the command line builds in seconds here (terrain-alpine.json: 5.5 s,
+  rather than 376 s simulating it). The preview needs less precision than a render: it
+  meshes landscapes at a `resolution` of 64 (`?landscape_resolution=`; the world doesn't
+  depend on it) and builds skies' view tables at 64 by 32 (`lut_size`, within 0.4% of the
+  full table's sky). A sky's full-size tables are kept and fetched like a world
+  (`cached_files`), for a preview of a scene that names its own `lut_size`. Build progress,
+  and what each part took, is on the browser's console.
 - `raycaster.js` gathers the realtime raycaster's frames from the workers while the camera
   moves (each worker raycasts its share of the rows, `Preview::raycast`) and scales them up
   onto the preview. How a frame is shaded is `rays::raycaster::Shading`: a new view (normals,

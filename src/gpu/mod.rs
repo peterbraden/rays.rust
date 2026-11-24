@@ -601,7 +601,7 @@ impl GpuRenderer {
             // Its slot (`gather_host`) is its pixel's path in a lane, so that sample of the
             // pixel's.
             let (pixel, lane) = (p.state.w as usize % image, p.state.w as usize / image);
-            host::shade(s, flat, &origin, p, pixel as u32, (first[pixel] + lane) as u32)
+            host::shade(s, flat, &origin, p, pixel as u32, (first[pixel] + lane) as u32, None)
         }).collect();
         self.queue.write_buffer(&host.gathered, 0, bytemuck::cast_slice(&shaded));
         let seconds = began.elapsed().as_secs_f64();

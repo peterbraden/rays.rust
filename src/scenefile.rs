@@ -148,6 +148,11 @@ impl crate::graph::Fields for ObjectFields {
         self.0.medium.fields()?.biome(p)
     }
 }
+/// The detail a forest's `"lod"` drops by default, in pixels: since its coarse levels shadow
+/// themselves, 2 is within 1% of full detail's brightness, with 38% less memory and about 15%
+/// less render time than 1 (docs/research/learned-lod/stage7.md).
+pub const FOREST_LOD_PIXELS: f64 = 2.;
+
 /// A part of a tree, as detail to make levels of, and its medium (`SceneFile::tree_details`).
 pub type TreeDetail = (crate::shapes::lod::Detail, Box<dyn Medium + Sync + Send>);
 
@@ -199,6 +204,11 @@ impl MeshKey {
 }
 
 impl GeometryLibrary {
+    /// The geometries as the scene defines them (its variables substituted).
+    pub fn definitions(&self) -> &Map<String, Value> {
+        &self.defined
+    }
+
     pub fn new(defined: Map<String, Value>) -> GeometryLibrary {
         GeometryLibrary {
             defined,
@@ -1347,7 +1357,7 @@ impl SceneFile {
             (feature, SceneFile::parse_number(&f["strength"], 0.8).clamp(0., 1.))
         });
         // "where": a rule (a graph) for where trees grow and how thickly, read on the ground.
-        let placements = if feature.is_none() && rule.is_none() && room.is_none() {
+        let place = || if feature.is_none() && rule.is_none() && room.is_none() {
             forest::place(&layout, &species, seed, &refs)
         } else {
             forest::place_favouring(&layout, &species, seed, &refs, &|x, z| {
@@ -1356,6 +1366,31 @@ impl SceneFile {
                 if favoured <= 0. { return 0. }
                 favoured * rule.as_ref().map_or(1., |g| footing.rule(g, x, z))
             })
+        };
+        // With a `"cache"`, where the trees stand is kept beside their levels (`tree_cache`),
+        // keyed by the forest (but not its `"lod"`, which changes no placement) and every
+        // geometry the scene defines, since one is the ground. Not in an ecosystem, whose room
+        // depends on the populations before it, nor on a landscape.
+        let cache = o["cache"].as_str().filter(|_| room.is_none() && landscape.is_none())
+            .map(crate::procedural::tree_cache::TreeCache::new);
+        let placements = match cache {
+            Some(cache) => {
+                let mut forest = o.clone();
+                // (Nor its `"camera"`, which the scene gives every forest for its levels.)
+                if let Some(f) = forest.as_object_mut() {
+                    f.remove("lod");
+                    f.remove("cache");
+                    f.remove("camera");
+                }
+                let key = crate::world::key(&["forest placements", &forest.to_string(),
+                    &Value::Object(geometries.definitions().clone()).to_string()]);
+                cache.placements(&key).unwrap_or_else(|| {
+                    let placed = place();
+                    cache.put_placements(&key, &placed);
+                    placed
+                })
+            },
+            None => place(),
         };
         let claims: Vec<(Vector3<f64>, f64)> = placements.iter()
             .map(|p| (p.position, 0.5 * layout.spacing * species[p.species].spacing * p.scale)).collect();
@@ -1386,16 +1421,40 @@ impl SceneFile {
         }
 
         // Grow them one at a time, each made at the levels of detail its placements need (in
-        // parallel), so only one tree is ever held in full: what's kept is far smaller.
+        // parallel), so only one tree is ever held in full: what's kept is far smaller. With a
+        // `"cache"`, a tree's levels are kept on disk and read back, and a tree whose header is
+        // there isn't grown at all (`tree_cache`).
         // Each placement's level, position, yaw and scale; each part's geometry by level.
         type Place = (usize, Vector3<f64>, f64, f64, bool);
         type Levels = Vec<(usize, SharedGeometry)>;
         type Grown = (Vec<(Levels, Box<dyn Medium + Sync + Send>)>, Vec<Place>);
+        let cache = o["cache"].as_str().map(crate::procedural::tree_cache::TreeCache::new);
+        let (mut read, mut made) = (0usize, 0usize);
         let grown: Vec<Grown> = distinct.iter().map(|(k, here, p, tree_seed)| {
             let entry = &entries[*k];
             // On a slope, sink the trunk so its downhill side meets the ground.
             let base_radius = p.scale * p.stems[0].length * p.ratio * p.trunk_scale * (1. + 0.99 * p.flare);
-            let (details, base, bounds) = SceneFile::tree_details(entry, p, *tree_seed, Vector3::zeros(), materials, media);
+            // What makes the tree: its parameters, seed, entry and the materials it names.
+            let key = cache.as_ref().map(|_| {
+                let named: Vec<String> = [&entry["bark"], &entry["dead_bark"], &entry["leaves"]].iter()
+                    .flat_map(|v| match v { Value::Array(a) => a.clone(), Value::Null => vec![], v => vec![(*v).clone()] })
+                    .map(|v| { let n = SceneFile::parse_string(&v); format!("{n}={}", materials.get(&n).map_or(String::new(), |m| m.to_string())) })
+                    .collect();
+                crate::world::key(&["forest tree", &format!("{p:?}"), &tree_seed.to_string(), &entry.to_string(), &named.join(";"),
+                    &crate::shapes::lod::settings()])
+            });
+            // The tree grown, only if something it makes isn't kept.
+            let shape = std::sync::OnceLock::new();
+            let grow = || shape.get_or_init(|| SceneFile::tree_shape(entry, p, *tree_seed, Vector3::zeros(), materials));
+            let header = match (&cache, &key) {
+                (Some(c), Some(key)) => c.header(key).unwrap_or_else(|| {
+                    let header = grow().1.clone();
+                    c.put_header(key, &header);
+                    header
+                }),
+                _ => grow().1.clone(),
+            };
+            let (base, bounds) = (header.base, header.bounds);
             let places: Vec<Place> = here.iter().map(|t| {
                 let sink = base_radius * t.scale * (t.slope.to_radians().tan() + 0.05);
                 let at = t.position - Vector3::new(0., sink, 0.);
@@ -1405,17 +1464,40 @@ impl SceneFile {
             let mut levels: Vec<usize> = places.iter().map(|p| p.0).collect();
             levels.sort_unstable();
             levels.dedup();
-            let parts = details.into_par_iter().map(|(detail, medium)| {
-                let geometries = levels.par_iter().map(|&l| (l, detail.geometry(crate::shapes::lod::level_size(base, l)))).collect();
+            let media = SceneFile::tree_media(entry, &header.parts, Arc::new(header.states), materials, media);
+            let parts = media.into_iter().enumerate().collect::<Vec<_>>().into_par_iter().map(|(i, medium)| {
+                let geometries = levels.par_iter().map(|&l| {
+                    let size = crate::shapes::lod::level_size(base, l);
+                    let kept = cache.as_ref().zip(key.as_ref()).and_then(|(c, key)| c.level(key, i, l));
+                    // Made or read, a level is used as decoded, so the render doesn't depend on
+                    // which.
+                    let geometry = kept.as_deref().and_then(crate::shapes::lod::decode);
+                    let geometry = match geometry {
+                        Some(g) => g,
+                        None => {
+                            let bytes = grow().0[i].encode(size);
+                            if let (Some(c), Some(key)) = (&cache, &key) {
+                                c.put_level(key, i, l, &bytes);
+                            }
+                            crate::shapes::lod::decode(&bytes).expect("a level just encoded decodes")
+                        },
+                    };
+                    (l, geometry)
+                }).collect();
                 (geometries, medium)
             }).collect();
+            if shape.get().is_some() { made += 1 } else { read += 1 }
             (parts, places)
         }).collect();
+        if cache.is_some() {
+            println!("Forest: {read} distinct trees read from the cache, {made} grown");
+        }
 
         // Each tree at each level is one model of all its parts, each numbered for its medium,
         // placed as many times as there are trees at that level; the whole forest is one
         // object, so a ray searches one structure and stops at the first tree it meets.
         let mut trees: Vec<forest::Placed> = vec![];
+        let mut all_models: Vec<forest::Model> = vec![];
         let mut parts: Vec<Box<dyn Medium + Sync + Send>> = vec![];
         let mut per_level: Vec<usize> = vec![];
         let (mut primitives, mut built) = (0u64, 0u64);
@@ -1430,17 +1512,22 @@ impl SceneFile {
                 }
                 parts.push(medium);
             }
-            let models: std::collections::BTreeMap<usize, forest::Model> = models.into_iter()
-                .map(|(level, items)| (level, Arc::new(GeometrySet::new(&items)) as forest::Model)).collect();
-            built += models.values().map(|m| m.primitives()).sum::<u64>();
+            // Each model by its number in the stand.
+            let models: std::collections::BTreeMap<usize, (u32, u64)> = models.into_iter().map(|(level, items)| {
+                let model = Arc::new(GeometrySet::new(&items)) as forest::Model;
+                let primitives = model.primitives();
+                all_models.push(model);
+                (level, ((all_models.len() - 1) as u32, primitives))
+            }).collect();
+            built += models.values().map(|m| m.1).sum::<u64>();
             for (level, at, yaw, scale, mirror) in places {
                 if per_level.len() <= level {
                     per_level.resize(level + 1, 0);
                 }
                 per_level[level] += 1;
-                if let Some(model) = models.get(&level) {
-                    primitives += model.primitives();
-                    trees.push(forest::Placed::new(model.clone(), at, yaw, scale, mirror));
+                if let Some(&(model, count)) = models.get(&level) {
+                    primitives += count;
+                    trees.push(forest::Placed::new(model, at, yaw, scale, mirror));
                 }
             }
         }
@@ -1449,7 +1536,7 @@ impl SceneFile {
         if trees.is_empty() {
             return (vec![], claims);
         }
-        let stand = forest::Stand::new(trees);
+        let stand = forest::Stand::new(all_models, trees);
         (vec![Arc::new(SceneObject {
             geometry: Box::new(stand),
             medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts }) }),
@@ -1872,14 +1959,15 @@ impl SceneFile {
         }
     }
 
-    /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the
+    /// A forest's `"lod"`: `true`, or `{"pixels": 2, "max_level": 12}`, to see each tree at the
     /// level of detail the size of a pixel where it stands calls for (`shapes::lod`), dropping
-    /// detail up to `pixels` across. It needs the scene's camera, which the scene gives it.
+    /// detail up to `pixels` across (by default 2: docs/adaptive-meshes.md). It needs the
+    /// scene's camera, which the scene gives it.
     fn parse_forest_lod(o: &Value) -> Option<crate::procedural::forest::Lod> {
         let pixels = match &o["lod"] {
             Value::Null | Value::Bool(false) => return None,
-            Value::Bool(true) => 1.,
-            v => SceneFile::parse_number(&v["pixels"], 1.),
+            Value::Bool(true) => FOREST_LOD_PIXELS,
+            v => SceneFile::parse_number(&v["pixels"], FOREST_LOD_PIXELS),
         };
         let camera = &o["camera"];
         let height = SceneFile::parse_number(&camera["image_height"], 0.);
@@ -1912,7 +2000,17 @@ impl SceneFile {
     pub fn tree_details(o: &Value, p: &tree::TreeParams, seed: u64, location: Vector3<f64>,
                         materials: &Map<String, Value>, media: &Map<String, Value>)
                         -> (Vec<TreeDetail>, f64, BBox) {
+        let (shape, header) = SceneFile::tree_shape(o, p, seed, location, materials);
+        let media = SceneFile::tree_media(o, &header.parts, Arc::new(header.states), materials, media);
+        (shape.into_iter().zip(media).collect(), header.base, header.bounds)
+    }
+
+    /// What of a tree depends on its mesh: each part's detail, and its header (what choosing
+    /// levels and making its materials need without the mesh, `tree_cache::Header`).
+    pub fn tree_shape(o: &Value, p: &tree::TreeParams, seed: u64, location: Vector3<f64>,
+                      materials: &Map<String, Value>) -> (Vec<crate::shapes::lod::Detail>, crate::procedural::tree_cache::Header) {
         use crate::shapes::lod::{self, Detail};
+        use crate::procedural::tree_cache::{Header, Part};
         let mesh = tree::generate(p, seed, location);
         let mut bounds = BBox::new(Vector3::repeat(f64::INFINITY), Vector3::repeat(f64::NEG_INFINITY));
         for t in &mesh.bark {
@@ -1923,6 +2021,57 @@ impl SceneFile {
         }
         let base = lod::piece_size(&mesh.leaves);
         let base = if base > 0. { base } else { 0.01 * (bounds.max - bounds.min).max() };
+        let (mut details, mut parts) = (vec![], vec![]);
+        if !mesh.bark.is_empty() {
+            details.push(Detail::Surface(mesh.bark.clone()));
+            parts.push(Part::Bark);
+        }
+        if !mesh.dead_bark.is_empty() {
+            details.push(Detail::Surface(mesh.dead_bark.clone()));
+            parts.push(Part::DeadBark);
+        }
+        // How much light each leaf material scatters, for the light leaves pass on to each other
+        // inside a level of detail's clusters (as luminance; a leaf's healthy colour).
+        let luminance = |c: &Value| c.as_array().map_or(0., |c| {
+            let at = |i: usize| c.get(i).and_then(Value::as_f64).unwrap_or(0.);
+            0.2126 * at(0) + 0.7152 * at(1) + 0.0722 * at(2)
+        });
+        let leaf_albedo = |key: &Value| match materials.get(&SceneFile::parse_string(key)) {
+            Some(props) if props["type"] == "leaf" => {
+                let leaf = SceneFile::parse_leaf(props);
+                let lum = |c: &Color| 0.2126 * c.rgb.x + 0.7152 * c.rgb.y + 0.0722 * c.rgb.z;
+                lod::Albedo { reflectance: lum(&leaf.reflectance), transmittance: lum(&leaf.transmittance) }
+            },
+            Some(props) if props.get("albedo").is_some() => lod::Albedo { reflectance: luminance(&props["albedo"]), transmittance: 0. },
+            _ => lod::Albedo::GREEN_LEAF,
+        };
+        let leaf_albedos: Vec<lod::Albedo> = match o.get("leaves") {
+            None => vec![lod::Albedo { reflectance: 0.24, transmittance: 0. }],
+            Some(Value::Array(names)) if !names.is_empty() => names.iter().map(leaf_albedo).collect(),
+            Some(Value::Array(_)) => panic!("A tree's \"leaves\" list is empty"),
+            Some(name) => vec![leaf_albedo(name)],
+        };
+        // Deal each leaf (all its triangles) to one of the materials.
+        let mut groups: Vec<Vec<Arc<Tagged<Triangle>>>> = vec![vec![]; leaf_albedos.len()];
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x1eaf);
+        for leaf in mesh.leaves.chunks(mesh.leaf_triangles) {
+            let k = ((rng.next_f64() * groups.len() as f64) as usize).min(groups.len() - 1);
+            groups[k].extend_from_slice(leaf);
+        }
+        for (k, (triangles, albedo)) in groups.into_iter().zip(leaf_albedos).enumerate() {
+            if !triangles.is_empty() {
+                details.push(Detail::Aggregate(triangles, albedo));
+                parts.push(Part::Leaves(k as u32));
+            }
+        }
+        (details, Header { base, bounds, states: mesh.leaf_states, parts })
+    }
+
+    /// The media of a tree's `parts`, as its forest entry `o` names them; leaf materials get each
+    /// leaf's state, `states`, for its autumn or dead colour.
+    pub fn tree_media(o: &Value, parts: &[crate::procedural::tree_cache::Part], states: Arc<Vec<crate::material::leaf::LeafState>>,
+                      materials: &Map<String, Value>, media: &Map<String, Value>) -> Vec<Box<dyn Medium + Sync + Send>> {
+        use crate::procedural::tree_cache::Part;
         let medium = |key: &Value| -> Box<dyn Medium + Sync + Send> {
             let name = SceneFile::parse_string(key);
             if materials.contains_key(&name) {
@@ -1934,8 +2083,6 @@ impl SceneFile {
                 panic!("Tree material {} is neither a material nor a medium", key)
             }
         };
-        // Leaf materials get each leaf's state, for its autumn or dead colour.
-        let states = Arc::new(mesh.leaf_states.clone());
         let leaf_medium = |key: &Value| -> Box<dyn Medium + Sync + Send> {
             match materials.get(&SceneFile::parse_string(key)) {
                 Some(props) if props["type"] == "leaf" => {
@@ -1950,34 +2097,15 @@ impl SceneFile {
             Box::new(Solid { m: Box::new(Lambertian { albedo: albedo.into() }) })
         };
         let bark = || o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium);
-
-        let mut parts: Vec<(Detail, Box<dyn Medium + Sync + Send>)> = vec![];
-        if !mesh.bark.is_empty() {
-            parts.push((Detail::Surface(mesh.bark.clone()), bark()));
-        }
-        if !mesh.dead_bark.is_empty() {
-            parts.push((Detail::Surface(mesh.dead_bark.clone()), o.get("dead_bark").map_or_else(bark, medium)));
-        }
-
-        let leaf_media: Vec<Box<dyn Medium + Sync + Send>> = match o.get("leaves") {
-            None => vec![default(Color::new(0.1, 0.3, 0.06))],
-            Some(Value::Array(names)) if !names.is_empty() => names.iter().map(leaf_medium).collect(),
-            Some(Value::Array(_)) => panic!("A tree's \"leaves\" list is empty"),
-            Some(name) => vec![leaf_medium(name)],
-        };
-        // Deal each leaf (all its triangles) to one of the media.
-        let mut groups: Vec<Vec<Arc<Tagged<Triangle>>>> = vec![vec![]; leaf_media.len()];
-        let mut rng = crate::geometry::Pcg32::new(seed, 0x1eaf);
-        for leaf in mesh.leaves.chunks(mesh.leaf_triangles) {
-            let k = ((rng.next_f64() * groups.len() as f64) as usize).min(groups.len() - 1);
-            groups[k].extend_from_slice(leaf);
-        }
-        for (triangles, medium) in groups.into_iter().zip(leaf_media) {
-            if !triangles.is_empty() {
-                parts.push((Detail::Aggregate(triangles), medium));
-            }
-        }
-        (parts, base, bounds)
+        parts.iter().map(|part| match part {
+            Part::Bark => bark(),
+            Part::DeadBark => o.get("dead_bark").map_or_else(bark, medium),
+            Part::Leaves(k) => match o.get("leaves") {
+                None => default(Color::new(0.1, 0.3, 0.06)),
+                Some(Value::Array(names)) => leaf_medium(&names[*k as usize]),
+                Some(name) => leaf_medium(name),
+            },
+        }).collect()
     }
 
     pub fn parse_skysphere(o: &Value) -> SceneObject {

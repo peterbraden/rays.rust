@@ -106,6 +106,7 @@ pub mod shapes {
     pub mod tessellated;
     pub mod text;
     pub mod lod;
+    pub mod leaving;
     pub mod displaced;
     pub mod group;
 }
@@ -136,6 +137,7 @@ pub mod procedural {
     pub mod tree;
     pub mod succulent;
     pub mod forest;
+    pub mod tree_cache;
     pub mod ecosystem;
     pub mod heightmap;
     pub mod grass;

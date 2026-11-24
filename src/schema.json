@@ -7626,11 +7626,17 @@
             {
               "name": "pixels",
               "kind": "number",
-              "default": 1,
+              "default": 2,
               "doc": "Detail up to this many pixels across is dropped."
             },
             {"name": "max_level", "kind": "integer", "default": 12, "doc": "The coarsest level used."}
           ]
+        },
+        {
+          "name": "cache",
+          "kind": "string",
+          "default": null,
+          "doc": "A directory to keep each distinct tree's levels of detail, and where the trees stand, in, read back instead of growing and placing them again."
         },
         {
           "name": "autumn",

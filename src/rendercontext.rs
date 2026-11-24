@@ -474,15 +474,16 @@ impl RenderableChunk {
         // and a horizon of grazing rays) still keeps every thread busy. Results are collected in
         // order, so they are the same however the work is scheduled.
         let w = b.width();
-        // Each pixel is timed on the thread that renders it, for `--time-map`.
+        // Each pixel is timed on the thread that renders it, if `--time-map` asks for it.
         let results: Vec<((u64, usize, Color, Color), f64)> = (0 .. size).into_par_iter()
             .map(|i| match self.count[i] {
                 0 => ((0, 0, Color::black(), Color::black()), 0.),
-                n => {
+                n if crate::time_map::enabled() => {
                     let start = crate::time_map::thread_time();
                     let r = render_pixel(b.xmin + i % w, b.ymin + i / w, self.first[i], n, s);
                     (r, crate::time_map::thread_time() - start)
                 },
+                n => (render_pixel(b.xmin + i % w, b.ymin + i / w, self.first[i], n, s), 0.),
             })
             .collect();
         for ((cast, samples, pixel, squares), time) in results {

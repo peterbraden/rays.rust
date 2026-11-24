@@ -1,6 +1,6 @@
 //! # What a river's water looks like: its colour, its ripples and its foam
 //!
-//! Step 3 of the water workstream (plan.md section 15). A river's surface (`rivers::WaterSurface`)
+//! Step 3 of the water workstream (plan.md section 16). A river's surface (`rivers::WaterSurface`)
 //! is shaded by `RiverWater`, which looks up the flow beneath each point (`rivers::Carve::water_at`)
 //! and sets the sea's physical water (`ocean::PhysicalOcean`) to it: the body's colour and
 //! clarity from the sediment it carries, the ripples' roughness from its turbulence, and

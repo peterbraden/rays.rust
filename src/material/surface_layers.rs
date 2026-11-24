@@ -23,6 +23,12 @@
 //! one layer is chosen with the probability that it is the one on top (from the top down: each
 //! with its mask's probability, else the next one down), which is unbiased and lets each keep
 //! its own BSDF and sampling. Only the masks above the chosen layer are evaluated.
+//!
+//! Masks are read where the hit's object puts its patterns (`Context::at_hit_in_object`), and
+//! filtered to the pixel's footprint; `slope`, `aspect`, `altitude` and `occlusion` still see
+//! the scene's directions, so dust lies on what faces up however the object is turned. The
+//! base's bump (its own `"normal"`) is the relief every layer lies on; a layer with its own
+//! bump adds it there (moss raised over stone).
 
 use crate::color::Color;
 use crate::graph::{Context, Graph};
@@ -54,8 +60,10 @@ impl SurfaceLayer {
 
 impl SurfaceLayers {
     /// The layer on top at the hit, chosen stochastically by the layers' covers.
-    fn layer_at(&self, i: &Intersection) -> &SurfaceLayer {
-        let c = Context::at_hit(i);
+    fn layer_at<'a>(&'a self, i: &Intersection, s: &Scene) -> &'a SurfaceLayer {
+        // Masks' patterns are read in the object's space, filtered to the footprint; slope,
+        // aspect and altitude still in the scene's (`Context::in_scene`).
+        let c = Context::at_hit_in_object(i, s);
         for layer in self.layers[1..].iter().rev() {
             let m = layer.cover(&c);
             if m >= 1. || (m > 0. && crate::geometry::rand() < m) {
@@ -68,7 +76,19 @@ impl SurfaceLayers {
 
 impl MaterialModel for SurfaceLayers {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
-        self.layer_at(intersection).material.scatter(r, intersection, s)
+        let layer = self.layer_at(intersection, s);
+        // The intersection's normal is already the base's relief (`shading_normal`); a layer
+        // over it adds its own.
+        let own = (!std::ptr::eq(layer, &self.layers[0])).then(|| layer.material.shading_normal(intersection, s)).flatten();
+        if let Some(n) = own.filter(|n| (n.dot(&r.rd) > 0.) == (intersection.normal.dot(&r.rd) > 0.)) {
+            return layer.material.scatter(r, &Intersection { normal: n, ..*intersection }, s);
+        }
+        layer.material.scatter(r, intersection, s)
+    }
+
+    /// The base's relief, which the layers over it lie on.
+    fn shading_normal(&self, i: &Intersection, s: &Scene) -> Option<Vector3<f64>> {
+        self.layers[0].material.shading_normal(i, s)
     }
 
     fn is_emitter(&self) -> bool {

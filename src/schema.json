@@ -5,6 +5,12 @@
       "doc": "Top-level keys of the scene file that are plain render settings. Any string \"$name\" anywhere in the file is replaced by the value of \"variables\"[name]. Colours are [r, g, b] or one of the names black, white, red, green, blue. Integers may be written as whole floats.",
       "fields": [
         {
+          "name": "library",
+          "kind": "json",
+          "default": null,
+          "doc": "Material presets of the scene's own, for {\"type\": \"library\"} materials, before the built-in ones (replacing any of the same name): a file of presets in library.json's form, an object of presets, or a list of these. Not subject to the scene's variables (presets have their own). Editing a library file restarts a resumed render. See docs/procedural-materials.md."
+        },
+        {
           "name": "width",
           "kind": "integer",
           "default": 640,
@@ -101,9 +107,9 @@
         {
           "name": "integrator",
           "kind": "enum",
-          "default": "path",
-          "doc": "The path tracer, or its wavefront form (paths traced in batches).",
-          "options": ["path", "wavefront"]
+          "default": "auto",
+          "doc": "What renders the scene: the first of the GPU, the wavefront kernels on the CPU and the recursive path tracer that can (auto), or one of them by name.",
+          "options": ["auto", "path", "wavefront", "gpu"]
         },
         {
           "name": "sampler",
@@ -153,9 +159,14 @@
           "kind": "enum",
           "default": "perspective",
           "doc": "The kind of camera.",
-          "options": ["perspective", "orthographic", "spherical", "realistic"]
+          "options": ["perspective", "orthographic", "isometric", "spherical", "realistic"]
         },
-        {"name": "location", "kind": "vec3", "required": true, "doc": "Position of the camera."},
+        {
+          "name": "location",
+          "kind": "vec3",
+          "default": null,
+          "doc": "Position of the camera. Required, except by isometric, which takes only its distance from lookat."
+        },
         {
           "name": "lookat",
           "kind": "vec3",
@@ -170,16 +181,34 @@
           "doc": "Field of view in radians: the image's height spans tan(angle) at unit distance. Required for perspective, and for orthographic without \"height\"."
         },
         {
+          "name": "above_ground",
+          "kind": "boolean",
+          "default": false,
+          "doc": "With a full-scale landscape: location's and lookat's y are heights above the ground under each (best with the landscape's focus given)."
+        },
+        {
           "name": "aperture",
           "kind": "number",
           "default": 0.2,
-          "doc": "Perspective: lens radius in scene units, for depth of field; 0 for a pinhole."
+          "doc": "Perspective, orthographic and isometric: lens radius in scene units, for depth of field; 0 for a pinhole. The orthographic cameras default to 0, and blur by aperture × |depth − focus| / focus, depth measured from the camera's plane."
+        },
+        {
+          "name": "unwrap",
+          "kind": "json",
+          "default": null,
+          "doc": "Isometric: true or {\"origin\": [lat, lon] of the scene's origin (default a landscape's site, or [0, 0]), \"center\": [lat, lon] of the image's centre (default the origin), \"radius\" (default the Earth's)}: the planet unwrapped onto an equirectangular map and seen isometrically, each ray carried to its own latitude and longitude, so the whole planet can be shown at once. Rays start \"distance\" (default 50 km) before sea level along them; height is in metres of the map (the whole planet is π × radius tall)."
+        },
+        {
+          "name": "blur",
+          "kind": "number",
+          "default": null,
+          "doc": "Orthographic and isometric, instead of aperture: the blur's radius per unit of depth away from the plane of focus (the aperture is blur × focus_distance), so the look doesn't change with the camera's distance. Around 0.01-0.05 for a model's shallow focus."
         },
         {
           "name": "focus_distance",
           "kind": "number",
           "default": null,
-          "doc": "Perspective and realistic: distance in focus; default the distance to lookat."
+          "doc": "Perspective, orthographic, isometric and realistic: distance in focus; default the distance to lookat."
         },
         {
           "name": "astigmatism",
@@ -206,7 +235,25 @@
           "name": "height",
           "kind": "number",
           "default": null,
-          "doc": "Orthographic: height of the rectangle seen, scene units; default what the perspective camera sees at lookat."
+          "doc": "Orthographic: height of the rectangle seen, scene units; default what the perspective camera sees at lookat. Required by isometric."
+        },
+        {
+          "name": "azimuth",
+          "kind": "number",
+          "default": 45,
+          "doc": "Isometric: the direction the camera looks from, degrees round up from x towards z."
+        },
+        {
+          "name": "elevation",
+          "kind": "number",
+          "default": 35.264389682754654,
+          "doc": "Isometric: the camera's angle above the ground, degrees; the default, atan(1/√2), is true isometric, 30 gives pixel art's 2:1 diamonds, 90 a plan."
+        },
+        {
+          "name": "distance",
+          "kind": "number",
+          "default": null,
+          "doc": "Isometric: how far back from lookat the view starts; default the distance of location, or twice the height. Nothing nearer is seen."
         },
         {
           "name": "mapping",
@@ -578,8 +625,14 @@
               "name": "pattern",
               "kind": "enum",
               "default": null,
-              "doc": "The pattern of bumps; required unless \"map\" is given.",
+              "doc": "The pattern of bumps; required unless \"map\" or \"graph\" is given.",
               "options": ["bumps", "dents", "wrinkles", "ripples", "waves"]
+            },
+            {
+              "name": "graph",
+              "kind": "json",
+              "default": null,
+              "doc": "In place of a pattern: a function graph giving the height in scene units (times amount, then 1 by default), filtered to the pixel's footprint; the same graph as a colour map's pattern makes the relief follow the colours. A material's own \"normal\" takes the same fields and goes with the material."
             },
             {"name": "amount", "kind": "number", "default": 0.5, "doc": "How strongly the normal is tilted."},
             {
@@ -2188,7 +2241,7 @@
               "kind": "enum",
               "default": "mountains",
               "doc": "Patch without lat/lon: centre it on the most such place.",
-              "options": ["mountains", "volcanoes", "coast"]
+              "options": ["mountains", "volcanoes", "coast", "plateau", "rift"]
             }
           ]
         },
@@ -2231,6 +2284,18 @@
           "doc": "Also write a shaded relief map image of the (finest) patch here."
         },
         {
+          "name": "geology_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Also write a map of the rock exposed on the (finest) patch here."
+        },
+        {
+          "name": "rain_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Also write a map of the rain on the (finest) patch here."
+        },
+        {
           "name": "step",
           "kind": "number",
           "default": 100,
@@ -2261,6 +2326,21 @@
           "doc": "Peak tectonic uplift, m per year."
         },
         {"name": "belt_frequency", "kind": "number", "default": 3, "doc": "Mountain belts per planet radius."},
+        {
+          "name": "plateau_uplift",
+          "kind": "number",
+          "default": 0.0002,
+          "doc": "Uplift of plateaus of flat strata away from the mountain belts, m/yr (rivers cut canyons and mesas into them)."
+        },
+        {
+          "name": "plateau_height",
+          "kind": "number",
+          "default": 800,
+          "doc": "How far the plateaus stand above the lowlands at time zero, m."
+        },
+        {"name": "rift_rate", "kind": "number", "default": 0.0004, "doc": "How fast tilted fault blocks' crests rise relative to their basins in stretched provinces (basin and range), m/yr."},
+        {"name": "rift_relief", "kind": "number", "default": 1200, "doc": "How far the fault blocks' crests stand above their basins at time zero, m."},
+        {"name": "rift_spacing", "kind": "number", "default": 25000, "doc": "Spacing of the normal faults, m: a range and a basin."},
         {
           "name": "tectonics",
           "kind": "object",
@@ -2350,19 +2430,44 @@
           "name": "strata_thickness",
           "kind": "number",
           "default": 600,
-          "doc": "Thickness of one hard plus one soft bedrock layer, m."
+          "doc": "Mean thickness of one hard plus one soft bed of the cover, m."
         },
         {
           "name": "strata_contrast",
           "kind": "number",
           "default": 5,
-          "doc": "Ratio of erodibility between softest and hardest bedrock."
+          "doc": "Ratio of erodibility between softest and hardest bedrock (geology's contrast)."
         },
         {
           "name": "fold_amplitude",
           "kind": "number",
-          "default": 800,
-          "doc": "How far bedrock layers are folded up and down, m."
+          "default": 1500,
+          "doc": "Structural amplitude of the mountain belts' folds, m."
+        },
+        {
+          "name": "geology",
+          "kind": "object",
+          "default": null,
+          "doc": "The bedrock: folded strata over basement, with plutons (docs/geology.md).",
+          "fields": [
+            {"name": "strata_thickness", "kind": "number", "default": 600, "doc": "Mean thickness of a hard and a soft bed together, m."},
+            {"name": "contrast", "kind": "number", "default": 5, "doc": "Ratio of erodibility between the softest and hardest rocks.", "min": 1},
+            {"name": "fold_amplitude", "kind": "number", "default": 1500, "doc": "Structural amplitude of the mountain belts' folds, m."},
+            {"name": "fold_wavelength", "kind": "number", "default": 8000, "doc": "Crest-to-crest spacing of the folds, m.", "min": 100},
+            {"name": "fold_relief", "kind": "number", "default": 0.5, "doc": "Share of the folds' relief that is topography at time zero; ridges raised on anticlines."},
+            {"name": "fold_growth", "kind": "number", "default": 0.5, "doc": "Extra uplift at anticline crests (less in synclines), as a fraction."},
+            {"name": "fold_vergence", "kind": "number", "default": 0.6, "doc": "How far folds lean towards the foreland: 0 upright, up to 0.95.", "min": -0.95, "max": 0.95},
+            {"name": "thrust_throw", "kind": "number", "default": 800, "doc": "Throw of the thrusts on the leaning folds' forelimbs, m: beds repeat behind each.", "min": 0},
+            {"name": "fracturing", "kind": "number", "default": 1.5, "doc": "Extra glacial erodibility of the most fractured rock (crests, thrust zones); rivers feel a third.", "min": 0},
+            {"name": "slope_strength", "kind": "number", "default": 1, "doc": "Scales the steepest slope each rock stands at before landslides; 0 for none.", "min": 0},
+            {"name": "shortening_rate", "kind": "number", "default": 0.005, "doc": "How fast the strongest belts carry their rock and folds towards the foreland, m/yr (patches)."},
+            {"name": "karst_rate", "kind": "number", "default": 4e-05, "doc": "Lowering of exposed limestone by solution, m per m of annual rain; 0 for no karst.", "min": 0},
+            {"name": "infiltration", "kind": "number", "default": 0.7, "doc": "Share of rain on limestone sinking underground, to rise at springs below it.", "min": 0, "max": 1},
+            {"name": "warp_amplitude", "kind": "number", "default": 400, "doc": "Gentle undulation of the strata everywhere, m."},
+            {"name": "cover_thickness", "kind": "number", "default": 3000, "doc": "Typical thickness of the sedimentary cover over the basement, m."},
+            {"name": "exhumation", "kind": "number", "default": 4000, "doc": "How far the basement was raised in the strongest belts before time zero, m."},
+            {"name": "plutons", "kind": "number", "default": 1, "doc": "How many granite plutons: 0 for none.", "min": 0}
+          ]
         },
         {
           "name": "sediment_erodibility",
@@ -2374,7 +2479,72 @@
           "name": "lava_erodibility",
           "kind": "number",
           "default": 0.3,
-          "doc": "Erodibility of volcanic rock relative to average bedrock."
+          "doc": "Erodibility of volcanic rock by rivers relative to average bedrock."
+        },
+        {
+          "name": "eustasy",
+          "kind": "number",
+          "default": 120,
+          "doc": "How far sea level falls at the glacial maximum, m; 0 at time zero (an interglacial)."
+        },
+        {
+          "name": "evaporation",
+          "kind": "number",
+          "default": 1,
+          "doc": "Open-water evaporation relative to what the climate's temperature gives; lakes losing more than flows in never spill (closed basins, playas). 0 for none."
+        },
+        {
+          "name": "isostasy",
+          "kind": "object",
+          "default": null,
+          "doc": "The crust rising as erosion unloads it and sinking under ice; false for none.",
+          "fields": [
+            {"name": "elastic_thickness", "kind": "number", "default": 20000, "doc": "Elastic thickness of the lithosphere, m: sets how widely loads are supported."},
+            {"name": "mantle_density", "kind": "number", "default": 3300, "doc": "Density of the mantle, kg/m³."},
+            {"name": "rock_density", "kind": "number", "default": 2700, "doc": "Density of the crust's rock, kg/m³."},
+            {"name": "ice_density", "kind": "number", "default": 917, "doc": "Density of ice, kg/m³."},
+            {"name": "relaxation", "kind": "number", "default": 4000, "doc": "The mantle's relaxation time, years."}
+          ]
+        },
+        {
+          "name": "orographic",
+          "kind": "object",
+          "default": null,
+          "doc": "Rain made by the terrain, gathered by the rivers; false for the climate's rain everywhere.",
+          "fields": [
+            {"name": "wind_speed", "kind": "number", "default": 10, "doc": "Wind speed, m/s."},
+            {"name": "fallout_time", "kind": "number", "default": 800, "doc": "Time cloud takes to fall as rain, s."},
+            {"name": "scale_height", "kind": "number", "default": 2500, "doc": "Scale height of water vapour, m."},
+            {"name": "gain_length", "kind": "number", "default": 50000, "doc": "How much rain falling cloud makes, as a length at the climate's rate, m."},
+            {"name": "sea_recharge", "kind": "number", "default": 200000, "doc": "Distance over which air over the sea regains its vapour, m."},
+            {"name": "saturation_recovery", "kind": "number", "default": 30000, "doc": "Distance over which air come down from a crest mixes back towards saturation, m."},
+            {"name": "reference", "kind": "number", "default": 1000, "doc": "Rain without a climate, and that the rivers' erodibility is for, mm/yr."}
+          ]
+        },
+        {
+          "name": "aeolian",
+          "kind": "object",
+          "default": null,
+          "doc": "Sand blown by the wind where it is too dry for plants, gathering in sand seas downwind; false for none.",
+          "fields": [
+            {"name": "flux", "kind": "number", "default": 20, "doc": "Sand the wind carries over bare level ground, m³ per metre across it per year."},
+            {"name": "vegetation", "kind": "vec2", "default": [100, 350], "doc": "Rain at which plants begin to hold the ground, and at which they hold it all, mm/yr."},
+            {"name": "exposure", "kind": "number", "default": 10, "doc": "How much more the wind carries for each unit of slope rising into it."},
+            {"name": "deposition", "kind": "number", "default": 0.5, "doc": "Share of the excess load laid down in each cell."},
+            {"name": "sand_fraction", "kind": "number", "default": 0.3, "doc": "Share of freshly laid sediment fine enough for the wind to carry; the rest stays as a gravel lag."}
+          ]
+        },
+        {
+          "name": "sediment_glacial_erodibility",
+          "kind": "number",
+          "default": 3,
+          "doc": "Erodibility of sediment by glaciers relative to average bedrock."
+        },
+        {
+          "name": "lava_glacial_erodibility",
+          "kind": "number",
+          "default": 1.5,
+          "doc": "Erodibility of volcanic rock by glaciers (columnar joints) relative to average bedrock."
         },
         {
           "name": "fluvial",
@@ -2396,6 +2566,18 @@
               "kind": "number",
               "default": 1,
               "doc": "Deposition coefficient G; 0 for none."
+            },
+            {
+              "name": "lateral",
+              "kind": "number",
+              "default": 0.5,
+              "doc": "Lateral erosion of bends' outer banks relative to incision; 0: rivers only cut down."
+            },
+            {
+              "name": "avulsion",
+              "kind": "number",
+              "default": 5,
+              "doc": "Gradient advantage at which an alluvial channel leaves its raised course; 0: rivers take the steepest way every step."
             }
           ]
         },
@@ -2511,6 +2693,24 @@
               "kind": "number",
               "default": 100,
               "doc": "Depth over which diffusivity falls by e, m."
+            },
+            {
+              "name": "jet",
+              "kind": "number",
+              "default": 3,
+              "doc": "How far rivers carry sediment straight on into the sea: 0 round lobes, higher the fingers of river-dominated deltas."
+            },
+            {
+              "name": "cliff_retreat",
+              "kind": "number",
+              "default": 0.05,
+              "doc": "How fast waves cut back cliffs of average bedrock, m/yr (soft rock faster, hard slower); 0 for none."
+            },
+            {
+              "name": "longshore",
+              "kind": "number",
+              "default": 200000,
+              "doc": "Sediment waves carry along the shore at the most oblique waves, m³/yr (spits, barriers); 0 for none."
             }
           ]
         },
@@ -2571,6 +2771,11 @@
               "default": 10,
               "doc": "Years of landscape evolution per year of ice flow."
             },
+            {"name": "geothermal_flux", "kind": "number", "default": 0.06, "doc": "Geothermal flux warming the ice's bed, W/m²; thin cold ice freezes to its bed and doesn't erode; 0 for temperate ice everywhere."},
+            {"name": "ela_temperature", "kind": "number", "default": -6, "doc": "Mean annual air temperature at the equilibrium line, °C."},
+            {"name": "refreezing", "kind": "number", "default": 8, "doc": "Warming of the ice's surface by meltwater refreezing in the firn near the equilibrium line, K."},
+            {"name": "debris", "kind": "number", "default": 0.5, "doc": "Share of the rock glaciers erode that the ice carries to its margin (till and moraines) rather than its meltwater to the rivers."},
+            {"name": "lodgement", "kind": "number", "default": 0.1, "doc": "Share of the ice's debris lodged as till in each cell where it melts."},
             {"name": "picard", "kind": "integer", "default": 2, "doc": "Solves per ice step.", "min": 1}
           ]
         },
@@ -2590,6 +2795,12 @@
             {"name": "cells", "kind": "integer", "default": 128, "doc": "Cells along a side."},
             {"name": "spacing", "kind": "number", "default": 750, "doc": "Cell size, m."}
           ]
+        },
+        {
+          "name": "close_level",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Full scale, without levels: a camera within 2 km of the ground adds a patch five times finer than the finest (30 m under the default 150 m), about the ground it sees, so the relief there is simulated rather than noise."
         },
         {
           "name": "focus",
@@ -2640,6 +2851,24 @@
           "kind": "path",
           "default": null,
           "doc": "Full scale: also write a map of the whole planet here."
+        },
+        {
+          "name": "ground_materials",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Full scale, with the default ground cover: shade bare rock (by its lithology), scree, sand and gravel with the library's natural materials; false for plain colours."
+        },
+        {
+          "name": "height_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Also write the surface's heights as a 16-bit PNG here (for a full-scale landscape, of the finest patch), north up, lowest black to highest white; the range is printed."
+        },
+        {
+          "name": "cover_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Full scale: also write the ground cover's albedo seen from above, over the finest patch's extent about the site, here."
         },
         {
           "name": "climate_map",
@@ -7548,6 +7777,12 @@
           "doc": "How strongly species grow in separate stands, 0 for evenly mixed."
         },
         {
+          "name": "clustering",
+          "kind": "number",
+          "default": 0,
+          "doc": "0 for trees spread evenly, up to 1 for clumps with open ground between."
+        },
+        {
           "name": "max_slope",
           "kind": "number",
           "default": 35,
@@ -7604,11 +7839,17 @@
             {
               "name": "pixels",
               "kind": "number",
-              "default": 1,
+              "default": 2,
               "doc": "Detail up to this many pixels across is dropped."
             },
             {"name": "max_level", "kind": "integer", "default": 12, "doc": "The coarsest level used."}
           ]
+        },
+        {
+          "name": "cache",
+          "kind": "string",
+          "default": null,
+          "doc": "A directory to keep each distinct tree's levels of detail, and where the trees stand, in, read back instead of growing and placing them again."
         },
         {
           "name": "autumn",
@@ -8184,6 +8425,7 @@
         {"name": "clearings", "kind": "number", "default": 0, "doc": "The share of the area left clear.", "min": 0, "max": 1},
         {"name": "patch_size", "kind": "number", "default": 20, "doc": "Size of the patches items grow in, m.", "min": 0},
         {"name": "patchiness", "kind": "number", "default": 0.3, "doc": "How strongly items keep to their patches.", "min": 0, "max": 1},
+        {"name": "clustering", "kind": "number", "default": 0, "doc": "0 for copies spread evenly, up to 1 for clumps with open ground between (as rockfall leaves its blocks).", "min": 0, "max": 1},
         {"name": "items", "kind": "json", "required": true, "doc": "What to strew: a list of {geometry or boulder, material, weight, spacing, size, sink, align, tilt}."}
       ]
     },
@@ -8395,7 +8637,7 @@
           "name": "albedo",
           "kind": "color",
           "required": true,
-          "doc": "Fraction of light reflected, per channel. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}."
+          "doc": "Fraction of light reflected, per channel. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}, or a pattern coloured by a map, {\"pattern\": graph, \"color_map\": [[value, colour or texture], ...], \"interpolation\": linear|smooth|step} (docs/procedural-materials.md)."
         }
       ],
       "example": {"type": "lambertian", "albedo": [0.8, 0.3, 0.2]}
@@ -8424,7 +8666,7 @@
           "name": "albedo",
           "kind": "color",
           "required": true,
-          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}."
+          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}, or a pattern coloured by a map, {\"pattern\": graph, \"color_map\": [[value, colour or texture], ...], \"interpolation\": linear|smooth|step} (docs/procedural-materials.md)."
         },
         {
           "name": "refractive_index",
@@ -8432,7 +8674,7 @@
           "default": 1.5,
           "doc": "Index of the coat, setting how much it reflects."
         },
-        {"name": "roughness", "kind": "number", "default": 0, "doc": "Blur of the coat's reflection."}
+        {"name": "roughness", "kind": "json", "default": 0, "doc": "Blur of the coat's reflection: a number, or a texture (eg. a pattern with a color_map of numbers) whose grey level it is."}
       ],
       "example": {"type": "plastic", "albedo": [0.8, 0.2, 0.2]}
     },
@@ -8936,7 +9178,7 @@
           "default": [0.9, 0.9, 0.9],
           "doc": "Without metal, eta or k: the colour reflected at normal incidence."
         },
-        {"name": "roughness", "kind": "number", "default": 0, "doc": "GGX roughness; 0 is a mirror."},
+        {"name": "roughness", "kind": "json", "default": 0, "doc": "GGX roughness; 0 is a mirror. Or a texture whose grey level scales roughness_u and roughness_v (each 1 unless given)."},
         {
           "name": "roughness_u",
           "kind": "number",
@@ -8962,7 +9204,7 @@
           "name": "albedo",
           "kind": "color",
           "default": [0.5, 0.5, 0.5],
-          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}."
+          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}, or a pattern coloured by a map, {\"pattern\": graph, \"color_map\": [[value, colour or texture], ...], \"interpolation\": linear|smooth|step} (docs/procedural-materials.md)."
         },
         {"name": "roughness", "kind": "number", "default": 0, "doc": "Roughness of the coat."},
         {"name": "refractive_index", "kind": "number", "default": 1.5, "doc": "Index of the coat."},
@@ -9340,6 +9582,24 @@
         {"name": "wetness", "kind": "number", "default": 0, "doc": "Darker and glossier.", "min": 0, "max": 1}
       ],
       "example": {"type": "soil", "preset": "loam"}
+    },
+    "library": {
+      "label": "Library material",
+      "group": "Other",
+      "doc": "A ready-made procedural material (src/material/library.json, docs/procedural-materials.md): stones, woods, metals and more, patterns sized in metres, and overlays that weather another material. A field naming one of the preset's variables sets it (amount, color, palette, tint...); any other field replaces the preset's own.",
+      "fields": [
+        {
+          "name": "name",
+          "kind": "enum",
+          "required": true,
+          "doc": "The preset.",
+          "options": ["aged_bronze", "asphalt", "basalt", "beach_sand", "beech_bark", "birch_bark", "black_galaxy", "brick_wall", "brushed_steel", "calacatta_marble", "car_paint", "carrara_marble", "cast_iron", "chipped_paint", "concrete", "cork", "dried_mud", "dune_sand", "dust", "ebony", "engineered_quartz", "galvanized_steel", "glazed_tiles", "gneiss", "granite", "granite_outcrop", "grey_granite", "grime", "hammered_copper", "leather", "lichen", "limestone", "limestone_cliff", "linen", "map_lichen", "maple", "moss", "mud_splash", "mudflat", "nero_marquina", "oak", "oak_bark", "pine", "pine_bark", "plaster", "quartz_crystal", "quartzite", "rain_streaks", "river_gravel", "rose_quartz", "rusted_iron", "schist", "scree", "slate", "terracotta", "terrazzo", "travertine", "verde_marble", "verdigris_copper", "walnut", "weathered_granite", "weathered_oak", "wet", "worn_edges"]
+        },
+        {"name": "scale", "kind": "number", "default": 1, "doc": "Size of every pattern in the material, and of its relief."},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Moves every pattern to another part of its noise, so objects of one material differ."},
+        {"name": "over", "kind": "material", "default": null, "doc": "For an overlay (dust, grime, rain_streaks, moss, lichen, map_lichen, wet, mud_splash, worn_edges): the material it lies over, a name or a definition."}
+      ],
+      "example": {"type": "library", "name": "oak"}
     },
     "mix": {
       "label": "Mix",

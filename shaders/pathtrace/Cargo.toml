@@ -17,5 +17,9 @@ shared = { path = "../shared" }
 bytemuck = { version = "1", features = ["derive"] }
 glam = { version = "0.34", default-features = false, features = ["bytemuck", "std"] }
 
+[features]
+# Counters of the traversal's work, for the renderer's tests (`stats`).
+stats = []
+
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_arch, values("spirv"))'] }

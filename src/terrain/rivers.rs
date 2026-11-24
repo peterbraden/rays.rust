@@ -1,6 +1,6 @@
 //! # River surfaces: water at its own level, in a channel cut to its depth
 //!
-//! Step 2 of the water workstream (plan.md section 15). A landscape's rivers were a mask: ground
+//! Step 2 of the water workstream (plan.md section 16). A landscape's rivers were a mask: ground
 //! within half a river's width of a line between cell centres was shaded as water, at the
 //! ground's own height, so a river ran up and down with the relief and had no depth. Here each
 //! river is a smooth centreline carrying its hydraulics (`terrain::hydraulics`: width, depth,

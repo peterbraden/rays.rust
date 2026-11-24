@@ -16,13 +16,27 @@
 //! - No recursion, no slices of local arrays, no closures over buffers: what rust-gpu and
 //!   naga take (the renderer's CLAUDE.md lists what they don't).
 //!
-//! So far: Perlin's noise, and the Nubis clouds' density (`clouds`).
-#![cfg_attr(target_arch = "spirv", no_std)]
+//! So far: Perlin's noise, the walks through a medium (`media`), phase functions (`phase`),
+//! the Nubis clouds' density (`clouds`), altocumulus's (`altocumulus`), cirrus's (`cirrus`), precipitation's (`rain`), mammatus's (`mammatus`), cumulonimbus's (`cumulonimbus`) and the pattern of the
+//! sea's foam (`sea`).
+// No standard library and no allocator, on the CPU too: so `Box`, `Vec`, `String` and
+// `format!` aren't in scope for code here whichever machine it is first written and tested
+// on. (std is linked on the CPU only for the floats' functions that `Real`'s implementations
+// below call; the renderer's `shared_rules` tests hold the rest of what a kernel can't take.)
+#![no_std]
+#[cfg(not(target_arch = "spirv"))]
+extern crate std;
 
+pub mod altocumulus;
+pub mod cirrus;
 pub mod clouds;
+pub mod cumulonimbus;
+pub mod mammatus;
 pub mod media;
 pub mod noise;
 pub mod phase;
+pub mod rain;
+pub mod sea;
 
 use core::ops::{Add, Div, Mul, Neg, Sub};
 
@@ -36,9 +50,17 @@ pub trait Real: Copy + PartialOrd + Add<Output = Self> + Sub<Output = Self> + Mu
     fn to_i32(self) -> i32;
     fn ln(self) -> Self;
     fn exp(self) -> Self;
+    /// `self` to the power `y`.
+    fn powf(self, y: Self) -> Self;
     fn sin(self) -> Self;
     fn cos(self) -> Self;
     fn atan2(self, x: Self) -> Self;
+    /// `self.atan2(x)` for a small positive angle (x positive, self a small fraction of it),
+    /// as the angle from a planet's pole of a point near it is. f64 takes it as written; f32
+    /// by the series t - t³/3 + t⁵/5 - t⁷/7 for t under a sixteenth, where its next term is
+    /// 4e-11 of the answer, far below what the float holds: the library's `atan2f` was a sixth
+    /// of a render through a cloud layer curved round the planet, and a GPU's is no cheaper.
+    fn small_angle(self, x: Self) -> Self;
     /// How far (x, y, z) is above a sphere of `radius` whose top is at the origin: |p - c| - r
     /// for c = (0, -r, 0). The renderer's f64 takes it as written; f32 can't hold a planet's
     /// radius and a metre above it at once, so there it is (|p - c|² - r²) / (|p - c| + r),
@@ -56,6 +78,30 @@ pub trait Real: Copy + PartialOrd + Add<Output = Self> + Sub<Output = Self> + Mu
     /// The least a walk along a ray advances, relative to how far along it is: so that a
     /// stretch reported as empty at a boundary can't stall it.
     fn hair() -> Self;
+    /// The scale at which a point at (x, y, z), `t` along a ray, is resolved, for the least a
+    /// walk advances (`hair` of this): f64's is the distance along the ray, as ever; f32's,
+    /// whose steps are a fraction of a coordinate's size and not of `t`'s, the largest of
+    /// them. (A ray beginning 8 km from the origin on a cell's edge, nearly along it, crept a
+    /// micrometre a step by `t` alone: 800,000 steps to cross a centimetre.)
+    fn scale_at(t: Self, x: Self, y: Self, z: Self) -> Self;
+    /// Twice the least fraction by which two of these floats differ: how close to a boundary
+    /// a coordinate is the boundary, for all it can tell.
+    fn grain() -> Self;
+    /// How far apart two points are taken to find a direction by their difference, in metres
+    /// at a planet's scale: far enough for the float to resolve the difference (1 for f64, so
+    /// its results are what they were).
+    fn stride() -> Self;
+
+    /// A hash's 32 bits as a number in [0, 1].
+    fn unit(bits: u32) -> Self;
+
+    /// To the nearest integer, halves away from zero. (By `floor`: a GPU's own rounding may
+    /// take halves either way.)
+    #[inline]
+    fn round(self) -> Self {
+        let half = Self::ratio(1, 2);
+        if self < Self::of(0) { -((-self + half).floor()) } else { (self + half).floor() }
+    }
 
     #[inline]
     fn abs(self) -> Self {
@@ -105,6 +151,8 @@ impl Real for f32 {
     #[inline]
     fn to_i32(self) -> i32 { self as i32 }
     #[inline]
+    fn unit(bits: u32) -> f32 { bits as f32 / u32::MAX as f32 }
+    #[inline]
     fn ln(self) -> f32 {
         #[cfg(target_arch = "spirv")]
         return spirv_std::num_traits::Float::ln(self);
@@ -117,6 +165,13 @@ impl Real for f32 {
         return spirv_std::num_traits::Float::exp(self);
         #[cfg(not(target_arch = "spirv"))]
         f32::exp(self)
+    }
+    #[inline]
+    fn powf(self, y: f32) -> f32 {
+        #[cfg(target_arch = "spirv")]
+        return spirv_std::num_traits::Float::powf(self, y);
+        #[cfg(not(target_arch = "spirv"))]
+        f32::powf(self, y)
     }
     #[inline]
     fn sin(self) -> f32 {
@@ -140,6 +195,16 @@ impl Real for f32 {
         f32::atan2(self, x)
     }
     #[inline]
+    fn small_angle(self, x: f32) -> f32 {
+        let t = self / x;
+        if x > 0.0 && t >= 0.0 && t < 0.0625 {
+            let t2 = t * t;
+            t * (1.0 - t2 * (1.0 / 3.0 - t2 * (0.2 - t2 * (1.0 / 7.0))))
+        } else {
+            Real::atan2(self, x)
+        }
+    }
+    #[inline]
     fn above_sphere(x: f32, y: f32, z: f32, radius: f32) -> f32 {
         let up = y + radius;
         (x * x + y * y + z * z + 2.0 * radius * y) / (Real::sqrt(x * x + up * up + z * z) + radius)
@@ -154,6 +219,14 @@ impl Real for f32 {
     fn far() -> f32 { 1e30 }
     #[inline]
     fn hair() -> f32 { 1e-6 }
+    #[inline]
+    fn stride() -> f32 { 64.0 }
+    #[inline]
+    fn scale_at(t: f32, x: f32, y: f32, z: f32) -> f32 {
+        Real::max(Real::max(Real::abs(t), Real::abs(x)), Real::max(Real::max(Real::abs(y), Real::abs(z)), 1.0))
+    }
+    #[inline]
+    fn grain() -> f32 { 2.4e-7 }
 }
 
 // (The GPU has no f64: its build leaves this out.)
@@ -177,15 +250,21 @@ impl Real for f64 {
     #[inline]
     fn to_i32(self) -> i32 { self as i32 }
     #[inline]
+    fn unit(bits: u32) -> f64 { bits as f64 / u32::MAX as f64 }
+    #[inline]
     fn ln(self) -> f64 { f64::ln(self) }
     #[inline]
     fn exp(self) -> f64 { f64::exp(self) }
+    #[inline]
+    fn powf(self, y: f64) -> f64 { f64::powf(self, y) }
     #[inline]
     fn sin(self) -> f64 { f64::sin(self) }
     #[inline]
     fn cos(self) -> f64 { f64::cos(self) }
     #[inline]
     fn atan2(self, x: f64) -> f64 { f64::atan2(self, x) }
+    #[inline]
+    fn small_angle(self, x: f64) -> f64 { f64::atan2(self, x) }
     #[inline]
     fn above_sphere(x: f64, y: f64, z: f64, radius: f64) -> f64 {
         let up = y + radius;
@@ -201,6 +280,12 @@ impl Real for f64 {
     fn far() -> f64 { f64::INFINITY }
     #[inline]
     fn hair() -> f64 { 1e-12 }
+    #[inline]
+    fn stride() -> f64 { 1. }
+    #[inline]
+    fn scale_at(t: f64, _x: f64, _y: f64, _z: f64) -> f64 { f64::max(f64::abs(t), 1.) }
+    #[inline]
+    fn grain() -> f64 { 4.5e-16 }
 }
 
 /// Uniform random numbers in [0, 1), from wherever a caller's come: the renderer's sampler,

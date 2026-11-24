@@ -21,7 +21,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut module = naga::front::spv::parse_u8_slice(&bytes, &naga::front::spv::Options::default())?;
     let folded = fold_continuing_blocks(&mut module)?;
     let webgpu = || naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty());
-    let info = webgpu().validate(&module)?;
+    let info = match webgpu().validate(&module) {
+        Ok(info) => info,
+        Err(e) => {
+            // Which type or function it is, since the error names only a handle.
+            if let naga::valid::ValidationError::Type { handle, .. } = e.as_inner() {
+                eprintln!("naga refuses the type {:?}: {:?}", handle, module.types[*handle]);
+                if let naga::TypeInner::Struct { members, .. } = &module.types[*handle].inner {
+                    for m in members {
+                        eprintln!("  its member {:?}: {:?}", m.ty, module.types[m.ty]);
+                    }
+                }
+                for (h, t) in module.types.iter() {
+                    if let naga::TypeInner::Struct { members, .. } = &t.inner {
+                        if members.iter().any(|m| m.ty == *handle) {
+                            eprintln!("  a member of {:?}: {:?}", h, t);
+                        }
+                    }
+                }
+            }
+            return Err(e.into());
+        },
+    };
     let wgsl = naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())?;
     // As a browser would: the WGSL must parse and validate again.
     webgpu().validate(&naga::front::wgsl::parse_str(&wgsl)?)?;

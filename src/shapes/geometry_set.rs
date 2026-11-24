@@ -63,7 +63,13 @@ impl<T: Geometry + Sync + Send> Geometry for GeometrySet<T> {
     }
 
     fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
-        if self.items.is_empty() { BBox::empty() } else { self.bvh.transformed_bounds(t) }
+        // A few items, such as a tree's parts, are asked themselves, so their own inner boxes
+        // count; many, by the BVH's boxes over them.
+        if self.items.len() <= 8 {
+            self.items.iter().fold(BBox::empty(), |b, i| b.union(&i.transformed_bounds(t)))
+        } else {
+            self.bvh.transformed_bounds(t)
+        }
     }
 
     /// Its items' primitives together, if every item has them: a set of triangles is as flat

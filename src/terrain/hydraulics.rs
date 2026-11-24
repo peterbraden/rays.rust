@@ -5,7 +5,7 @@
 //! fast. Those decide what a river looks like (glassy or white, a trickle over boulders or a
 //! broad sheet), so this module computes them from what the simulation and the climate know,
 //! with the relations hydrologists and river engineers use. It is step 1 of the water
-//! workstream (plan.md section 15); the surfaces, whitewater and falls read it.
+//! workstream (plan.md section 16); the surfaces, whitewater and falls read it.
 //!
 //! ## Runoff: Budyko's curve
 //!

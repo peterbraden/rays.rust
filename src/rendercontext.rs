@@ -51,8 +51,9 @@ const STATE_PIXEL: usize = 56;
 /// contents (all but its `supersamples` and `adaptive`, so more can be asked for later, or
 /// fewer pixels given them; sample k of a pixel is the same either way) and of the overrides
 /// of its size and seed. A saved state is resumed only for the same key, so editing the scene
-/// starts the render afresh. Files the scene refers to (meshes, cached simulations) and the
-/// renderer itself aren't covered: after changing those, render with --fresh.
+/// starts the render afresh, as does editing a library file it names (`"library"`, whose
+/// contents are hashed too). Other files the scene refers to (meshes, cached simulations) and
+/// the renderer itself aren't covered: after changing those, render with --fresh.
 pub fn render_key(scene: &str, overrides: (Option<usize>, Option<usize>, Option<u64>)) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -67,6 +68,10 @@ pub fn render_key(scene: &str, overrides: (Option<usize>, Option<usize>, Option<
                 o.remove("output");
             }
             v.to_string().hash(&mut h);
+            // The presets in the library files it names.
+            for path in crate::material::library::files(&v["library"]) {
+                crate::assets::read(&path).ok().hash(&mut h);
+            }
         },
         Err(_) => scene.hash(&mut h),
     }
@@ -127,6 +132,8 @@ pub struct RenderedChunk {
     /// Each pixel's time rendering them, in seconds.
     times: Vec<f64>,
     rays_cast: u64,
+    /// What the wavefront's stages did, where the kernels rendered it.
+    stats: Option<crate::scheduler::Stats>,
 }
 
 
@@ -270,6 +277,9 @@ impl RenderContext {
             }
         }
         self.rays_cast += p.rays_cast;
+        if let Some(stats) = &p.stats {
+            self.schedule.merge(stats);
+        }
     }
 
     /// The image's regions, each rendered and judged as one.
@@ -378,7 +388,12 @@ impl RenderContext {
 ///
 /// After each chunk is applied, `after_chunk` runs with the context locked; anything it returns
 /// is passed to `outside_lock`, eg. to write a progressive image without holding up the render.
-pub fn render<T, F, G>(s: &Scene, rc: &Mutex<RenderContext>, after_chunk: F, outside_lock: G)
+///
+/// A chunk is rendered by the wavefront's kernels where the scene is laid out for them
+/// (`kernels`: `wavefront::integrator::Kernels`), and otherwise a path at a time by the scene's
+/// own code (`render_pixel`, `trace`): one driver either way, so the same passes, adaptive
+/// sampling, saved states and progress.
+pub fn render<T, F, G>(s: &Scene, rc: &Mutex<RenderContext>, kernels: Option<&crate::wavefront::integrator::Kernels>, after_chunk: F, outside_lock: G)
 where
     F: Fn(&RenderContext) -> Option<T> + Sync,
     G: Fn(T) + Sync,
@@ -391,7 +406,7 @@ where
         (regions, first)
     };
     let jobs = Jobs {
-        s, rc, after_chunk, outside_lock, regions,
+        s, rc, kernels, after_chunk, outside_lock, regions,
         queue: Mutex::new(first.into_iter().map(|c| ((c.layer, c.region), c)).collect()),
     };
     let n = jobs.queue.lock().unwrap().len();
@@ -406,6 +421,7 @@ where
 struct Jobs<'a, F, G> {
     s: &'a Scene,
     rc: &'a Mutex<RenderContext>,
+    kernels: Option<&'a crate::wavefront::integrator::Kernels<'a>>,
     after_chunk: F,
     outside_lock: G,
     regions: Vec<Bounds>,
@@ -421,7 +437,7 @@ where
     /// run it: there is one task for each pass queued, though not necessarily the same one).
     fn run<'s>(&'s self, scope: &rayon::Scope<'s>) {
         let Some((_, chunk)) = self.queue.lock().unwrap().pop_first() else { return };
-        let rendered = chunk.render(self.s);
+        let rendered = chunk.render(self.s, self.kernels);
         let pending = {
             let mut ctx = self.rc.lock().unwrap();
             ctx.apply_chunk(&chunk, &rendered);
@@ -438,29 +454,41 @@ where
 }
 
 impl RenderableChunk {
-    pub fn render(&self, s: &Scene) -> RenderedChunk {
+    pub fn render(&self, s: &Scene, kernels: Option<&crate::wavefront::integrator::Kernels>) -> RenderedChunk {
         let b = &self.bounds;
         let size = b.len();
+        if let Some(kernels) = kernels {
+            // The wavefront's stages over the chunk's paths.
+            let w = b.width();
+            let pixels: Vec<usize> = (0..size).map(|i| (b.ymin + i / w) * s.image.width + b.xmin + i % w).collect();
+            let done = kernels.samples(&pixels, &self.first, &self.count);
+            return RenderedChunk {
+                pixels: done.sums, squares: done.squares, samples: self.count.clone(), times: done.seconds,
+                rays_cast: done.rays.iter().sum(), stats: Some(done.stats),
+            };
+        }
         let mut chunk = RenderedChunk {
             pixels: Vec::with_capacity(size),
             squares: Vec::with_capacity(size),
             samples: Vec::with_capacity(size),
             times: Vec::with_capacity(size),
             rays_cast: 0,
+            stats: None,
         };
         // Pixels are rendered in parallel too, so a layer with few chunks of uneven cost (eg. sky
         // and a horizon of grazing rays) still keeps every thread busy. Results are collected in
         // order, so they are the same however the work is scheduled.
         let w = b.width();
-        // Each pixel is timed on the thread that renders it, for `--time-map`.
+        // Each pixel is timed on the thread that renders it, if `--time-map` asks for it.
         let results: Vec<((u64, usize, Color, Color), f64)> = (0 .. size).into_par_iter()
             .map(|i| match self.count[i] {
                 0 => ((0, 0, Color::black(), Color::black()), 0.),
-                n => {
+                n if crate::time_map::enabled() => {
                     let start = crate::time_map::thread_time();
                     let r = render_pixel(b.xmin + i % w, b.ymin + i / w, self.first[i], n, s);
                     (r, crate::time_map::thread_time() - start)
                 },
+                n => (render_pixel(b.xmin + i % w, b.ymin + i / w, self.first[i], n, s), 0.),
             })
             .collect();
         for ((cast, samples, pixel, squares), time) in results {
@@ -598,7 +626,7 @@ mod tests {
             let mut any = false;
             for (r, b) in regions.iter().enumerate() {
                 if let Some(c) = rc.next_pass(s, r, b, layer) {
-                    let p = c.render(s);
+                    let p = c.render(s, None);
                     rc.apply_chunk(&c, &p);
                     any = true;
                 }
@@ -631,7 +659,7 @@ mod tests {
             std::fs::remove_file(&path).unwrap();
         }
         let rc = Mutex::new(ctx);
-        super::render(&s, &rc, |_| None::<()>, |_| ());
+        super::render(&s, &rc, None, |_| None::<()>, |_| ());
         rc.into_inner().unwrap()
     }
 
@@ -739,6 +767,15 @@ mod tests {
         // Nor does which pixels take them.
         let adaptive = r#"{"width": 10, "supersamples": 16, "camera": {"angle": 0.5}, "adaptive": 0.02}"#;
         assert_eq!(render_key(a, none), render_key(adaptive, none));
+        // Editing a library file the scene names changes the key.
+        let file = std::env::temp_dir().join(format!("rays-key-library-{}.json", std::process::id()));
+        std::fs::write(&file, r#"{"a": {"material": {"type": "lambertian", "albedo": [1, 1, 1]}}}"#).unwrap();
+        let with = format!(r#"{{"width": 10, "library": {:?}}}"#, file.to_str().unwrap());
+        let before = render_key(&with, none);
+        assert_eq!(before, render_key(&with, none));
+        std::fs::write(&file, r#"{"a": {"material": {"type": "lambertian", "albedo": [0, 1, 1]}}}"#).unwrap();
+        assert_ne!(before, render_key(&with, none));
+        std::fs::remove_file(&file).ok();
     }
 
     #[test]

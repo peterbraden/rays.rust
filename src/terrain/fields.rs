@@ -5,6 +5,11 @@
 //! lies, where the glaciers are, how much water gathers. `SimFields` keeps each such field at a
 //! simulation's cell corners and samples it smoothly in between (`scenery::sample`), so masks
 //! follow the landscape without showing its grid; `graph::Field` lists them.
+//!
+//! The rock (`rock`, `hardness`) is not interpolated: the bedrock's structure (`geology`) and
+//! how far uplift has carried it are, and the rock is looked up in the column at the point's
+//! own height, so the boundaries between beds are sharp lines across the slopes, as far below
+//! a cell as the ray's hit is precise.
 
 use crate::graph::Field;
 use crate::na::Vector3;
@@ -12,6 +17,7 @@ use crate::terrain::domain::Domain;
 use crate::terrain::hydraulics::{HydraulicParams, Hydraulics};
 use crate::terrain::glacier::{slope_squared, GlacierParams};
 use crate::terrain::scenery::sample;
+use crate::terrain::geology::{Column, Rock, Structure};
 use crate::terrain::simulation::Terrain;
 use std::f64::consts::TAU;
 
@@ -34,6 +40,18 @@ pub struct SimFields {
     flow_speed: Vec<f64>,
     froude: Vec<f64>,
     grain: Vec<f64>,
+    /// The simulation's rain, mm/yr.
+    precipitation: Vec<f64>,
+    /// Closed basins: playas (1 on their floors) and the depth of their terminal lakes, m.
+    playa: Vec<f64>,
+    salt_lake: Vec<f64>,
+    /// Glacial sediment and wind-blown sand, m.
+    till: Vec<f64>,
+    sand: Vec<f64>,
+    /// The bedrock's structure (`Structure::to_array`) and exhumation.
+    structure: [Vec<f64>; 10],
+    exhumed: Vec<f64>,
+    column: Column,
     /// The least and most of `flow` and `wetness` at the corners, to which their splines'
     /// overshoot is clamped.
     flow_range: (f64, f64),
@@ -86,6 +104,11 @@ impl SimFields {
             d.corner_cells.iter().map(|cells| cells.iter().map(|&c| values[c]).sum::<f64>() / cells.len() as f64).collect()
         };
         let (flow, wetness) = (corners(Field::Flow), corners(Field::Wetness));
+        let average = |values: &dyn Fn(usize) -> f64| -> Vec<f64> {
+            d.corner_cells.iter().map(|cells| cells.iter().map(|&c| values(c)).sum::<f64>() / cells.len() as f64).collect()
+        };
+        let structure = std::array::from_fn(|k| average(&|c| t.structure[c].to_array()[k]));
+        let basins = t.basins();
         SimFields {
             sediment: corners(Field::Sediment),
             ice: corners(Field::Ice),
@@ -101,12 +124,44 @@ impl SimFields {
             flow_speed: corners(Field::FlowSpeed),
             froude: corners(Field::Froude),
             grain: corners(Field::Grain),
+            structure,
+            precipitation: average(&|c| t.precipitation[c]),
+            playa: average(&|c| if basins.playa(t, c) { 1. } else { 0. }),
+            salt_lake: average(&|c| if basins.salt_lake(c) { basins.water[c] } else { 0. }),
+            till: average(&|c| t.till.get(c).copied().unwrap_or(0.)),
+            sand: average(&|c| t.sand.get(c).copied().unwrap_or(0.)),
+            exhumed: average(&|c| t.exhumed[c]),
+            column: t.planet.column.clone(),
         }
+    }
+
+    /// How deep a closed basin's terminal lake stands at direction `d`, metres (0 where there
+    /// is none): a salt lake where it is more than `simulation::SALT_LAKE_DEPTH`.
+    pub fn salt_lake(&self, domain: &Domain, d: &Vector3<f64>) -> f64 {
+        sample(domain, &self.salt_lake, d).max(0.)
     }
 
     /// The snowline at direction `d`, metres above sea level.
     pub fn snowline(&self, domain: &Domain, d: &Vector3<f64>) -> f64 {
         sample(domain, &self.snowline, d)
+    }
+
+    /// The rock exposed at direction `d` on `domain`, where the ground is `h` metres above sea
+    /// level: sediment or lava where they are thicker than half a metre, else the bedrock at
+    /// that height.
+    pub fn rock(&self, domain: &Domain, d: &Vector3<f64>, h: f64) -> Rock {
+        let s = |v: &[f64]| sample(domain, v, d);
+        if s(&self.sediment) > 0.5 { return Rock::Sediment; }
+        self.bedrock(domain, d, h)
+    }
+
+    /// The rock beneath any sediment at direction `d`, `h` metres above sea level: lava where
+    /// it is thicker than half a metre, else the bedrock at that height.
+    pub fn bedrock(&self, domain: &Domain, d: &Vector3<f64>, h: f64) -> Rock {
+        let s = |v: &[f64]| sample(domain, v, d);
+        if s(&self.lava) > 0.5 { return Rock::Basalt; }
+        let structure = Structure::from_array(std::array::from_fn(|k| s(&self.structure[k])));
+        self.column.rock(&structure, structure.coordinate(h, s(&self.exhumed)))
     }
 
     /// Field `f` at direction `d` on `domain`, where the ground is `h` metres above sea level;
@@ -130,7 +185,14 @@ impl SimFields {
             Field::FlowSpeed => s(&self.flow_speed).max(0.),
             Field::Froude => s(&self.froude).max(0.),
             Field::Grain => s(&self.grain).max(0.),
-            Field::Temperature | Field::Precipitation | Field::River => return None,
+            Field::Rock => self.rock(domain, d, h).index() as f64,
+            Field::Bedrock => self.bedrock(domain, d, h).index() as f64,
+            Field::Hardness => -self.rock(domain, d, h).scores().0,
+            Field::Precipitation => s(&self.precipitation).max(0.),
+            Field::Playa => s(&self.playa).clamp(0., 1.),
+            Field::Till => s(&self.till).max(0.),
+            Field::Sand => s(&self.sand).max(0.),
+            Field::Temperature | Field::River => return None,
         })
     }
 }
@@ -183,5 +245,11 @@ mod tests {
         for d in &t.domain.dirs {
             for g in [Field::WaterDepth, Field::FlowSpeed, Field::Froude, Field::Grain] { assert!(f.at(&t.domain, g, d, 0.).unwrap() >= 0.); }
         }
+        assert!(f.at(&t.domain, Field::Precipitation, &t.domain.dirs[100], 0.).unwrap() > 0.);
+        // At a cell's centre on bare rock, the rock is the simulation's own there.
+        let bare: Vec<usize> = (0..t.domain.len()).filter(|&i| !t.domain.boundary[i] && t.sediment[i] == 0. && t.lava[i] == 0.).collect();
+        assert!(!bare.is_empty());
+        let agree = bare.iter().filter(|&&i| f.rock(&t.domain, &t.domain.dirs[i], t.bed[i]) == t.rock(i)).count();
+        assert!(agree * 10 > bare.len() * 7, "{} of {}", agree, bare.len());
     }
 }

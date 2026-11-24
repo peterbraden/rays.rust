@@ -18,6 +18,7 @@ extern crate rustfft;
 
 pub mod assets;
 pub mod scheduler;
+mod shared_rules;
 pub mod world;
 pub mod schema;
 #[cfg(feature = "cli")]
@@ -58,6 +59,7 @@ pub mod material {
     pub mod noise;
     pub mod grass;
     pub mod bump;
+    pub mod library;
     pub mod rock;
     pub mod soil;
     pub mod snow;
@@ -74,6 +76,7 @@ pub mod light_bvh;
 pub mod wavefront;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+pub mod kernels;
 pub mod shapes {
     pub mod transform;
     pub mod bbox;
@@ -104,6 +107,7 @@ pub mod shapes {
     pub mod tessellated;
     pub mod text;
     pub mod lod;
+    pub mod leaving;
     pub mod displaced;
     pub mod group;
 }
@@ -134,6 +138,7 @@ pub mod procedural {
     pub mod tree;
     pub mod succulent;
     pub mod forest;
+    pub mod tree_cache;
     pub mod ecosystem;
     pub mod heightmap;
     pub mod grass;
@@ -159,6 +164,7 @@ pub mod procedural {
 }
 pub mod participatingmedia;
 pub mod noise;
+pub mod patterns;
 pub mod terrain;
 pub mod expr;
 pub mod graph;

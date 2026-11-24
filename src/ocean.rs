@@ -527,8 +527,11 @@ fn bilinear<const N: usize>(n: usize, size: f64, texels: &[[f32; N]], x: f64, z:
     let (u0, v0) = (u.floor(), v.floor());
     let (fu, fv) = (u - u0, v - v0);
     let mut out = [0.; N];
+    // (A tile is a power of two across: its indices wrap by a mask, which is the remainder
+    // without the eight divisions a lookup it took, in the middle of every march's step.)
+    debug_assert!(n & (n - 1) == 0);
     for (du, dv, w) in [(0, 0, (1. - fu) * (1. - fv)), (1, 0, fu * (1. - fv)), (0, 1, (1. - fu) * fv), (1, 1, fu * fv)] {
-        let (i, j) = ((u0 as i64 + du).rem_euclid(n), (v0 as i64 + dv).rem_euclid(n));
+        let (i, j) = ((u0 as i64 + du) & (n - 1), (v0 as i64 + dv) & (n - 1));
         let t = &texels[(j * n + i) as usize];
         for a in 0..N {
             out[a] += t[a] as f64 * w;
@@ -1088,13 +1091,23 @@ impl Ocean {
             let next = t + step;
             let g = side * self.above(&(r.ro + r.rd * next));
             if g <= 0. {
-                // Crossed: bisect.
-                let (mut lo, mut hi) = (t, next);
-                for _ in 0..24 {
-                    let mid = 0.5 * (lo + hi);
-                    if side * self.above(&(r.ro + r.rd * mid)) > 0. { lo = mid } else { hi = mid }
+                // Crossed between t and next. Placed by false position, the end that stays put
+                // weighing half as much each time (the Illinois rule, so neither end stalls):
+                // the surface is nearly straight across one step, and each asking is the
+                // choppy map inverted, so six of them, to a hundredth of a micrometre, where
+                // twenty-four halvings were a fifth of a render of the sea.
+                let (mut lo, mut flo, mut hi, mut fhi) = (t, f, next, g);
+                let between = |lo: f64, flo: f64, hi: f64, fhi: f64| if flo - fhi > 0. { (lo + (hi - lo) * flo / (flo - fhi)).clamp(lo, hi) } else { hi };
+                for _ in 0..6 {
+                    let x = between(lo, flo, hi, fhi);
+                    let v = side * self.above(&(r.ro + r.rd * x));
+                    if v > 0. {
+                        (lo, flo, fhi) = (x, v, fhi * 0.5);
+                    } else {
+                        (hi, fhi, flo) = (x, v, flo * 0.5);
+                    }
                 }
-                return Some(hi);
+                return Some(between(lo, flo, hi, fhi));
             }
             t = next;
             f = g;
@@ -1106,22 +1119,39 @@ impl Ocean {
 impl Ocean {
     /// The sea's shape as data, for the GPU's kernel of it (`pathtrace::ocean_hit`; the layout
     /// is `pathtrace::OCEAN_*`): the planet's radius (0 for a plane), where the waves displace
-    /// it, their greatest height and slope, and the tiles of waves, each its size, its texels
-    /// a side and where they begin from the record's start.
+    /// it, their greatest height and slope, how many tiles of waves there are and how many
+    /// displace, the choppy map's λ, and places for where its foam's record is and for the
+    /// planet in the render's frame (which whoever lays the record out fills in:
+    /// `kernels::Buffers`); then for each tile its size, its texels a side, and where
+    /// its texels and its choppy displacement's (0 if it has none) begin from the record's
+    /// start.
     pub fn export(&self) -> Vec<f32> {
         let tiles = &self.waves.tiles;
-        let header = 8 + 3 * tiles.len();
+        // (The kernel wraps a tile's indices by a mask.)
+        assert!(tiles.iter().all(|t| t.n.is_power_of_two()), "a wave tile's size must be a power of two");
+        let header = 14 + 4 * tiles.len();
         let mut out = vec![
             self.planet_radius.unwrap_or(0.) as f32, self.detail_center.x as f32, self.detail_center.y as f32, self.detail_distance as f32,
             self.waves.max_height as f32, self.waves.max_slope as f32, tiles.len() as f32, DISPLACED.min(tiles.len()) as f32,
+            self.waves.lambda as f32, 0.,
+            // (The planet's centre in the render's frame, and its `excess`: laid out with it.)
+            0., 0., 0., 0.,
         ];
         let mut at = header;
         for t in tiles {
-            out.extend([t.size as f32, t.n as f32, f32::from_bits(at as u32)]);
+            let texels = at;
             at += 3 * t.texels.len();
+            let chop = t.chop.as_ref().map_or(0, |c| {
+                at += 5 * c.len();
+                at - 5 * c.len()
+            });
+            out.extend([t.size as f32, t.n as f32, f32::from_bits(texels as u32), f32::from_bits(chop as u32)]);
         }
         for t in tiles {
             out.extend(t.texels.iter().flatten());
+            if let Some(c) = &t.chop {
+                out.extend(c.iter().flatten());
+            }
         }
         out
     }
@@ -1129,9 +1159,7 @@ impl Ocean {
 
 impl Geometry for Ocean {
     fn ocean(&self) -> Option<&Ocean> {
-        // The kernel marches a height field (`export`): a sea with choppy crests, whose
-        // surface is displaced sideways too, is this code's alone until that is ported.
-        self.waves.tiles.iter().all(|t| t.chop.is_none()).then_some(self)
+        Some(self)
     }
 
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
@@ -1295,13 +1323,6 @@ fn foam_from(history: impl Iterator<Item = f64>, threshold: f64) -> (f64, f64) {
     (fresh, residual)
 }
 
-/// The error function, by Abramowitz and Stegun 7.1.26 (to 1.5e-7).
-fn erf(x: f64) -> f64 {
-    let t = 1. / (1. + 0.3275911 * x.abs());
-    let y = 1. - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * (-x * x).exp();
-    if x >= 0. { y } else { -y }
-}
-
 impl Foam {
     /// A fraction `coverage` of the sea, on the crests of `waves` raised by `wind`.
     pub fn new(waves: WaveField, wind: Vector2<f64>, coverage: f64, albedo: Color) -> Foam {
@@ -1371,35 +1392,45 @@ impl Foam {
         (1. - clear_f, 1. - clear_r, p)
     }
 
+    /// What breaks the foam up, as the shared code takes it (`shared::sea::FoamPattern`, which
+    /// the GPU's shader compiles too).
+    fn pattern(&self) -> shared::sea::FoamPattern<f64> {
+        shared::sea::FoamPattern { wind: (self.wind.x, self.wind.y), speed: self.speed, lace_sd: self.lace_sd, perm: 0 }
+    }
+
     /// Residual foam of strength `r` at `p` broken into lace: covering about a fraction r of
     /// the surface, in patches that shrink and part as it thins, and in a gale drawn out along
     /// the wind.
     fn lace(&self, r: f64, p: (f64, f64)) -> f64 {
-        if r <= 0. {
-            return 0.;
-        }
-        let stretch = 1. + 5. * crate::procedural::nubis_clouds::smoothstep(12., 22., self.speed);
-        let (along, across) = (p.0 * self.wind.x + p.1 * self.wind.y, -p.0 * self.wind.y + p.1 * self.wind.x);
-        // Patches a few metres across, broken into bubble rafts a metre or so.
-        let n = 0.65 * self.noise.fbm(along / (1.6 * stretch), 0.3, across / 1.6, 3, 0.55, 2.2)
-            + 0.35 * self.noise.fbm(along / (6. * stretch), 4.1, across / 6., 2, 0.5, 2.);
-        // Its rank among the noise's values, so a fraction r is foam.
-        let rank = 0.5 * (1. + erf((n - 0.5) / (self.lace_sd * std::f64::consts::SQRT_2)));
-        let t = ((r - rank) / 0.06 * 0.5 + 0.5).clamp(0., 1.);
-        t * t * (3. - 2. * t)
+        self.pattern().lace(&self.noise, r, p)
     }
 
     /// A breaking crest's fresh foam of strength `f` at `p`: solid at its core, its edges torn
     /// into tongues and filaments drawn downwind, as the crest spills.
     fn ragged(&self, f: f64, p: (f64, f64)) -> f64 {
-        if f <= 0. {
-            return 0.;
+        self.pattern().ragged(&self.noise, f, p)
+    }
+
+    /// The foam as data, for the GPU's kernel of the water (`pathtrace::FOAM_*` has the
+    /// layout): its albedo, the wind's direction and speed, the lace noise's spread and how
+    /// many tiles; for each tile its texels a side, its size and where its texels (fresh and
+    /// residual foam) begin from the record's start; the noise's permutation; the texels.
+    pub fn export(&self) -> Vec<f32> {
+        let albedo = self.albedo.as_reflectance().rgb;
+        let mut out = vec![
+            albedo.x as f32, albedo.y as f32, albedo.z as f32, self.wind.x as f32, self.wind.y as f32,
+            self.speed as f32, self.lace_sd as f32, self.tiles.len() as f32,
+        ];
+        let mut at = out.len() + 3 * self.tiles.len() + 512;
+        for (n, size, foam) in &self.tiles {
+            out.extend([*n as f32, *size as f32, f32::from_bits(at as u32)]);
+            at += 2 * foam.len();
         }
-        let (along, across) = (p.0 * self.wind.x + p.1 * self.wind.y, -p.0 * self.wind.y + p.1 * self.wind.x);
-        let n = self.noise.fbm(along / 1.4 + 31.7, 1.9, across / 0.6, 4, 0.6, 2.1);
-        let rank = 0.5 * (1. + erf((n - 0.5) / (self.lace_sd * std::f64::consts::SQRT_2)));
-        let t = ((1.3 * f - rank) / 0.05 * 0.5 + 0.5).clamp(0., 1.);
-        t * t * (3. - 2. * t)
+        out.extend(self.noise.permutation().iter().map(|&p| p as f32));
+        for (_, _, foam) in &self.tiles {
+            out.extend(foam.iter().flatten());
+        }
+        out
     }
 
     /// How much of the surface at (x, z) is foam, 0 to 1, and how much of that is fresh.
@@ -1579,10 +1610,12 @@ impl PhysicalOcean {
 }
 
 impl MaterialModel for PhysicalOcean {
-    fn water(&self) -> Option<(Color, f64, f64)> {
-        // (Transparent water goes down to what is beneath, which the kernel doesn't; nor has
-        // it foam.)
-        (self.absorption.is_none() && self.foam.is_none()).then(|| (self.water.as_reflectance(), self.roughness, self.center.map_or(0., |c| -c.y)))
+    fn water(&self) -> Option<crate::material::model::Water> {
+        // (Transparent water goes down to what is beneath, which the kernel doesn't.)
+        self.absorption.is_none().then(|| crate::material::model::Water {
+            body: self.water.as_reflectance(), bubbles: BUBBLES.as_reflectance(), roughness: self.roughness,
+            radius: self.center.map_or(0., |c| -c.y), foam: self.foam.as_ref().map(|f| f.export()),
+        })
     }
 
     fn sun_glint(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> Option<Color> {

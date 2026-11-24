@@ -23,6 +23,15 @@ bumps, dents, wrinkles, ripples and waves, on a plinth of waves.
 | `frequency` | 1 | `ripples` and `waves`: rings per unit of the pattern. |
 | `phase` | 0 | `ripples` and `waves`: shift of the rings, in cycles; animate it to move them. |
 
+Or `"graph"`: any function graph (`src/graph.rs`) as a height in scene units, times `amount`
+(default 1), filtered to the pixel's footprint. Give the same graph to a colour map and the
+relief follows the colours; and a `"normal"` in a material's definition goes with the material.
+See [procedural-materials.md](procedural-materials.md).
+
+```json
+"normal": { "graph": { "node": "cells", "style": "stones", "scale": 0.02, "amplitude": -0.001 } }
+```
+
 The normal goes on the object, next to its `material` or `medium`, and applies to the whole
 surface. It only changes shading: silhouettes and shadows keep the true shape, and a tilt that
 would turn the surface away from the ray looking at it is ignored.

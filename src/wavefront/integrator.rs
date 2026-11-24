@@ -258,9 +258,10 @@ impl<'a> Kernels<'a> {
             // (A path whose ray leaves a vertex the host shaded names it, for the scene's shapes
             // its ray meets: `kernels::host::leaving`, `shapes::leaving`. The rays traced for
             // it start elsewhere, which the shapes see.)
-            for (_, p) in paths.iter_mut() {
-                let vertex = crate::kernels::host::leaving(p, &self.buffers.origin);
-                *p = crate::shapes::leaving::with(vertex, || pathtrace::find_all(&scene, p, &finder));
+            // (Kept for the round: the host finds a hit on its shapes again when it shades it.)
+            let vertices: Vec<_> = paths.iter().map(|(_, p)| crate::kernels::host::leaving(p, &self.buffers.origin)).collect();
+            for ((_, p), vertex) in paths.iter_mut().zip(&vertices) {
+                *p = crate::shapes::leaving::with(*vertex, || pathtrace::find_all(&scene, p, &finder));
             }
             lap(&mut stats, Stage::Intersect, paths.len());
             // 2. Shade.
@@ -284,8 +285,8 @@ impl<'a> Kernels<'a> {
             lap(&mut stats, Stage::Sky, queries.len());
             // 4. The host's vertices.
             let mut waiting = 0;
-            for ((_, pixel, k), p) in paths.iter_mut().filter(|(_, p)| p.state.y & PATH_HOST != 0) {
-                *p = crate::kernels::host::shade(s, flat, &self.buffers.origin, p, *pixel, *k);
+            for (((_, pixel, k), p), vertex) in paths.iter_mut().zip(&vertices).filter(|((_, p), _)| p.state.y & PATH_HOST != 0) {
+                *p = crate::kernels::host::shade(s, flat, &self.buffers.origin, p, *pixel, *k, *vertex);
                 waiting += 1;
             }
             if waiting > 0 {

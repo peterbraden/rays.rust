@@ -50,8 +50,11 @@ use pathtrace::{PathState, PATH_ACTIVE, PATH_DIRECTIONAL, PATH_HOST, PATH_LIGHTS
 
 /// A waiting path (`PATH_HOST`) of `pixel`'s sample `sample`, in the frame about `origin`
 /// (`kernels::origin`), after its vertex: with its next
-/// ray and queued to go on, or ended.
-pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, pixel: u32, sample: u32) -> PathState {
+/// ray and queued to go on, or ended. `from` is the vertex its ray left, if the host shaded
+/// that one too (`leaving`): finding the hit again must see the scene's shapes as the kernels'
+/// round did.
+pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, pixel: u32, sample: u32,
+             from: Option<crate::shapes::leaving::Leaving>) -> PathState {
     let mut next = *p;
     let flags = p.state.y & !(PATH_HOST | PATH_ACTIVE);
     next.state.y = flags;
@@ -64,7 +67,7 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
     // the precision the renderer's materials offset their rays by. (A ray that grazed the
     // primitive in f32 and misses it in f64 ends here: its vertex was an edge's.)
     let prim = p.state.z;
-    let Some(hit) = flat.refine(prim, &ray, p.hit.x as f64) else { return next };
+    let Some(hit) = crate::shapes::leaving::with(from, || flat.refine(prim, &ray, p.hit.x as f64)) else { return next };
     let depth = p.beta.w as u32;
     let mut v = HostVertex {
         ray,

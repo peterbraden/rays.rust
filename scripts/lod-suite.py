@@ -143,8 +143,10 @@ def seconds(m):
 
 
 def run(a, scene_path, out, extra):
+    # (The path tracer for both: references and levels of detail compared by one integrator.
+    # The kernels on the CPU agree with it on forests to a fraction of a percent.)
     cmd = [a.binary, scene_path, "--width", str(a.width), "--height", str(a.height), "--samples", str(a.samples),
-           "--fresh", "-o", out] + extra
+           "--fresh", "--path-tracer", "-o", out] + extra
     started = time.time()
     log = subprocess.run(cmd, capture_output=True, text=True)
     text = log.stdout + log.stderr

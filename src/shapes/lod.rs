@@ -331,11 +331,11 @@ pub struct CardSet {
 }
 
 impl CardSet {
-    /// The cluster `r` leaves, if it leaves one of these cards: the cluster of the card the
+    /// The card `r` leaves, if it leaves one of these: the card the
     /// vertex it leaves lies on (`shapes::leaving`, set by whatever shaded that vertex, in this
     /// set's frame), and where on that card. Not from where the ray starts: integrators start
     /// rays off a surface by different amounts, from a fraction of a millimetre to centimetres.
-    fn leaving(&self, r: &Ray) -> Option<(u32, f64, f64)> {
+    fn leaving(&self, r: &Ray) -> Option<(usize, f64, f64)> {
         let vertex = crate::shapes::leaving::current().filter(|v| v.of(r))?;
         // The cards about the vertex, by a short ray through it (a box test is all it is for).
         let probe = Ray { ro: vertex.point, rd: r.rd };
@@ -344,11 +344,29 @@ impl CardSet {
         self.bvh.any_hit(&probe, -reach, reach, |i| {
             let card = &self.cards[i];
             match card.holds(&vertex.point, vertex.tolerance) {
-                Some((a, b)) => { found = Some((card.data, a, b)); true },
+                Some((a, b)) => { found = Some((i, a, b)); true },
                 None => false,
             }
         });
         found
+    }
+
+    /// The card `r` leaves, if it leaves one of a cluster whose leaves shadow it or that is
+    /// crossed (otherwise a card is a surface like any other), and where on it.
+    fn leaving_own(&self, r: &Ray) -> Option<(usize, f64, f64)> {
+        if !self.owned {
+            return None;
+        }
+        self.leaving(r).filter(|&(i, _, _)| self.crossed || self.clusters.lit(self.cards[i].data) < 1.)
+    }
+
+    /// Whether `r`, leaving card `i` at (`a`, `b`) on it, meets the leaves of the card's own
+    /// cluster before it leaves the cluster: with the probability that they stop light
+    /// (`Clusters::lit`), drawn by hashing the ray. The same for a shadow ray (`occludes`) as
+    /// for a path's next ray (`intersects_range`), which then scatters off one of them, so
+    /// that light and the path's sampling see the same cluster.
+    fn stopped(&self, r: &Ray, (i, a, b): (usize, f64, f64)) -> bool {
+        hash01(r, a, b) >= self.clusters.lit(self.cards[i].data)
     }
 
     pub fn cards(&self) -> &[Card] {
@@ -388,9 +406,22 @@ impl Geometry for CardSet {
         // Search by distance alone, then choose the constituent of the nearest card only: many
         // cards may be hit on the way to it.
         let mut nearest = None;
-        // A ray leaving a crossed cluster passes its other cards: they stand for its leaves
-        // seen from outside, and what its leaves do to light leaving them is `Clusters::lit`.
-        let own = if self.crossed { self.leaving(r).map(|o| o.0) } else { None };
+        // A ray leaving a cluster that shadows itself, or is crossed, passes the cluster's
+        // cards: they stand for its leaves seen from outside. Unless it meets the leaves first
+        // (`stopped`): then it scatters off one of them, where it left, as off a leaf behind
+        // the one it left; the path goes on from there.
+        let own = self.leaving_own(r);
+        if let Some(leaving) = own && self.stopped(r, leaving) {
+            let vertex = crate::shapes::leaving::current()?;
+            let dist = (vertex.point - r.ro).norm().max(min);
+            if dist >= max {
+                return None;
+            }
+            let (i, a, b) = leaving;
+            let k = self.clusters.choose(self.cards[i].data, &r.rd.normalize(), hash01(r, b, a));
+            return Some(RawIntersection { dist, point: vertex.point, normal: k.normal(), face: k.face, part: 0 });
+        }
+        let own = own.map(|(i, _, _)| self.cards[i].data);
         self.bvh.nearest(r, min, max, |i, best| {
             if own.is_some_and(|c| self.cards[i].data == c) {
                 return None;
@@ -418,12 +449,11 @@ impl Geometry for CardSet {
         // hashing the ray). It passes the cluster's cards, crossed ones included. (A card of a
         // cluster without its own shadowing, `lit` 1, and uncrossed, is a surface to a ray
         // leaving it as to any other: opaque to light from behind it.)
-        let own = if self.owned { self.leaving(r) } else { None }
-            .filter(|&(c, _, _)| self.crossed || self.clusters.lit(c) < 1.);
-        if let Some((c, a, b)) = own && hash01(r, a, b) >= self.clusters.lit(c) {
+        let own = self.leaving_own(r);
+        if let Some(leaving) = own && self.stopped(r, leaving) {
             return true;
         }
-        let own = own.map(|o| o.0);
+        let own = own.map(|(i, _, _)| self.cards[i].data);
         self.bvh.any_hit(r, min, max, |i| {
             let card = &self.cards[i];
             !own.is_some_and(|c| card.data == c) && card.hit(r).is_some_and(|(t, _, _)| {
@@ -926,15 +956,15 @@ const SELF_LIT_PIECES: usize = 2048;
 /// a ray from outside hits first, with the cluster's other leaves in the way, against without
 /// them: its self-shadowing, which a flat card can't do. Leaves inside a cluster shade each other
 /// more the larger it is; without it, light reaches a coarse tree's cards two or three times as
-/// often as its leaves (docs/research/learned-lod/stage7.md). Leaves pass on much of the light
-/// they stop (a green leaf reflects and transmits about four fifths), so what they scatter
-/// on to each other counts: measured by casting rays from directions over the sphere at the
-/// leaves, and from each leaf hit toward directions over the upper hemisphere (the sky and sun),
-/// with a short random walk among the cluster's leaves. Light that leaves the cluster isn't
-/// followed: cards scatter that between themselves. Applied to shadow rays leaving the card
-/// (`CardSet::occludes`); one number for all directions, so it keeps the mean, not the shadow's
-/// dependence on where the light is. Leaves' own reflectance and transmittance (`albedo`)
-/// matter: a forest's dark needles pass on little of what they stop.
+/// often as its leaves (docs/research/learned-lod/stage7.md). Measured by casting rays from
+/// directions over the sphere at the leaves, and from each leaf hit toward directions over the
+/// upper hemisphere (the sky and sun), each weighted by how the leaf, at its material's
+/// reflectance and transmittance (`albedo`), sends that light to the viewer. Applied alike to
+/// shadow rays leaving the card (`CardSet::occludes`) and to a path's next ray
+/// (`CardSet::intersects_range`), which, stopped, scatters off one of the cluster's leaves:
+/// the light the leaves pass on to each other is the path's to follow, not this number's
+/// (stage 8). One number for all directions, so it keeps the mean, not the shadow's dependence
+/// on where the light is.
 fn self_lit(triangles: &[Arc<Tagged<Triangle>>], group: &[usize], albedo: Albedo) -> f64 {
     // A large cluster is measured on an even sample of its pieces, each enlarged about its
     // centre to keep their total area, which keeps what they stop about the same, at a bounded
@@ -966,7 +996,6 @@ fn self_lit(triangles: &[Arc<Tagged<Triangle>>], group: &[usize], albedo: Albedo
         Vector3::new(r * phi.cos(), z, r * phi.sin())
     };
     let lights: Vec<Vector3<f64>> = (0 .. 4).map(|i| fibonacci(i, 4, 0.)).collect();
-    let mut rng = crate::geometry::Pcg32::new(group[0] as u64, 0x5e1f);
     // A leaf's response to light from `l`, seen from the side `nf` faces.
     let response = |nf: &Vector3<f64>, l: &Vector3<f64>| {
         let c = nf.dot(l);
@@ -991,29 +1020,14 @@ fn self_lit(triangles: &[Arc<Tagged<Triangle>>], group: &[usize], albedo: Albedo
             for l in &lights {
                 let l = Vector3::new(l.x * turn.cos() - l.z * turn.sin(), l.y, l.x * turn.sin() + l.z * turn.cos());
                 let lit = |p: &Vector3<f64>| !geometry.occludes(&Ray { ro: p + l * eps, rd: l }, eps, f64::INFINITY);
-                // What reaches the viewer with the cluster's leaves in the way, light they
-                // scatter on included (a random walk among them, without what leaves the
-                // cluster: cards scatter that between themselves), against what would without
-                // them.
-                open += response(&nf, &l);
-                let mut got = if lit(&h.point) { response(&nf, &l) } else { 0. };
-                let (mut at, mut facing, mut weight) = (h.point, nf, 1.);
-                for _ in 0 .. 3 {
-                    let side = if rng.next_f64() < albedo.reflectance / (albedo.reflectance + albedo.transmittance) { facing } else { -facing };
-                    let (u1, u2) = (rng.next_f64(), 2. * std::f64::consts::PI * rng.next_f64());
-                    let any = if side.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
-                    let t1 = side.cross(&any).normalize();
-                    let t2 = side.cross(&t1);
-                    let w = (t1 * u2.cos() + t2 * u2.sin()) * u1.sqrt() + side * (1. - u1).sqrt();
-                    weight *= albedo.reflectance + albedo.transmittance;
-                    let Some(next) = geometry.intersects(&Ray { ro: at + w * eps, rd: w }) else { break };
-                    facing = if next.normal.dot(&w) < 0. { next.normal } else { -next.normal };
-                    at = next.point;
-                    if lit(&at) {
-                        got += weight * response(&facing, &l);
-                    }
+                // What reaches the viewer with the cluster's other leaves in the way, against
+                // what would without them: what they stop, which a path then scatters off one
+                // of them (`CardSet::intersects_range`), as it would off the leaves themselves.
+                let response = response(&nf, &l);
+                open += response;
+                if lit(&h.point) {
+                    reached += response;
                 }
-                reached += got;
             }
         }
     }
@@ -1642,11 +1656,17 @@ mod tests {
                 let own = |x: &RawIntersection| (x.point - h.point).norm() < 1.5;
                 // Without the vertex named, rays towards the crown's middle meet its other cards.
                 siblings += set.intersects(&r).is_some_and(|x| own(&x)) as u32;
-                let passed = crate::shapes::leaving::with(Some(vertex), || set.leaving(&r).map(|o| o.0));
-                assert!(passed.is_some(), "a ray {offset} off its card wasn't seen to leave it");
+                let left = crate::shapes::leaving::with(Some(vertex), || set.leaving(&r));
+                let Some(left) = left else { panic!("a ray {offset} off its card wasn't seen to leave it") };
+                let cluster = set.cards()[left.0].data;
                 let hit = crate::shapes::leaving::with(Some(vertex), || set.intersects_range(&r, 0., f64::INFINITY));
-                let card_hit = hit.and_then(|x| set.cards().iter().find(|c| c.holds(&x.point, 1e-6).is_some()).map(|c| c.data));
-                assert!(card_hit.is_none() || card_hit != passed, "a ray {offset} off its card met its cluster's other cards");
+                if set.stopped(&r, left) {
+                    // Met its cluster's own leaves: a bounce where it left.
+                    assert_eq!(hit.map(|x| x.point), Some(h.point), "a ray {offset} off its card, stopped by its leaves");
+                } else {
+                    let card_hit = hit.and_then(|x| set.cards().iter().find(|c| c.holds(&x.point, 1e-6).is_some()).map(|c| c.data));
+                    assert!(card_hit != Some(cluster), "a ray {offset} off its card met its cluster's other cards");
+                }
                 tried += 1;
             }
         }

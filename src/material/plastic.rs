@@ -25,6 +25,8 @@ pub struct Plastic {
     pub albedo: crate::textures::ColorTexture,
     pub refractive_index: f64,
     pub roughness: f64,
+    /// The roughness over the surface, as a texture's grey level, in place of `roughness`.
+    pub roughness_map: Option<crate::textures::ColorTexture>,
 }
 
 /// The rough plastic's BSDF: the coat's GGX lobe plus the base's diffuse one, sampled by
@@ -69,7 +71,7 @@ impl BSDF for PlasticBSDF {
 impl MaterialModel for Plastic {
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
         match self.albedo {
-            crate::textures::ColorTexture::Constant(albedo) => Some(crate::wavefront::flat::FlatMaterial::Plastic { albedo, refractive_index: self.refractive_index, roughness: self.roughness }),
+            crate::textures::ColorTexture::Constant(albedo) if self.roughness_map.is_none() => Some(crate::wavefront::flat::FlatMaterial::Plastic { albedo, refractive_index: self.refractive_index, roughness: self.roughness }),
             _ => None,
         }
     }
@@ -77,7 +79,8 @@ impl MaterialModel for Plastic {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);
-        let alpha = regularised(self.roughness * self.roughness, s);
+        let roughness = self.roughness_map.as_ref().map_or(self.roughness, |m| crate::color::luminance(&m.eval(intersection, s)).max(0.));
+        let alpha = regularised(roughness * roughness, s);
         if alpha >= MIN_ALPHA {
             let bsdf = PlasticBSDF {
                 coat: GGX::new(alpha, Fresnel::Dielectric(self.refractive_index), intersection.normal),

@@ -19,10 +19,13 @@
 //! - `time`: years of landscape evolution after the noise topography (default 0).
 //! - `domain`: `{"type": "patch", "cells", "spacing" (m), "lat", "lon"}`, where a patch without
 //!   `lat`/`lon` is placed on this seed's most mountainous spot (or, with `"near":
-//!   "volcanoes"`, its most volcanic mountains, or with `"near": "coast"`, a coast with
+//!   "volcanoes"`, its most volcanic mountains, with `"near": "plateau"`, a plateau of flat
+//!   strata in the subtropics (mesa country), with `"near": "rift"`, fault blocks in the
+//!   subtropics (basin and range), or with `"near": "coast"`, a coast with
 //!   mountains behind it); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
-//! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes, alluvium (sediment over
+//! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes (coloured by the bedrock
+//!   at each point's height, `geology::Rock::colour`), alluvium (sediment over
 //!   2 m deep), lava, then a tint by elevation; or `"material"`, the name of a material for
 //!   all the ground but the rivers, typically `surface_layers` masked by what the simulation
 //!   left (`field` nodes in its graphs: sediment, ice, flow, wetness and so on, see
@@ -32,16 +35,42 @@
 //!   the origin, ignoring the planet's curvature. A planet is drawn centred on `centre`
 //!   (default the origin), its sea level a sphere of radius `radius / scale`.
 //! - Processes: `radius` (m), `step` (years), `land_bias`, `mountain_height` (m),
-//!   `uplift_rate` (m/yr), `belt_frequency`; `fluvial`: `{k, m, n, diffusivity, deposition}`;
+//!   `uplift_rate` (m/yr), `belt_frequency`, `plateau_uplift` (m/yr), `plateau_height` (m), `rift_rate` (m/yr), `rift_relief` (m), `rift_spacing` (m); `fluvial`: `{k, m, n, diffusivity, deposition, lateral, avulsion}`;
 //!   `glacier` and `volcanoes`: `false` to disable, or overrides of `GlacierParams` and
-//!   `VolcanoParams` by field name. Geology: `strata_thickness` (m), `strata_contrast`,
-//!   `fold_amplitude` (m), `sediment_erodibility`, `lava_erodibility`.
+//!   `VolcanoParams` by field name. Geology (`geology`, docs/geology.md): `"geology"`,
+//!   overrides of `GeologyParams` by field name (`strata_thickness`, `contrast`,
+//!   `fold_amplitude`, `fold_wavelength`, `fold_relief`, `fold_growth`, `fold_vergence`,
+//!   `thrust_throw`, `fracturing`, `slope_strength`, `shortening_rate`, `karst_rate`, `infiltration`,
+//!   `warp_amplitude`,
+//!   `cover_thickness`, `exhumation`, `plutons`); also, at the top level, `strata_thickness`
+//!   (m), `strata_contrast` and `fold_amplitude` (m); and `sediment_erodibility`,
+//!   `lava_erodibility`, `sediment_glacial_erodibility`, `lava_glacial_erodibility`.
 //! - `min_river_width`: draw rivers at least this wide, metres (default 0: their modelled
 //!   widths, which may be thinner than a pixel from afar). On patches, rivers, meandering
 //!   channels and ox-bow lakes are drawn as lines at their widths (`channel`).
+//! - `isostasy`: the crust rising as erosion unloads it and sinking under ice
+//!   (`terrain::isostasy`): `false` for none, or overrides of `IsostasyParams`
+//!   (`elastic_thickness`, `mantle_density`, `rock_density`, `ice_density`, `relaxation`).
+//! - `eustasy`: how far sea level falls at the glacial cycle's maximum, m (120; 0 for a
+//!   constant sea level): at time zero, an interglacial, it is 0.
+//! - `aeolian`: sand blown by the wind where it is too dry for plants (`terrain::aeolian`):
+//!   `false` for none, or overrides of `AeolianParams` (`flux`, `vegetation` as [bare, covered]
+//!   mm/yr, `exposure`, `deposition`, `sand_fraction`).
+//! - `evaporation`: open-water evaporation relative to what the climate's temperature gives
+//!   (1; 0 for none): lakes that would lose more than flows in never spill, and their basins
+//!   are closed (`terrain::simulation`'s "Closed basins"). Needs a climate.
+//! - `orographic`: rain made by the terrain (`terrain::orographic`), which rivers gather and
+//!   glaciers' snow follows: `false` for the climate's rain everywhere, or overrides of
+//!   `OrographicParams` (`wind_speed`, `fallout_time`, `scale_height`, `gain_length`,
+//!   `sea_recharge`, `saturation_recovery`, `reference`).
 //! - `channels`: `false` for no meandering, or overrides of `ChannelParams`; `marine`: `false`
-//!   for no deltas, or `{diffusivity, depth_scale}`.
-//! - `map`: also write a shaded relief map to this PNG path.
+//!   for no deltas, or `{diffusivity, depth_scale, jet, cliff_retreat, longshore}`.
+//! - `map`: also write a shaded relief map to this PNG path; `geology_map`: also write one
+//!   coloured by the rock exposed; `rain_map`: one coloured by the rain (for a full-scale
+//!   landscape, each of the finest patch); `cover_map` (full scale): the ground cover's albedo
+//!   seen from above about the site, to check what it makes of the simulations; `height_map`:
+//!   the surface's heights as a 16-bit PNG (of the finest patch), north up, their range printed,
+//!   for finding ground to look at.
 //!
 //! Water is not part of the terrain: add a plane at y = 0 (patch) or a sphere (planet).
 
@@ -61,6 +90,7 @@ use crate::shapes::geometry::Geometry;
 use crate::shapes::mesh::vertex_normals;
 use crate::shapes::triangle::{SmoothTriangle, Triangle};
 use crate::terrain::domain::{Domain, Layout};
+use crate::terrain::geology::Rock;
 use crate::terrain::glacier::{slope_squared, GlacierParams};
 use crate::terrain::map::{self, is_river, land_colour, write_map};
 use crate::terrain::planet::Planet;
@@ -171,7 +201,9 @@ const SEA_FLOOR: u8 = 2;
 const ROCK: u8 = 3;
 const LAVA: u8 = 4;
 const ALLUVIUM: u8 = 5;
-const BAND0: u8 = 6;
+const PLAYA: u8 = 6;
+const SALT_LAKE: u8 = 7;
+const BAND0: u8 = 8;
 const BAND_HEIGHT: f64 = 250.;
 const BANDS: usize = 20;
 /// Slope (rise over run) above which no soil holds and bare rock shows.
@@ -184,8 +216,11 @@ impl TerrainMedium {
         let slope2 = slope_squared(&t.domain, &t.bed);
         let water = map::water_lines(&t, min_river_width);
         let lines = water.is_some();
+        let basins = t.basins();
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
+            else if basins.salt_lake(i) { SALT_LAKE }
+            else if basins.playa(&t, i) { PLAYA }
             else if t.bed[i] < 0. { SEA_FLOOR }
             else if is_river(&t, i) && !lines { RIVER }
             else if slope2[i] > ROCK_SLOPE * ROCK_SLOPE { ROCK }
@@ -203,8 +238,11 @@ impl TerrainMedium {
             lambertian([0.38, 0.36, 0.34]),
             lambertian(map::LAVA_COLOUR),
             lambertian(map::ALLUVIUM_COLOUR),
+            lambertian([0.55, 0.54, 0.5]),
+            lambertian([0.1, 0.25, 0.27]),
         ];
         for b in 0..BANDS { materials.push(lambertian(land_colour((b as f64 + 0.5) * BAND_HEIGHT))); }
+        for r in Rock::ALL { materials.push(lambertian(r.colour())); }
         let jitter = t.domain.min_spacing() / place.scale;
         TerrainMedium { domain: t.domain, place, jitter, class, materials, water, fields, ground }
     }
@@ -224,7 +262,14 @@ impl Medium for TerrainMedium {
             return &**g;
         }
         let j = Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5) * self.jitter;
-        &*self.materials[self.class[self.place.cell_at(&self.domain, &(pt + j))] as usize]
+        let class = self.class[self.place.cell_at(&self.domain, &(pt + j))];
+        if class == ROCK {
+            // Bare rock: the bedrock at the point's own height, so beds show as bands.
+            let (d, h) = self.place.on_terrain(&self.domain, &pt);
+            let rock = match self.fields.rock(&self.domain, &d, h) { Rock::Sediment => return &*self.materials[ROCK as usize], r => r };
+            return &*self.materials[BAND0 as usize + BANDS + rock.index()];
+        }
+        &*self.materials[class as usize]
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(self) }
@@ -254,7 +299,7 @@ fn number(o: &Value, k: &str, def: f64) -> f64 { SceneFile::parse_number(&o[k], 
 /// Override fields of `GlacierParams` named in `o`.
 fn glacier_params(o: &Value) -> GlacierParams {
     let mut g = GlacierParams::default();
-    let fields: [(&str, &mut f64); 16] = [
+    let fields: [(&str, &mut f64); 21] = [
         ("glen_a", &mut g.glen_a), ("glen_n", &mut g.glen_n), ("sliding", &mut g.sliding),
         ("erosion", &mut g.erosion), ("erosion_exponent", &mut g.erosion_exponent),
         ("ela_equator", &mut g.ela_equator), ("ela_pole", &mut g.ela_pole),
@@ -262,11 +307,40 @@ fn glacier_params(o: &Value) -> GlacierParams {
         ("balance_gradient", &mut g.balance_gradient), ("max_accumulation", &mut g.max_accumulation),
         ("max_step", &mut g.max_step), ("min_step", &mut g.min_step), ("max_speed", &mut g.max_speed), ("max_stiffness", &mut g.max_stiffness),
         ("acceleration", &mut g.acceleration),
+        ("geothermal_flux", &mut g.geothermal_flux), ("ela_temperature", &mut g.ela_temperature),
+        ("refreezing", &mut g.refreezing),
+        ("debris", &mut g.debris), ("lodgement", &mut g.lodgement),
     ];
     for (k, v) in fields {
         if let Some(x) = o.get(k).and_then(|x| x.as_f64()) { *v = x; }
     }
     if let Some(x) = o.get("picard").and_then(|x| x.as_u64()) { g.picard = x.max(1) as usize; }
+    g
+}
+
+/// The bedrock's parameters: the older top-level `strata_thickness`, `strata_contrast` and
+/// `fold_amplitude`, then overrides of `GeologyParams` by field name in `"geology"`.
+fn geology_params(o: &Value) -> crate::terrain::geology::GeologyParams {
+    let mut g = crate::terrain::geology::GeologyParams::default();
+    g.strata_thickness = number(o, "strata_thickness", g.strata_thickness);
+    g.contrast = number(o, "strata_contrast", g.contrast);
+    g.fold_amplitude = number(o, "fold_amplitude", g.fold_amplitude);
+    let v = &o["geology"];
+    let fields: [(&str, &mut f64); 17] = [
+        ("strata_thickness", &mut g.strata_thickness), ("contrast", &mut g.contrast),
+        ("fold_amplitude", &mut g.fold_amplitude), ("fold_wavelength", &mut g.fold_wavelength),
+        ("fold_relief", &mut g.fold_relief), ("fold_growth", &mut g.fold_growth), ("fold_vergence", &mut g.fold_vergence),
+        ("thrust_throw", &mut g.thrust_throw), ("fracturing", &mut g.fracturing),
+        ("slope_strength", &mut g.slope_strength), ("shortening_rate", &mut g.shortening_rate),
+        ("karst_rate", &mut g.karst_rate), ("infiltration", &mut g.infiltration),
+        ("warp_amplitude", &mut g.warp_amplitude), ("cover_thickness", &mut g.cover_thickness),
+        ("exhumation", &mut g.exhumation), ("plutons", &mut g.plutons),
+    ];
+    for (k, f) in fields {
+        if let Some(x) = v.get(k).and_then(|x| x.as_f64()) { *f = x; }
+    }
+    g.fold_wavelength = g.fold_wavelength.max(100.);
+    g.fold_vergence = g.fold_vergence.clamp(-0.95, 0.95);
     g
 }
 
@@ -278,6 +352,11 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.planet.mountain_height = number(o, "mountain_height", p.planet.mountain_height);
     p.planet.uplift_rate = number(o, "uplift_rate", p.planet.uplift_rate);
     p.planet.belt_frequency = number(o, "belt_frequency", p.planet.belt_frequency);
+    p.planet.plateau_uplift = number(o, "plateau_uplift", p.planet.plateau_uplift);
+    p.planet.plateau_height = number(o, "plateau_height", p.planet.plateau_height);
+    p.planet.rift_rate = number(o, "rift_rate", p.planet.rift_rate);
+    p.planet.rift_relief = number(o, "rift_relief", p.planet.rift_relief);
+    p.planet.rift_spacing = number(o, "rift_spacing", p.planet.rift_spacing).max(1000.);
     p.step = number(o, "step", p.step);
     let f = &o["fluvial"];
     p.fluvial.k = number(f, "k", p.fluvial.k);
@@ -285,9 +364,9 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.fluvial.n = number(f, "n", p.fluvial.n);
     p.fluvial.diffusivity = number(f, "diffusivity", p.fluvial.diffusivity);
     p.fluvial.deposition = number(f, "deposition", p.fluvial.deposition);
-    p.planet.strata_thickness = number(o, "strata_thickness", p.planet.strata_thickness);
-    p.planet.strata_contrast = number(o, "strata_contrast", p.planet.strata_contrast);
-    p.planet.fold_amplitude = number(o, "fold_amplitude", p.planet.fold_amplitude);
+    p.fluvial.lateral = number(f, "lateral", p.fluvial.lateral);
+    p.fluvial.avulsion = number(f, "avulsion", p.fluvial.avulsion);
+    p.planet.geology = geology_params(o);
     // Plate tectonics: on by default at full scale, `false` for noise alone, or overrides of
     // `TectonicsParams` by field name.
     p.planet.tectonics = match &o["tectonics"] {
@@ -327,8 +406,60 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
             Some(c)
         }
     };
+    // The crust's isostatic response: `false` for none, or overrides of `IsostasyParams`.
+    p.isostasy = match &o["isostasy"] {
+        Value::Bool(false) => None,
+        v => {
+            let mut x = crate::terrain::isostasy::IsostasyParams::default();
+            let fields: [(&str, &mut f64); 5] = [
+                ("elastic_thickness", &mut x.elastic_thickness), ("mantle_density", &mut x.mantle_density),
+                ("rock_density", &mut x.rock_density), ("ice_density", &mut x.ice_density), ("relaxation", &mut x.relaxation),
+            ];
+            for (k, f) in fields {
+                if let Some(n) = v.get(k).and_then(|n| n.as_f64()) { *f = n; }
+            }
+            x.relaxation = x.relaxation.max(1.);
+            x.mantle_density = x.mantle_density.max(1.);
+            Some(x)
+        }
+    };
+    // Rain made by the terrain: `false` for none, or overrides of `OrographicParams`.
+    p.orographic = match &o["orographic"] {
+        Value::Bool(false) => None,
+        v => {
+            let mut x = crate::terrain::orographic::OrographicParams::default();
+            let fields: [(&str, &mut f64); 7] = [
+                ("saturation_recovery", &mut x.saturation_recovery), ("wind_speed", &mut x.wind_speed), ("fallout_time", &mut x.fallout_time), ("scale_height", &mut x.scale_height),
+                ("gain_length", &mut x.gain_length), ("sea_recharge", &mut x.sea_recharge), ("reference", &mut x.reference),
+            ];
+            for (k, f) in fields {
+                if let Some(n) = v.get(k).and_then(|n| n.as_f64()) { *f = n; }
+            }
+            x.reference = x.reference.max(1.);
+            x.wind_speed = x.wind_speed.max(0.1);
+            Some(x)
+        }
+    };
+    p.aeolian = match &o["aeolian"] {
+        Value::Bool(false) => None,
+        v => {
+            let mut x = crate::terrain::aeolian::AeolianParams::default();
+            let fields: [(&str, &mut f64); 4] = [("flux", &mut x.flux), ("exposure", &mut x.exposure), ("deposition", &mut x.deposition), ("sand_fraction", &mut x.sand_fraction)];
+            for (k, f) in fields {
+                if let Some(n) = v.get(k).and_then(|n| n.as_f64()) { *f = n; }
+            }
+            if let Some([a, b]) = v.get("vegetation").and_then(|g| g.as_array()).and_then(|g| <[Value; 2]>::try_from(g.clone()).ok()) {
+                x.vegetation = (a.as_f64().unwrap_or(x.vegetation.0), b.as_f64().unwrap_or(x.vegetation.1));
+            }
+            Some(x)
+        }
+    };
+    p.eustasy = number(o, "eustasy", p.eustasy);
+    p.evaporation = number(o, "evaporation", p.evaporation).max(0.);
     p.sediment_erodibility = number(o, "sediment_erodibility", p.sediment_erodibility);
     p.lava_erodibility = number(o, "lava_erodibility", p.lava_erodibility);
+    p.sediment_glacial_erodibility = number(o, "sediment_glacial_erodibility", p.sediment_glacial_erodibility);
+    p.lava_glacial_erodibility = number(o, "lava_glacial_erodibility", p.lava_glacial_erodibility);
     p.volcano = match &o["volcanoes"] {
         Value::Bool(false) => None,
         v => {
@@ -367,6 +498,9 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
             let mut x = crate::terrain::marine::MarineParams::default();
             if let Some(n) = v.get("diffusivity").and_then(|n| n.as_f64()) { x.diffusivity = n; }
             if let Some(n) = v.get("depth_scale").and_then(|n| n.as_f64()) { x.depth_scale = n; }
+            if let Some(n) = v.get("jet").and_then(|n| n.as_f64()) { x.jet = n.max(0.); }
+            if let Some(n) = v.get("cliff_retreat").and_then(|n| n.as_f64()) { x.cliff_retreat = n.max(0.); }
+            if let Some(n) = v.get("longshore").and_then(|n| n.as_f64()) { x.longshore = n.max(0.); }
             Some(x)
         }
     };
@@ -384,6 +518,8 @@ pub fn site_of(d: &Value) -> Site {
         (Some(lat), Some(lon), _) => Site::At { lat, lon },
         (_, _, Some("volcanoes")) => Site::Volcanoes,
         (_, _, Some("coast")) => Site::Coast,
+        (_, _, Some("plateau")) => Site::Plateau,
+        (_, _, Some("rift")) => Site::Rift,
         (_, _, None | Some("mountains")) => Site::Mountains,
         (_, _, Some(x)) => panic!("Unknown terrain domain \"near\": {}", x),
     }
@@ -431,6 +567,22 @@ fn evolve(o: &Value, mut t: Terrain, key: &str) -> Terrain {
         None => t.run_to(time),
     }
     println!("Terrain: {} cells evolved for {} years in {:.1?}", t.domain.len(), time, start.elapsed());
+    let level = t.sea_level();
+    if level.abs() > 1. {
+        println!("Terrain: sea level is {:.0} m then (the glacial cycle's); the scene's sea should stand there", level);
+    }
+    // What the wind and the glaciers laid down.
+    for (name, layer) in [("wind-blown sand", &t.sand), ("glacial till", &t.till)] {
+        let thick = (0..t.domain.len()).filter(|&i| layer.get(i).is_some_and(|&x| x > map::ALLUVIUM));
+        let area: f64 = thick.clone().map(|i| t.domain.area[i]).sum::<f64>() / 1e6;
+        let deepest = layer.iter().cloned().fold(0., f64::max);
+        if deepest > 0.1 { println!("Terrain: {} {:.0} km² more than {} m deep, {:.1} m at most", name, area, map::ALLUVIUM, deepest); }
+    }
+    let basins = t.basins();
+    if basins.count > 0 {
+        let km2 = |f: &dyn Fn(usize) -> bool| (0..t.domain.len()).filter(|&i| f(i)).map(|i| t.domain.area[i]).sum::<f64>() / 1e6 + 0.;
+        println!("Terrain: {} closed basins, {:.0} km² of them under salt lakes", basins.count, km2(&|i| basins.water[i] > 0.5));
+    }
     t
 }
 
@@ -448,6 +600,11 @@ pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> 
     }
     let t = evolved(o, params);
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
+    if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(&t, path, 2048); }
+    if let Some(path) = o["rain_map"].as_str() { map::write_rain_map(&t, path, 2048); }
+    if let Some(path) = o["height_map"].as_str() && let Some((lo, hi)) = map::write_height_map(&t, path) {
+        println!("Terrain: heights from {:.1} to {:.1} m in {}", lo, hi, path);
+    }
     let place = Placement {
         scale: number(o, "scale", 1000.),
         exaggeration: number(o, "exaggeration", 1.),
@@ -480,13 +637,82 @@ pub fn levels(o: &Value, globe: f64) -> Vec<Level> {
 /// looks over (`world::Focus`).
 fn focus(o: &Value) -> Focus {
     if o.get("focus").is_some() { return Focus::Point(SceneFile::parse_vec3(&o["focus"])); }
+    camera(o, false)
+}
+
+/// The scene's camera (passed in as `camera`) as a focus, its height `above_ground` or not.
+fn camera(o: &Value, above_ground: bool) -> Focus {
     let location = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.));
-    Focus::Camera { location, lookat: SceneFile::parse_vec3_def(&o["camera"], "lookat", location) }
+    Focus::Camera { location, lookat: SceneFile::parse_vec3_def(&o["camera"], "lookat", location), above_ground }
+}
+
+/// The camera that adds a close level to the world when it is near the ground
+/// (`world::close_level`): unless the scene gives its `levels`, or `"close_level": false`.
+fn close(o: &Value, above_ground: bool) -> Option<Focus> {
+    (o.get("levels").is_none() && o["close_level"].as_bool().unwrap_or(true)).then(|| camera(o, above_ground))
+}
+
+/// The spacing of the finest patch a world has (m), or the domain's without patches.
+fn finest_spacing(o: &Value, patches: &[crate::terrain::simulation::Terrain]) -> f64 {
+    patches.first().and_then(|t| match t.domain.layout {
+        crate::terrain::domain::Layout::Patch { spacing, .. } => Some(spacing),
+        _ => None,
+    }).unwrap_or_else(|| number(&o["domain"], "spacing", 750.))
 }
 
 /// A landscape's `"cache"`: the directory its world is kept in.
 pub fn world_directory(o: &Value) -> Option<&std::path::Path> {
     o["cache"].as_str().map(std::path::Path::new)
+}
+
+/// Scene points `y` metres above the ground under each (`x`, `y`, `z`) of `points`, on the
+/// full-scale landscape `o` (a camera's `"above_ground"`, `SceneFile::from_scenefile`): its
+/// world is built (from its `cache`, if it has one and was built before; a landscape without a
+/// cache is simulated twice), and its surface with the planet's detail found under each point.
+/// None for a scaled landscape.
+pub fn above_ground(o: &Value, points: &[Vector3<f64>]) -> Option<Vec<Vector3<f64>>> {
+    if o.get("scale").is_some() { return None; }
+    let mut params = terrain_params(o);
+    if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
+    let p = scenery_params(o);
+    let radius = params.planet.radius;
+    let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
+    let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
+    let levels = levels(o, globe_spacing);
+    let focus = match focus(o) {
+        Focus::Camera { location, lookat, .. } => Focus::Camera { location, lookat, above_ground: true },
+        f => f,
+    };
+    let description = Description {
+        params, site: site_of(&o["domain"]), time: number(o, "time", 0.), planet_cells, levels,
+        focus, exaggeration: p.exaggeration, close: close(o, true),
+    };
+    let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
+    let frame = world.frame.clone();
+    let World { planet, globe, patches, .. } = world;
+    let finest = finest_spacing(o, &patches);
+    let layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width)).collect();
+    let relief = Relief::new(Arc::new(layers), &planet, radius, p.roughness, finest);
+    Some(points.iter().map(|q| {
+        let (d, _) = frame.on_planet(&Vector3::new(q.x, 0., q.z));
+        let h = relief.height(&d, &relief.slope(&d), 1.);
+        frame.to_scene(&d, h + q.y)
+    }).collect())
+}
+
+/// The scenery's parameters from a landscape object.
+fn scenery_params(o: &Value) -> SceneryParams {
+    let mut p = SceneryParams::default();
+    p.resolution = SceneFile::parse_int(&o["resolution"], p.resolution).max(8);
+    p.min_spacing = number(o, "min_spacing", p.min_spacing).max(1e-3);
+    p.globe = SceneFile::parse_int(&o["globe"], p.globe).max(2);
+    p.roughness = number(o, "roughness", p.roughness);
+    p.exaggeration = number(o, "exaggeration", p.exaggeration);
+    p.snowline = o["snowline"].as_f64();
+    p.treeline = o["treeline"].as_f64();
+    p.min_river_width = number(o, "min_river_width", p.min_river_width);
+    p.ground_materials = o["ground_materials"].as_bool().unwrap_or(p.ground_materials);
+    p
 }
 
 /// A landscape at full scale over the whole planet (see `scenery`):
@@ -500,6 +726,10 @@ pub fn world_directory(o: &Value) -> Option<&std::path::Path> {
 ///   one around it. Glaciers and meandering channels only run on the finest (`"glacier"` and
 ///   `"channels"` as for a patch): at kilometres per cell the ice can't drain down valleys
 ///   narrower than a cell, and every river's bends are smaller than one.
+/// - `close_level`: without `levels`, a camera within `world::CLOSE_HEIGHT` of the ground adds a
+///   patch five times finer than the finest, about the ground it sees (`world::close_level`;
+///   with the finest's glaciers, `world::take_glaciers`), unless this is `false`: below the finest cells the relief is synthetic, and up close a
+///   simulation's gullies and spurs look far less made than the synthetic's smooth forms.
 /// - `focus`: a scene point to centre the patches on; by default the ground the scene's camera
 ///   (passed in as `camera`) looks over. Patches are snapped to an eighth of their width, so
 ///   nearby cameras share them (and their cache).
@@ -516,38 +746,36 @@ pub fn world_directory(o: &Value) -> Option<&std::path::Path> {
 ///   and so on as there; `displacement_reach` (m, default 1000) out from under the camera on
 ///   each side, on a heightfield of `displacement_spacing` (m, default 2).
 fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
-    let mut p = SceneryParams::default();
-    p.resolution = SceneFile::parse_int(&o["resolution"], p.resolution).max(8);
-    p.min_spacing = number(o, "min_spacing", p.min_spacing).max(1e-3);
-    p.globe = SceneFile::parse_int(&o["globe"], p.globe).max(2);
-    p.roughness = number(o, "roughness", p.roughness);
-    p.exaggeration = number(o, "exaggeration", p.exaggeration);
-    p.snowline = o["snowline"].as_f64();
-    p.treeline = o["treeline"].as_f64();
-    p.min_river_width = number(o, "min_river_width", p.min_river_width);
+    let p = scenery_params(o);
     let radius = params.planet.radius;
     let time = number(o, "time", 0.);
     let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
     let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
     let levels = levels(o, globe_spacing);
-    let finest = levels.first().map_or(number(&o["domain"], "spacing", 750.), |l| l.spacing);
 
     // The world: the planet, the site, and the simulations nested about the focus, each
     // driving the next at its edge (`world`), kept in the `cache` directory if there is one.
     let description = Description {
         params: params.clone(), site: site_of(&o["domain"]), time, planet_cells, levels,
-        focus: focus(o), exaggeration: p.exaggeration,
+        focus: focus(o), exaggeration: p.exaggeration, close: close(o, false),
     };
     let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
     let frame = world.frame.clone();
+    let finest = finest_spacing(o, &world.patches);
     if let Some(t) = world.patches.first() {
         if let Some(path) = o["map"].as_str() { write_map(t, path, 2048); }
+        if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(t, path, 2048); }
+        if let Some(path) = o["rain_map"].as_str() { map::write_rain_map(t, path, 2048); }
+        if let Some(path) = o["height_map"].as_str() && let Some((lo, hi)) = map::write_height_map(t, path) {
+            say(format!("Landscape: heights of its finest patch, {} cells of {} m, from {:.1} to {:.1} m in {}",
+                t.domain.len(), finest, lo, hi, path));
+        }
         // Where the glaciers are, to frame them.
         let ice = (0..t.domain.len()).filter(|&i| t.ice[i] >= crate::terrain::simulation::ICE_FREE);
         let cells = ice.clone().count();
         if let Some(i) = ice.max_by(|&a, &b| t.ice[a].total_cmp(&t.ice[b])) {
             let at = frame.to_scene(&t.domain.dirs[i], t.surface()[i]);
-            let spacing = description.levels[0].spacing;
+            let spacing = finest;
             say(format!("Landscape: glaciers cover {:.0} km²; the thickest ice, {:.0} m, is at [{:.0}, {:.0}, {:.0}]",
                 cells as f64 * spacing * spacing / 1e6, t.ice[i], at.x, at.y, at.z));
         }
@@ -561,12 +789,17 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
     let (foot, height) = frame.on_planet(&view.location);
-    let ground = relief.height(&foot, relief.slope(&foot), 1.);
+    let ground = relief.height(&foot, &relief.slope(&foot), 1.);
     say(format!("Landscape: the camera is {:.1} m above the ground under it ({:.1} m above sea level)", height - ground, ground));
+    let (o, displacement) = &procedural_displacement(o, height - ground, params.planet.seed);
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
     // Built first, so the displacement's graphs can read its fields.
     let ground = Arc::new(Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame.clone(), &p));
-    let patches = o.get("displacement").map(|d| displaced_patches(o, d, &relief, &frame, &view, &p, ground.clone()));
+    if let Some(path) = o["cover_map"].as_str() {
+        let half = description.levels.first().map_or(32e3, |l| l.cells as f64 * l.spacing / 2.);
+        write_cover_map(&ground, &relief, &frame, half, path, 1024);
+    }
+    let patches = displacement.as_ref().map(|d| displaced_patches(o, d, &relief, &frame, &view, &p, ground.clone()));
     let mesh = scenery::mesh(&relief, &frame, &view, &p, patches.as_ref().map(|(h, _)| h));
     let geometry: Box<dyn Geometry + Send + Sync> = match patches {
         Some((_, terrains)) => {
@@ -578,6 +811,152 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     };
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
     SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }
+}
+
+/// Cameras higher than this above the ground, metres, see no detail worth displacing: from
+/// there a pixel covers more than the ground's own detail (`terrain::detail`) within the reach.
+const DISPLACEMENT_HEIGHT: f64 = 2000.;
+
+/// A full-scale landscape's displacement: the scene's graph (`"displacement"`), none if it is
+/// `false`, or the landscape's own detail (`terrain::detail`, a `ground` node) if it is `true`
+/// or `"ground"`, or if it isn't given and the camera is `height` metres above the ground,
+/// within `DISPLACEMENT_HEIGHT`. For the landscape's own, the reach and the finest spacing,
+/// unless the scene gives them, follow the camera's height: 40 times its height out, from 500 m
+/// to 4 km, and about a hundredth of it, from 6 cm to 2 m. Returns the object with those settings,
+/// and the graph.
+fn procedural_displacement(o: &Value, height: f64, seed: u64) -> (Value, Option<Value>) {
+    let own = || serde_json::json!({"node": "ground", "seed": seed});
+    let graph = match o.get("displacement") {
+        Some(Value::Bool(false)) => return (o.clone(), None),
+        Some(Value::Bool(true)) => own(),
+        Some(Value::String(s)) if s == "ground" => own(),
+        Some(g) => return (o.clone(), Some(g.clone())),
+        None if height.abs() <= DISPLACEMENT_HEIGHT => own(),
+        None => return (o.clone(), None),
+    };
+    let mut o = o.clone();
+    let height = height.abs().max(1.);
+    if o.get("displacement_reach").is_none() { o["displacement_reach"] = (40. * height).clamp(500., 4000.).into(); }
+    // A power of two, so the nested grids' cells, each twice the last, lie exactly on each
+    // other's.
+    if o.get("displacement_spacing").is_none() { o["displacement_spacing"] = 2f64.powf((height / 100.).clamp(1. / 16., 2.).log2().round()).into(); }
+    // Quads two pixels across: the tiles a render dices are kept, and bounced light reaches
+    // nearly every cell near the camera.
+    if o.get("displacement_detail").is_none() { o["displacement_detail"] = serde_json::json!({"pixels": 2, "max_level": 7}); }
+    (o, Some(graph))
+}
+
+/// The name the landscape's own boulders' material is given (`boulders`).
+pub const BOULDER_MATERIAL: &str = "landscape boulders";
+
+/// The landscape's own boulders, when it draws its own detail (`procedural_displacement`):
+/// a `scatter` about the camera, and its rock material, unless the scene says `"boulders":
+/// false` (or gives a displacement graph of its own, unless `"boulders": true`). Like the
+/// detail they follow what the simulation left (`terrain::detail`):
+///
+/// - fallen blocks on scree, below the cliffs they came from: where the slope is moderate and
+///   sediment lies thinly over rock, thickest at the foot of steep ground;
+/// - erratics and boulder fields on till, in patches (moraines are strewn with boulders the ice
+///   carried, sorted by nothing);
+/// - none on sand, playas, alluvial flats or ice.
+///
+/// They are the bedrock most common about the camera (beneath any sediment, which the scree
+/// broke from; found by rays cast down onto the ground in a grid over the area), in its `rock` material style and shape: granite and gneiss rounded by
+/// weathering, sandstone, limestone and quartzite blocky along their joints and beds, shale and
+/// schist in slabs, basalt in angular columns. They reach as far as they show: 30 times the
+/// camera's height out, from 60 to 300 m.
+pub fn boulders(o: &Value, landscape: &SceneObject) -> Option<(Value, Value)> {
+    use crate::graph::Field;
+    use crate::terrain::geology::Rock;
+    if o.get("scale").is_some() { return None; }
+    let own = matches!(o.get("displacement"), None | Some(Value::Bool(true))) || o["displacement"].as_str() == Some("ground");
+    match o.get("boulders") {
+        Some(Value::Bool(false)) => return None,
+        Some(Value::Bool(true)) => {},
+        _ if !own => return None,
+        _ => {},
+    }
+    let camera = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.));
+    let down = |x: f64, z: f64, from: f64| landscape.geometry.intersects(&Ray { ro: Vector3::new(x, from, z), rd: -Vector3::y() });
+    let ground = down(camera.x, camera.z, camera.y + 1e4)?;
+    let height = camera.y - ground.point.y;
+    if height > DISPLACEMENT_HEIGHT && o.get("boulders").is_none() { return None; }
+    let reach = (30. * height.abs()).clamp(60., 300.);
+    // The rock most often bare about the camera.
+    let fields = landscape.medium.fields()?;
+    let mut counts = [0usize; 9];
+    for j in 0..12 {
+        for i in 0..12 {
+            let (x, z) = (camera.x + (i as f64 / 11. - 0.5) * 2. * reach, camera.z + (j as f64 / 11. - 0.5) * 2. * reach);
+            if let Some(hit) = down(x, z, camera.y + 1e4)
+                && let Some(r) = fields.field(Field::Bedrock, &hit.point) {
+                counts[(r.round() as usize).min(8)] += 1;
+            }
+        }
+    }
+    let rock = (1..9).max_by_key(|&k| (counts[k], k)).filter(|&k| counts[k] > 0).map_or(Rock::Granite, Rock::from_index);
+    let (style, angularity) = match rock {
+        Rock::Granite | Rock::Gneiss => ("granite", 0.35),
+        Rock::Sandstone => ("sandstone", 0.75),
+        Rock::Limestone => ("limestone", 0.7),
+        Rock::Quartzite => ("quartzite", 0.8),
+        Rock::Shale | Rock::Schist => ("slate", 0.85),
+        Rock::Basalt => ("basalt", 0.9),
+        Rock::Sediment => ("granite", 0.5),
+    };
+    let seed = o["seed"].as_u64().unwrap_or(0);
+    use serde_json::json;
+    let none_on = |field: &str, from: f64, to: f64| json!({"node": "field", "field": field, "from": from, "to": to});
+    let density = json!({"node": "multiply", "inputs": [
+        {"node": "max", "inputs": [
+            // Fallen blocks on scree, thin sediment below steep ground.
+            {"node": "multiply", "inputs": [
+                {"node": "slope", "from": 18, "to": 30},
+                {"node": "slope", "from": 48, "to": 38},
+                none_on("sediment", 6., 0.3),
+                // In patches: a talus apron isn't all blocks.
+                {"node": "fractal", "scale": 30, "smallest": 5, "amplitude": 0.5},
+                1.2]},
+            // Boulders on till, in patches.
+            {"node": "multiply", "inputs": [
+                none_on("till", 1., 4.),
+                {"node": "fractal", "scale": 60, "smallest": 10, "amplitude": 0.8},
+                3.]}]},
+        none_on("sand", 2., 0.5),
+        none_on("playa", 0.5, 0.1),
+        none_on("ice", 5., 1.)]});
+    let scatter = json!({
+        "type": "scatter", "seed": seed.wrapping_add(17), "surface": "landscape",
+        "area": {"min": [camera.x - reach, camera.z - reach], "max": [camera.x + reach, camera.z + reach]},
+        "spacing": 3, "clustering": 0.65, "density": density,
+        "items": [{"boulder": {"angularity": angularity, "detail": 4}, "variants": 6, "size": [0.15, 1.8],
+                   "sink": 0.2, "tilt": 15, "material": BOULDER_MATERIAL}]});
+    let material = json!({"type": "rock", "preset": style, "seed": seed});
+    say(format!("Landscape: its own boulders of {} within {:.0} m of the camera", style, reach));
+    Some((scatter, material))
+}
+
+/// Write the ground cover's albedo (`Ground::albedo`), seen from straight above, over `half`
+/// metres either side of the site, north up, `width` pixels square, display-encoded, to `path`:
+/// for checking what the ground cover makes of the simulations without rendering.
+fn write_cover_map(ground: &Ground, relief: &Relief, frame: &crate::terrain::scenery::Frame, half: f64, path: &str, width: usize) {
+    use rayon::prelude::*;
+    let pixels: Vec<[u8; 3]> = (0..width * width).into_par_iter().map(|k| {
+        let (i, j) = (k % width, k / width);
+        let x = ((i as f64 + 0.5) / width as f64 * 2. - 1.) * half;
+        let z = (1. - (j as f64 + 0.5) / width as f64 * 2.) * half;
+        let d = frame.dir(x, z);
+        let slope = relief.slope(&d);
+        let local = 2. * half / width as f64;
+        let h = relief.height(&d, &slope, local);
+        let normal = (frame.to_scene(&relief.normal(&d, &slope, local), 0.) - frame.centre()).normalize();
+        let c = ground.albedo(&frame.to_scene(&d, h), &normal);
+        let encode = |v: f64| (v.clamp(0., 1.).powf(1. / 2.2) * 255.) as u8;
+        [encode(c.rgb.x), encode(c.rgb.y), encode(c.rgb.z)]
+    }).collect();
+    let mut img = image::RgbImage::new(width as u32, width as u32);
+    for (k, c) in pixels.into_iter().enumerate() { img.put_pixel((k % width) as u32, (k / width) as u32, image::Rgb(c)); }
+    img.save(path).unwrap();
 }
 
 /// The ground about the camera displaced at render time (`shapes::displaced`), out to
@@ -677,7 +1056,8 @@ fn displaced_patches(o: &Value, d: &Value, relief: &Relief, frame: &Frame, view:
         let terrain = DisplacedTerrain::of(grid.clone(), displacement, inner, nest)
             .unwrap_or_else(|e| panic!("{}", e))
             .placed(local.origin, local.axes)
-            .with_fields(ground.clone());
+            .with_fields(ground.clone())
+            .tighten();
         let terrain = Arc::new(terrain);
         parts.push(Box::new(crate::shapes::transform::Transform::new(terrain.clone() as Arc<dyn Geometry + Sync + Send>, placement)));
         if k == n - 1 {

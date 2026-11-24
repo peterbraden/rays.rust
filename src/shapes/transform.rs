@@ -38,6 +38,26 @@ pub struct Transform {
     uniform_scale: Option<f64>,
     /// Otherwise the transformed surface's area, estimated when first asked for (`stretched_area`).
     area: std::sync::OnceLock<f64>,
+    /// `inverse` without its scaling (`rigid`): where patterns are read.
+    pattern_frame: Affine3<f64>,
+}
+
+/// An affine map's rotation and translation without its scaling: the rotation nearest its
+/// linear part (the polar decomposition's, U Vᵀ of its singular value decomposition), about
+/// the point it takes to the origin. So patterns read through it turn and move with their
+/// object but keep their size in the scene's units.
+fn rigid(m: &Affine3<f64>) -> Affine3<f64> {
+    let linear: Matrix3<f64> = m.matrix().fixed_view::<3, 3>(0, 0).into();
+    let svd = linear.svd(true, true);
+    let rotation = match (svd.u, svd.v_t) {
+        (Some(u), Some(v_t)) => u * v_t,
+        _ => Matrix3::identity(),
+    };
+    let origin = m.try_inverse().map_or(Vector3::zeros(), |i| i.transform_point(&Point3::origin()).coords);
+    let mut h = Matrix4::identity();
+    h.fixed_view_mut::<3, 3>(0, 0).copy_from(&rotation);
+    h.fixed_view_mut::<3, 1>(0, 3).copy_from(&(-(rotation * origin)));
+    Affine3::from_matrix_unchecked(h)
 }
 
 impl Transform {
@@ -52,7 +72,8 @@ impl Transform {
         let gram = linear.transpose() * linear;
         let s2 = gram.trace() / 3.;
         let uniform_scale = ((gram - Matrix3::identity() * s2).norm() <= 1e-9 * s2).then(|| s2.sqrt());
-        Transform { item: item.into(), transform, inverse, normal_matrix, uniform_scale, area: std::sync::OnceLock::new() }
+        let pattern_frame = rigid(&inverse);
+        Transform { item: item.into(), transform, inverse, normal_matrix, uniform_scale, area: std::sync::OnceLock::new(), pattern_frame }
     }
 
     /// How much the transformation stretches the item's area at a point with normal `n` (unit,
@@ -241,6 +262,14 @@ impl Geometry for Transform {
             point: self.transform.transform_point(&Point3::from(u.point)).coords,
             normal: (self.normal_matrix * u.normal).normalize(),
             filter: u.filter * self.uniform_scale.unwrap_or(1.),
+        })
+    }
+
+    fn pattern_frame(&self, p: &Vector3<f64>, face: u32) -> Option<Affine3<f64>> {
+        let local = self.inverse.transform_point(&Point3::from(*p)).coords;
+        Some(match self.item.pattern_frame(&local, face) {
+            None => self.pattern_frame,
+            Some(f) => rigid(&(f * self.inverse)),
         })
     }
 

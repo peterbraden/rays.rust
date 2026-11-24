@@ -28,6 +28,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            web -> target
+            shaders -> target
+      - name: Build the GPU shader
+        # Not committed: built from shaders/ on the nightly they pin.
+        run: (cd shaders && rustup toolchain install) && scripts/build-shaders.sh
       - name: Install wasm-bindgen
         run: cargo install wasm-bindgen-cli --version "$(grep -A1 '^name = "wasm-bindgen"$' web/Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')"
       - name: Build the renderer for the browser

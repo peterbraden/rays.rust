@@ -38,6 +38,7 @@ reuse it as `"$name"`.
 | `cells` | Worley noise: `style` `f1`, `edges` (cracks between cells) or `stones` (a rounded stone per cell) |
 | `talus` | Fallen blocks and scree (`src/talus.rs`): angular polyhedra in layers from `largest` to `smallest` metres, many small to few large by a power law (`exponent`), sorted down the slope by `position` (0 at the toe, 1 at the apex; big blocks roll to the toe); `output` `height`, `mask` or `id` |
 | `strata` | Ledges: beds `step` metres thick, each ending in a riser; `breakup` makes them waver |
+| `ground` | A landscape's own detail from what its simulation left at each point (`terrain::detail`): ledges of hard beds and each rock's texture on bare rock, stones on scree, hummocks and boulders on till, swales on alluvium, smooth sand, cracked playas, smooth ice; `seed`, `amplitude` (1). Bounds each displaced cell by the ground there (`DisplacedTerrain::tighten`). A full-scale landscape uses it by default near the ground |
 | `cross_beds` | A `rock` material's festoon cross-bedding as relief (its `seed`, `scale` and `cross_set` as `set`; `amplitude`), so the laminae its colour shows stand out as ribs; filtered by the narrow laminae, a fortieth of a set (`rock::LAMINA_FINEST`: nine in ten crossed along any line are wider), not their spacing along the foresets |
 | `slope`, `altitude` | Masks from 0 to 1 between `from` and `to` (degrees, metres), with a fractal `breakup`; falling instead where `to` is below `from` |
 | `aspect` | How squarely the surface faces `direction` (default north, `[0, 0, -1]`), as a mask |
@@ -207,6 +208,57 @@ ground, more for wide aerial views.
 `alpine-layers.json`: ribs of rock on the steep ground, stones on the scree. The landscape
 prints how high the camera is above the ground under it, which helps place one: away from the
 scene's origin, the planet's curve lowers the ground (about 20 m at 16 km).
+
+### Procedural by default
+
+The landscape's own ground cover shades what lies bare with the library's natural materials
+(docs/procedural-materials.md): each rock by its lithology (`granite_outcrop`,
+`limestone_cliff`, `sandstone`, `quartzite`, `slate` for shale, `schist`, `gneiss`, `basalt`),
+scree, dune sand and river gravel, each chosen at a point by its share of the ground there
+(`scenery::Bare`) as snow and ice are; plants, salt crust, snow and ice keep their own. The
+materials carry detail from centimetres up, filtered to the pixel, so close up the ground has
+grain, crystals, stains and lichen, and from afar their average colours. `"ground_materials":
+false` keeps plain colours.
+
+The shapes aim at realism rather than at features: rock is rough at every scale (a fractal from
+a few metres to a centimetre whose amplitude falls more slowly than its size, as rock surfaces'
+Hurst exponents of 0.7-0.8 have it), joints die out and pick up along their length, broken
+blocks are faceted rather than rounded, and loose ground is rough at the scale of its stones.
+
+A full-scale landscape whose camera is within 2 km of the ground displaces it with its own
+detail unless the scene says otherwise (a graph of its own, or `"displacement": false`): a
+`ground` node, out to 40 times the camera's height (500 m to 4 km), on nested grids whose
+finest spacing is about a hundredth of it (a power of two from 6 cm to 2 m). The detail
+follows the simulation (`terrain::detail`): where it left bare rock, hard beds stand out as
+ledges at their own heights and soft ones are cut back, and the rock has its own texture
+(granite's blocks, sandstone's joints, limestone's flutes, basalt's columns); scree is stony,
+till hummocky with boulders, alluvium gently swaled, sand smooth, playas cracked, glaciers
+smooth. Each cell of the displaced grids is bounded by the detail the fields there allow
+(`Graph::range_near`, `DisplacedTerrain::tighten`), so rays grazing sand or alluvium dice
+only the cells they touch: a camera standing in a desert basin rendered 13 times faster than
+with the detail's whole range. On the smallest cells, where even the local range of rock's
+detail is tall beside the cell, a cell is bounded by the detail's value at its centre and how
+far it can change across it (`detail::local_bound`: smooth parts by their steepest gradient,
+stones' edges and ledges between beds by their whole height), five times faster again for a
+camera standing on a rocky slope.
+
+A camera with `"above_ground": true` stands and looks at heights above the landscape's ground:
+its `location`'s and `lookat`'s y are metres above the ground under each
+(`object::above_ground`, from the world and its surface before anything else is built), so a
+close-up scene keeps its camera on the ground however the simulation changes. Give the
+landscape a `"focus"`, so its patches don't move with the camera.
+`demo/scenes/landscape-closeup.json` stands 4 m up on a sandstone slope of a desert fold belt
+with nothing placed by hand: the world's close level under the camera (30 m cells inside its
+150 m patch, `world::close_level`), gullies below that (`Relief::gullies`), its own detail
+and its own boulders: sandstone in thin ledges along its beds, cut by joints that die out and
+open in stretches (960 x 540 at 32 samples: 3 min to build from a cached world, about 35 to
+render). The landscape's own displacement dices quads two pixels across, at most seven levels
+down, unless the scene says otherwise: a render keeps every tile it dices, and bounced light
+reaches nearly every cell near the camera. Boulders are placed on the ground diced coarsely,
+to an eighth of a cell, in tiles dropped afterwards (`displaced::coarsely`): diced for the
+camera, the tile under each of thousands of candidates took gigabytes.
+
+![The close-up: nothing placed by hand](../demo/scenes/landscape-closeup.png)
 
 ## In the desert scenes
 

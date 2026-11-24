@@ -953,9 +953,16 @@ impl SceneFile {
                 vec![Arc::new(SceneFile::parse_volume_over(&obj, geometries, fields))]
             } else if obj["type"] == "landscape" {
                 // Kept, as a surface for scatters after it.
-                let x: Vec<Arc<SceneObject>> = SceneFile::parse_object(obj, materials, media, geometries).into_iter().collect();
-                if let Some(first) = x.first() {
+                let mut x: Vec<Arc<SceneObject>> = SceneFile::parse_object(obj.clone(), materials, media, geometries).into_iter().collect();
+                if let Some(first) = x.first().cloned() {
                     landscape = Some(first.clone());
+                    // And the boulders it strews about the camera, if it draws its own detail.
+                    if let Some((scatter, material)) = crate::terrain::object::boulders(&obj, &first) {
+                        let mut with = materials.clone();
+                        with.insert(crate::terrain::object::BOULDER_MATERIAL.into(), material);
+                        // Placed on the ground diced coarsely (an eighth of a cell), keeping no tiles.
+                        x.extend(crate::shapes::displaced::coarsely(3, || SceneFile::parse_scatter(&scatter, &with, media, geometries, Some(&first))));
+                    }
                 }
                 x
             } else if Some(i) == deck && !hills.is_empty() {
@@ -1365,6 +1372,7 @@ impl SceneFile {
             patchiness: SceneFile::parse_number(&o["patchiness"], 0.5),
             max_slope: SceneFile::parse_number(&o["max_slope"], 35.),
             variants: SceneFile::parse_int(&o["variants"], 3).max(1),
+            clustering: SceneFile::parse_number(&o["clustering"], 0.),
         };
         let entries = o["species"].as_array().filter(|e| !e.is_empty())
             .unwrap_or_else(|| panic!("a forest needs a list of \"species\""));
@@ -1734,6 +1742,7 @@ impl SceneFile {
             patchiness: SceneFile::parse_number(&o["patchiness"], 0.3),
             max_slope: SceneFile::parse_number(&o["max_slope"], 90.),
             variants: items.iter().map(|i| i.models.len()).max().unwrap_or(1),
+            clustering: SceneFile::parse_number(&o["clustering"], 0.),
         };
         let ground = |x: f64, z: f64| footing.at(x, z);
         let density = Footing::parse_rule(o, "scatter").or_else(|| o.get("density")
@@ -4630,6 +4639,20 @@ impl SceneFile {
     }
 
     pub fn from_scenefile(mut s: SceneFile) -> Scene {
+        // A camera `"above_ground"` stands, and looks, at heights above a landscape's ground.
+        if s.camera["above_ground"].as_bool() == Some(true)
+            && let Some(l) = s.objects.iter().find(|o| o["type"].as_str() == Some("landscape")) {
+            let at = |k: &str| SceneFile::parse_vec3_def(&s.camera, k, Vector3::zeros());
+            // With the camera, so its world is nested about the same ground as the scene's.
+            let mut l = l.clone();
+            l["camera"] = s.camera.clone();
+            if let Some(p) = crate::terrain::object::above_ground(&l, &[at("location"), at("lookat")]) {
+                let json = |v: &Vector3<f64>| serde_json::json!([v.x, v.y, v.z]);
+                println!("Camera: {:.1} m above the ground, at [{:.1}, {:.1}, {:.1}]", at("location").y, p[0].x, p[0].y, p[0].z);
+                s.camera["location"] = json(&p[0]);
+                s.camera["lookat"] = json(&p[1]);
+            }
+        }
         if s.camera["unwrap"] == serde_json::json!(true) {
             s.camera["unwrap"] = serde_json::json!({});
         }

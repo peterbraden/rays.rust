@@ -335,6 +335,12 @@ pub struct ForestLayout {
     pub max_slope: f64,
     /// Distinct trees grown per species, shared among its placements.
     pub variants: usize,
+    /// 0 for copies spread evenly (each kept its spacing from the rest, the area filled), up
+    /// to 1 for copies in clumps with open ground between: a dart lands beside a copy already
+    /// placed with this chance, starting a clump elsewhere only rarely, and each clump grows
+    /// to a size of its own (as rockfall leaves its blocks, and seedlings gather round their
+    /// parents: a Neyman-Scott cluster process, thinned by the spacing).
+    pub clustering: f64,
 }
 
 /// One tree of the forest.
@@ -352,6 +358,10 @@ pub struct Placement {
     /// Slope of the surface there, in degrees.
     pub slope: f64,
 }
+
+/// A dart thrown at the area: where, its clustering draws (beside a copy or not, which copy,
+/// the angle and how far out), and the draws for the tree.
+struct Dart { x: f64, z: f64, clump: Option<(f64, f64, f64, f64)>, pick: f64, spread: f64, yaw: f64, mirror: bool, which: f64 }
 
 /// Smooth noise in [0, 1], about 0.5, varying over `size`.
 fn field(noise: &PerlinNoise, offset: Vector2<f64>, size: f64, x: f64, z: f64) -> f64 {
@@ -411,6 +421,12 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
     // Enough darts to fill the area at the closest spacing many times over.
     let closest = species.iter().map(|s| layout.spacing * s.spacing).fold(f64::INFINITY, f64::min).max(1e-9);
     let darts = (30. * size.x.abs() * size.y.abs() / (closest * closest)).ceil() as usize;
+    // Clumps: each copy's clump, and each clump's size and the size it may grow to.
+    let clustering = layout.clustering.clamp(0., 1.);
+    let mut clump_of: Vec<usize> = vec![];
+    let mut clumps: Vec<(usize, usize)> = vec![];
+    // Each copy's x, z and radius, for darts landing beside it.
+    let mut spots: Vec<[f64; 3]> = vec![];
 
     let top = |s: &&dyn Geometry| {
         let y = s.bounds().max.y;
@@ -462,16 +478,44 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
     while thrown < darts {
         let n = CHUNK.min(darts - thrown);
         thrown += n;
-        let chunk: Vec<(f64, f64, f64, f64, f64, bool, f64)> = (0 .. n).map(|_| {
+        let chunk: Vec<Dart> = (0 .. n).map(|_| {
             let (x, z) = (layout.min.x + rng.next_f64() * size.x, layout.min.y + rng.next_f64() * size.y);
-            (x, z, rng.next_f64(), rng.next_f64() * 2. - 1., rng.next_f64() * 360., rng.next_f64() < 0.5, rng.next_f64())
+            // With clustering, most darts land beside a copy whose clump has room, and the
+            // rest start a clump only rarely. (Without, nothing more is drawn, so the copies
+            // are as before.)
+            let clump = (clustering > 0.).then(|| (rng.next_f64(), rng.next_f64(), rng.next_f64() * std::f64::consts::TAU, rng.next_f64()));
+            Dart { x, z, clump, pick: rng.next_f64(), spread: rng.next_f64() * 2. - 1., yaw: rng.next_f64() * 360., mirror: rng.next_f64() < 0.5, which: rng.next_f64() }
         }).collect();
+        // Darts that land beside a copy are moved there as they are thrown: their fields are
+        // found then.
+        let beside = |d: &Dart| d.clump.is_some_and(|(b, ..)| b < clustering);
         let found: Vec<Option<(f64, Vec<f64>)>> = {
             use rayon::prelude::*;
             let grid = &grid;
-            chunk.par_iter().map(|&(x, z, ..)| (!near(grid, x, z, smallest)).then(|| fields(x, z))).collect()
+            chunk.par_iter().map(|d| (!beside(d) && !near(grid, d.x, d.z, smallest)).then(|| fields(d.x, d.z))).collect()
         };
-        for (&(x, z, pick, spread, yaw, mirror, which), found) in chunk.iter().zip(found) {
+        for (d, found) in chunk.iter().zip(found) {
+            let &Dart { mut x, mut z, pick, spread, yaw, mirror, which, .. } = d;
+            let mut parent: Option<usize> = None;
+            let found = match d.clump {
+                Some((b, w, angle, how_far)) if b < clustering && !placed.is_empty() => {
+                    let n = ((w * placed.len() as f64) as usize).min(placed.len() - 1);
+                    let (size, limit) = clumps[clump_of[n]];
+                    if size >= limit { continue; }
+                    // Two to four radii out, more often near.
+                    let [px, pz, pr] = spots[n];
+                    let r = pr * (2. + 2. * how_far * how_far);
+                    (x, z) = (px + r * angle.cos(), pz + r * angle.sin());
+                    if x < lo.x || x > hi.x || z < lo.y || z > hi.y { continue; }
+                    parent = Some(clump_of[n]);
+                    (!near(&grid, x, z, smallest)).then(|| fields(x, z))
+                }
+                Some((b, _, _, how_far)) => {
+                    if how_far > (1. - clustering).powi(6) + 0.003 { continue; }
+                    if b < clustering { (!near(&grid, x, z, smallest)).then(|| fields(x, z)) } else { found }
+                }
+                None => found,
+            };
             // Most darts land too near a tree already placed: reject those first, before the
             // noise fields of the clearings and species, if they're too near even at the
             // smallest radius any tree can have. A rejected dart changes nothing, so the same
@@ -521,6 +565,17 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
             }
 
             grid[at(cell(x, z)).expect("a tree within the area")].push([x, z, r]);
+            if clustering > 0. {
+                let c = parent.unwrap_or_else(|| {
+                    // A new clump, growing to between 1 and about 25 copies, mostly few.
+                    let limit = 1 + (-(1. - (which * 104729.).fract()).ln() * 8.) as usize;
+                    clumps.push((0, limit));
+                    clumps.len() - 1
+                });
+                clumps[c].0 += 1;
+                clump_of.push(c);
+                spots.push([x, z, r]);
+            }
             placed.push(Placement {
                 species: k,
                 variant: ((which * layout.variants.max(1) as f64) as usize).min(layout.variants.max(1) - 1),
@@ -541,7 +596,51 @@ mod tests {
     fn layout() -> ForestLayout {
         ForestLayout {
             min: Vector2::new(-50., -50.), max: Vector2::new(50., 50.),
-            spacing: 5., clearings: 0., patch_size: 30., patchiness: 0., max_slope: 30., variants: 3,
+            spacing: 5., clearings: 0., patch_size: 30., patchiness: 0., max_slope: 30., variants: 3, clustering: 0.,
+        }
+    }
+
+    /// The variance of the counts in a 10 x 10 grid of squares over their mean: below 1 for
+    /// copies spread more evenly than chance, above 1 for copies in clumps.
+    fn dispersion(placed: &[Placement], l: &ForestLayout) -> f64 {
+        let mut counts = [0f64; 100];
+        for p in placed {
+            let i = (((p.position.x - l.min.x) / (l.max.x - l.min.x) * 10.) as usize).min(9);
+            let j = (((p.position.z - l.min.y) / (l.max.y - l.min.y) * 10.) as usize).min(9);
+            counts[j * 10 + i] += 1.;
+        }
+        let mean = counts.iter().sum::<f64>() / 100.;
+        counts.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / 100. / mean
+    }
+
+    #[test]
+    #[ignore]
+    fn measure_clustering() {
+        let ground = Plane { y: 0. };
+        let even = ForestLayout { spacing: 2., ..layout() };
+        for c in [0., 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] {
+            let l = ForestLayout { clustering: c, ..even.clone() };
+            let p = place(&l, &[one(1., 0.3)], 3, &[&ground]);
+            println!("clustering {}: {} copies, dispersion {:.2}", c, p.len(), dispersion(&p, &l));
+        }
+    }
+
+    #[test]
+    fn test_clustering_gathers_copies_into_clumps() {
+        let ground = Plane { y: 0. };
+        let even = ForestLayout { spacing: 2., ..layout() };
+        let clumped = ForestLayout { clustering: 0.8, ..even.clone() };
+        let (a, b) = (place(&even, &[one(1., 0.3)], 3, &[&ground]), place(&clumped, &[one(1., 0.3)], 3, &[&ground]));
+        let (da, db) = (dispersion(&a, &even), dispersion(&b, &clumped));
+        assert!(da < 0.5, "even {}", da);
+        assert!(db > 2., "clumped {} ({} copies, {} even)", db, b.len(), a.len());
+        // With open ground between: fewer copies than fill the area.
+        assert!(b.len() < a.len() * 3 / 4, "{} vs {}", b.len(), a.len());
+        // Still none closer than their spacing.
+        for (k, p) in b.iter().enumerate() {
+            for q in &b[k + 1..] {
+                assert!((p.position - q.position).norm() > 0.5 * 2. * 0.7 * 2. * 0.99);
+            }
         }
     }
 

@@ -8,8 +8,9 @@
 //! Rivers are much narrower than the grid's cells (a few hundred metres at most, against
 //! 500 m cells), so meanders are a sub-grid model: each meandering river is a centreline, a
 //! polyline in the patch's tangent plane, that evolves on its own and is drawn over the terrain
-//! (`object`). It does not change the grid's elevations: the floodplain it wanders over is
-//! built by deposition (`fluvial`), and the valley walls confine it.
+//! (`object`). It doesn't change the floodplain it wanders over, which is built by deposition
+//! (`fluvial`), but cuts back the valley walls it presses against (see "Cutting the valley
+//! walls").
 //!
 //! ## Where rivers meander
 //!
@@ -56,7 +57,8 @@
 //! The weighted integral over upstream curvature (here an exponential filter along the
 //! channel) makes bends grow and migrate downstream. The channel's two ends are held where the
 //! reach begins and ends; points that would move onto ground higher than the floodplain (valley
-//! walls) stay where they are, so the meander belt stays within the valley floor: the cells
+//! walls), or further than 25 widths from the reach (`BELT_WIDTHS`, the meander belt), stay
+//! where they are, so the meander belt stays within the valley floor: the cells
 //! reached from the reach without climbing more than two bank heights above the river.
 //!
 //! ## Cutoffs and ox-bow lakes
@@ -70,10 +72,18 @@
 //! infilling rates set by the angle at which the old channel leaves the new one, some lakes
 //! staying open for centuries.
 //!
+//! ## Cutting the valley walls
+//!
+//! Where a bend presses against a valley wall it can't move onto, the wall is cut back
+//! instead (`Push`, and `Terrain`'s step): by the area the bank would have swept times the
+//! wall's height above the river, slowed by the wall's erodibility relative to alluvium, never
+//! below the river; the rock taken joins the river's sediment. Once a wall's cell is down to
+//! the floodplain the belt can spread over it: meandering rivers widen their valleys, as
+//! Langston and Tucker (Earth Surface Dynamics 6, 2018, doi:10.5194/esurf-6-1-2018) model
+//! for bedrock valleys.
+//!
 //! Not modelled: chute cutoffs, avulsion, braiding, bank strength varying with vegetation or
-//! the deposits a channel crosses, and lateral erosion of the valley walls (Langston and Tucker,
-//! Earth Surface Dynamics 6, 2018, doi:10.5194/esurf-6-1-2018, add bedrock valley widening to
-//! landscape models).
+//! the deposits a channel crosses, point bars and overbank deposits as changes of the grid.
 
 use crate::geometry::Pcg32;
 use crate::terrain::domain::{Domain, Layout};
@@ -142,6 +152,20 @@ pub struct Oxbow {
     pub depth: f64,
 }
 
+/// The meander belt's half-width, in channel widths: meander wavelengths are 10-14 widths
+/// (Leopold and Wolman, "River meanders", GSA Bulletin 71, 1960), and belts a few wavelengths
+/// across.
+const BELT_WIDTHS: f64 = 25.;
+
+/// Where a meandering channel pressed against its valley's wall over a step: the wall's cell,
+/// the river's, and the area the bank would have swept, m².
+#[derive(Clone, Debug, PartialEq)]
+pub struct Push {
+    pub wall: usize,
+    pub river: usize,
+    pub area: f64,
+}
+
 /// The meandering rivers of a patch and their ox-bow lakes.
 #[derive(Default)]
 pub struct Rivers {
@@ -194,7 +218,10 @@ fn resample(points: &[Point], spacing: f64) -> Vec<Point> {
 }
 
 /// Migrate a channel for `dt` years. `movable(p)` says whether the channel may move onto `p`.
-fn migrate(c: &mut Channel, p: &ChannelParams, dt: f64, movable: &dyn Fn(Point) -> bool) {
+/// Migrate `c` for `dt` years over the ground where `movable`; where a point would move onto
+/// ground it can't (a valley wall), it stays, and `blocked` is told where it pushed from and
+/// to and the area its bank would have swept, m² (the move times the points' spacing).
+fn migrate(c: &mut Channel, p: &ChannelParams, dt: f64, movable: &dyn Fn(Point) -> bool, blocked: &mut dyn FnMut(Point, Point, f64)) {
     let w = c.width;
     let depth = w / 20.;
     let decay = 2. * p.friction / depth;
@@ -233,7 +260,7 @@ fn migrate(c: &mut Channel, p: &ChannelParams, dt: f64, movable: &dyn Fn(Point) 
         for k in 2..n - 2 {
             let m = -r1[k] * step;
             let q = [c.points[k][0] + normal[k][0] * m, c.points[k][1] + normal[k][1] * m];
-            if movable(q) { c.points[k] = q; }
+            if movable(q) { c.points[k] = q; } else { blocked(c.points[k], q, m.abs() * w); }
         }
         c.points = resample(&c.points, w);
         t += step;
@@ -296,8 +323,17 @@ impl Rivers {
     /// now: each cell's receiver, drainage area, slope to its receiver, sediment thickness,
     /// whether it is under water or ice, and its ground elevation.
     #[allow(clippy::too_many_arguments)]
-    pub fn step(&mut self, domain: &Domain, seed: u64, time: f64, dt: f64, receiver: &[usize], area: &[f64], slope: &[f64], sediment: &[f64], wet: &[bool], ground: &[f64], p: &ChannelParams) {
-        if !matches!(domain.layout, Layout::Patch { .. }) { return; }
+    /// Returns where the channels pressed against their valley's walls (`Push`), for the
+    /// landscape to cut them back.
+    pub fn step(&mut self, domain: &Domain, seed: u64, time: f64, dt: f64, receiver: &[usize], area: &[f64], slope: &[f64], sediment: &[f64], wet: &[bool], ground: &[f64], p: &ChannelParams) -> Vec<Push> {
+        if !matches!(domain.layout, Layout::Patch { .. }) { return vec![]; }
+
+        // A channel whose river has left its course (an avulsion, a lake filled, a bank cut
+        // through) is gone, and the reaches are found again now: kept until the next survey,
+        // it was drawn where the river had been as well as where it is, two rivers side by side.
+        let before = self.channels.len();
+        self.channels.retain(|c| c.path.windows(2).all(|w| receiver[w[0]] == w[1]));
+        if self.channels.len() < before { self.found = None; }
 
         if self.found.is_none_or(|f| time - f >= p.regrid) {
             self.found = Some(time);
@@ -335,30 +371,46 @@ impl Rivers {
 
         // The valley floor: cells reached from the reach's cells without climbing more than two
         // bank heights above the river cell they were reached from.
+        // ... no further than the meander belt's half-width from the reach (a few meander
+        // wavelengths across, as real belts are; once valley walls were cut back the belt was
+        // otherwise unbounded, and loops grew tens of kilometres long).
         let floodplain = |c: &Channel| {
             let bank = c.width / 20.;
+            let reach = BELT_WIDTHS * c.width;
+            let axis: Vec<Point> = c.path.iter().map(|&i| cell_point(domain, i)).collect();
+            let near = move |q: Point| axis.iter().any(|&a| dist(a, q) <= reach);
             let mut floor: BTreeSet<usize> = c.path.iter().copied().collect();
             let mut frontier: Vec<(usize, f64)> = c.path.iter().map(|&i| (i, ground[i])).collect();
             while let Some((i, level)) = frontier.pop() {
                 for l in domain.links(i) {
                     let j = l.to;
-                    if !floor.contains(&j) && !wet[j] && !domain.boundary[j] && ground[j] <= level + 2. * bank {
+                    if !floor.contains(&j) && !wet[j] && !domain.boundary[j] && ground[j] <= level + 2. * bank && near(cell_point(domain, j)) {
                         floor.insert(j);
                         frontier.push((j, level));
                     }
                 }
             }
-            move |q: Point| floor.contains(&point_cell(domain, q))
+            (move |q: Point| floor.contains(&point_cell(domain, q)), near)
         };
         let mut lakes = vec![];
+        let mut walls: BTreeMap<(usize, usize), f64> = BTreeMap::new();
         for c in &mut self.channels {
-            let movable = floodplain(c);
-            migrate(c, p, dt, &movable);
+            let (movable, within) = floodplain(c);
+            // The rock cut from a wall goes to the river on the grid (the reach's nearest cell),
+            // which carries its discharge: given to whichever floodplain cell the bend was over,
+            // it piled up there, with too little water to carry it on.
+            let path: Vec<(usize, Point)> = c.path.iter().map(|&i| (i, cell_point(domain, i))).collect();
+            let river = |q: Point| path.iter().min_by(|a, b| dist(a.1, q).total_cmp(&dist(b.1, q))).map_or(point_cell(domain, q), |a| a.0);
+            migrate(c, p, dt, &movable, &mut |from, to, area| {
+                // Only walls within the belt are cut; at its edge the channel just turns back.
+                if within(to) { *walls.entry((point_cell(domain, to), river(from))).or_insert(0.) += area; }
+            });
             lakes.extend(cutoffs(c));
         }
         for o in &mut self.oxbows { o.depth -= p.oxbow_fill * dt; }
         self.oxbows.retain(|o| o.depth > 0.);
         self.oxbows.extend(lakes);
+        walls.into_iter().filter(|((wall, river), _)| wall != river).map(|((wall, river), area)| Push { wall, river, area }).collect()
     }
 }
 
@@ -434,7 +486,7 @@ mod tests {
         let start = amplitude(&c);
         let mut lakes = vec![];
         for _ in 0..400 {
-            migrate(&mut c, &p, 100., &|_| true);
+            migrate(&mut c, &p, 100., &|_| true, &mut |_, _, _| panic!("nothing blocks it"));
             lakes.extend(cutoffs(&mut c));
         }
         // Bends grew from a few metres to many widths, and some necks were cut.
@@ -456,10 +508,43 @@ mod tests {
         let points: Vec<Point> = (0..=100).map(|k| [k as f64 * width, 5. * (k as f64 / 12.).sin()]).collect();
         let mut c = Channel { points, width, start: 0, end: 0, path: vec![] };
         let p = ChannelParams::default();
-        for _ in 0..100 {
-            migrate(&mut c, &p, 100., &|q| q[1].abs() < 300.);
+        let mut pushed = 0.;
+        for _ in 0..300 {
+            migrate(&mut c, &p, 100., &|q| q[1].abs() < 100., &mut |from, to, area| {
+                assert!(from[1].abs() < 100. && to[1].abs() >= 100. && area > 0.);
+                pushed += area;
+            });
         }
-        assert!(c.points.iter().all(|q| q[1].abs() < 300.));
+        assert!(c.points.iter().all(|q| q[1].abs() < 100.));
+        // It pressed against its valley's walls.
+        assert!(pushed > 0.);
+    }
+
+    #[test]
+    fn test_a_channel_whose_river_has_moved_is_replaced() {
+        // A gentle valley floor draining east along row 8; a reach's channel follows it. Then
+        // the river is sent along row 9 instead: the old channel goes, a new one follows it.
+        let d = Domain::patch(0., 0., 40, 200., 6.371e6);
+        let n = d.len();
+        let at = |i: usize, j: usize| j * 40 + i;
+        let route = |row: usize| -> Vec<usize> {
+            (0..n).map(|k| {
+                let (i, j) = (k % 40, k / 40);
+                if j == row && i + 1 < 40 { at(i + 1, j) } else if j != row && i > 0 && i + 1 < 40 { at(i, if j < row { j + 1 } else { j - 1 }) } else { k }
+            }).collect()
+        };
+        let area: Vec<f64> = (0..n).map(|k| if (k % 40) > 2 { 2e8 } else { 1e6 }).collect();
+        let slope = vec![1e-4; n];
+        let ground = vec![10.; n];
+        let p = ChannelParams { regrid: 1e9, ..ChannelParams::default() };
+        let mut r = Rivers::default();
+        let first = route(8);
+        r.step(&d, 1, 0., 10., &first, &area, &slope, &vec![10.; n], &vec![false; n], &ground, &p);
+        assert!(!r.channels.is_empty() && r.channels.iter().any(|c| c.path.contains(&at(10, 8))));
+        let moved = route(9);
+        r.step(&d, 1, 10., 10., &moved, &area, &slope, &vec![10.; n], &vec![false; n], &ground, &p);
+        for c in &r.channels { assert!(c.path.windows(2).all(|w| moved[w[0]] == w[1]), "a channel left on the old course"); }
+        assert!(r.channels.iter().any(|c| c.path.contains(&at(10, 9))));
     }
 
     #[test]

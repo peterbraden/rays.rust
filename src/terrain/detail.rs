@@ -287,9 +287,14 @@ fn joints(c: &Context, noise: &SeededNoise, spacing: f64) -> (f64, f64) {
     let across = |dir: (f64, f64), s: f64, o: f64| {
         let u = (p.x * dir.0 + p.z * dir.1) / s + 0.25 * noise.noise(p / (4. * s) + crate::na::Vector3::new(o, 1.3, 0.2));
         let d = (u - u.round()).abs() * s;
-        // Joints die out and pick up again along their length, and open unevenly.
-        let along = noise.noise(p / (1.5 * s) + crate::na::Vector3::new(o + 5.1, 2.7, 0.9));
-        let open = smoothstep(-0.25, 0.15, along);
+        // Some joints aren't there at all; the rest die out and pick up again along their
+        // length, every metre or two, and open unevenly.
+        let mut k = (u.round() as i64 as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (o.to_bits());
+        k ^= k >> 31;
+        k = k.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        let present = ((k >> 11) as f64 / (1u64 << 53) as f64) > 0.3;
+        let along = noise.noise(p / (0.5 * s) + crate::na::Vector3::new(o + 5.1, 2.7, 0.9));
+        let open = if present { smoothstep(0., 0.3, along) } else { 0. };
         (open * (1. - smoothstep(0.03, 0.15, d)), u.floor() as i64)
     };
     let ((g1, i), (g2, j)) = (across(a, spacing, 7.7), across(b, 1.6 * spacing, 3.1));

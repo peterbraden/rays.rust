@@ -187,6 +187,12 @@
           "doc": "With a full-scale landscape: location's and lookat's y are heights above the ground under each (best with the landscape's focus given)."
         },
         {
+          "name": "feature",
+          "kind": "json",
+          "default": null,
+          "doc": "With a landscape: look at one of its features from the best view a survey of it found (terrain::features), replacing location and lookat. true for the best view of any; a kind (peak, volcano, pass, cliff, glacier, lake, confluence, gorge, headland); or {\"kind\", \"rank\" (0 the most salient of the kind; of \"any\", by its best view), \"view\" (0 the best)}. A full-scale landscape keeps its patches where they were surveyed."
+        },
+        {
           "name": "aperture",
           "kind": "number",
           "default": 0.2,
@@ -2795,6 +2801,12 @@
             {"name": "cells", "kind": "integer", "default": 128, "doc": "Cells along a side."},
             {"name": "spacing", "kind": "number", "default": 750, "doc": "Cell size, m."}
           ]
+        },
+        {
+          "name": "features",
+          "kind": "json",
+          "default": null,
+          "doc": "List its features (peaks, passes, cliffs, glaciers, lakes, confluences, gorges, headlands; terrain::features): true prints the most salient of each kind and where it is seen best from; a file name (.json) also writes them all there, each with its best views as cameras."
         },
         {
           "name": "close_level",

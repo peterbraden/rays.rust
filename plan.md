@@ -2157,6 +2157,18 @@ chose is then an ordinary scene file, to be tweaked (the scene builder is the ed
    in view and how varied; the sun's angle on what is seen (the time of day is chosen with
    it); nothing blocking the lens. One of the best few, by the seed. Reading to do first, and
    to verify before citing: viewpoint entropy and terrain viewpoint selection.
+   Begun (November 2026): `src/terrain/features.rs` finds the candidates' subjects (peaks and
+   volcanoes by prominence, their key cols as passes, cliffs, glaciers, terminal lakes,
+   confluences, gorges, headlands) on the simulations' cells, tries cameras on a ring about
+   each (12 directions, three distances about the one framing it for the lens, 2 m and 30 m
+   up), and measures them by rays marched over the large-scale ground: visibility of five
+   points on the feature, clearance, skyline, pitch, framing, and for the four most promising a
+   12 x 7 depth image (sky, near, middle, far, their spread, what blocks the lens). A `Judge`
+   scores those terms (`Heuristic`, rules of thumb); `"features"` on a landscape reports them,
+   `"feature"` on a camera takes one. Not done: the sun's angle on what is seen and the time
+   of day; rendered drafts (`trace::draft`) instead of the marched depth image; the seeded
+   choice among the best few; the reading above; candidates from shoulders and shores rather
+   than rings; features of the close level and of the ground's own detail.
 4. One seed to a scene file: `{"world": {"seed": n}}` expands, as `weather` does, into the
    landscape, weather, sun, camera and output it chose; `--dump-scene` writes that, and it is
    what the editor opens.

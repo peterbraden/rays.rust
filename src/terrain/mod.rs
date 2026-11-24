@@ -27,3 +27,4 @@ pub mod hydraulics;
 pub mod basins;
 pub mod rivers;
 pub mod river_water;
+pub mod features;

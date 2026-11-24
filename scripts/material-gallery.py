@@ -5,7 +5,7 @@ Each preset is rendered on its own: a rounded block and a sphere of it on a grey
 sunlight, about half a metre across, so its patterns are seen at the size they were made for.
 Overlays (dust, grime, moss...) are shown over a plain grey stone, worn_edges over red paint.
 
-    scripts/material-gallery.py [--size 320] [--samples 64] [--only name,...] [-o docs/material-library.png]
+    scripts/material-gallery.py [--size 320] [--samples 64] [--only name,...] [-o docs/material-library.jpg]
 """
 import argparse, json, os, subprocess, sys, tempfile
 
@@ -44,7 +44,7 @@ def main():
     a.add_argument("--columns", type=int, default=7)
     a.add_argument("--only", default="")
     a.add_argument("--rays", default=os.path.join(ROOT, "target/release/rays"))
-    a.add_argument("-o", "--output", default=os.path.join(ROOT, "docs/material-library.png"))
+    a.add_argument("-o", "--output", default=os.path.join(ROOT, "docs/material-library.jpg"))
     args = a.parse_args()
     from PIL import Image, ImageDraw
     library = json.load(open(os.path.join(ROOT, "src/material/library.json")))
@@ -69,7 +69,7 @@ def main():
     sheet = Image.new("RGB", (cols * args.size, rows * args.size), (0, 0, 0))
     for k, t in enumerate(tiles):
         sheet.paste(t, ((k % cols) * args.size, (k // cols) * args.size))
-    sheet.save(args.output)
+    sheet.save(args.output, **({"quality": 88, "optimize": True} if args.output.lower().endswith((".jpg", ".jpeg")) else {}))
 
 if __name__ == "__main__":
     main()

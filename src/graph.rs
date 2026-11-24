@@ -30,6 +30,10 @@
 //!   `impulses`, `profile` (phasor: `"sine"`, `"saw"`, `"square"`), `plan`, `seed`, `amplitude`.
 //! - `gradient` (along `direction`), `rings` (from the line through `center` along `axis`),
 //!   `spherical` (from `center`): distances over `scale`, POV-Ray's patterns of those names.
+//! - `occlusion`: the share of `rays` short rays (`radius` long) that meet something, cast out
+//!   from the surface (`style` `"cavity"`: crevices and corners) or in from under it
+//!   (`"edges"`: convex edges); needs the scene (in textures and layers' masks), `default`
+//!   without one.
 //! - `checker` (`size`, `plan`) and `brick` (`size` [x, y, z], `mortar`, `style` `"mortar"` or
 //!   `"id"`, `seed`): POV-Ray's, in [0, 1], box filtered.
 //! - `talus`: fallen blocks and scree, angular and fractured, many small to few large, sorted

@@ -79,12 +79,9 @@ impl MaterialModel for SurfaceLayers {
         let layer = self.layer_at(intersection, s);
         // The intersection's normal is already the base's relief (`shading_normal`); a layer
         // over it adds its own.
-        if !std::ptr::eq(layer, &self.layers[0]) {
-            if let Some(n) = layer.material.shading_normal(intersection, s) {
-                if (n.dot(&r.rd) > 0.) == (intersection.normal.dot(&r.rd) > 0.) {
-                    return layer.material.scatter(r, &Intersection { normal: n, ..*intersection }, s);
-                }
-            }
+        let own = (!std::ptr::eq(layer, &self.layers[0])).then(|| layer.material.shading_normal(intersection, s)).flatten();
+        if let Some(n) = own.filter(|n| (n.dot(&r.rd) > 0.) == (intersection.normal.dot(&r.rd) > 0.)) {
+            return layer.material.scatter(r, &Intersection { normal: n, ..*intersection }, s);
         }
         layer.material.scatter(r, intersection, s)
     }

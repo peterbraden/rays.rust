@@ -9337,17 +9337,18 @@
     "library": {
       "label": "Library material",
       "group": "Other",
-      "doc": "A ready-made procedural material (src/material/library.json, docs/procedural-materials.md): stones, woods, metals and more, patterns sized in metres. Any other field replaces the preset's own.",
+      "doc": "A ready-made procedural material (src/material/library.json, docs/procedural-materials.md): stones, woods, metals and more, patterns sized in metres, and overlays that weather another material. A field naming one of the preset's variables sets it (amount, color, palette, tint...); any other field replaces the preset's own.",
       "fields": [
         {
           "name": "name",
           "kind": "enum",
           "required": true,
           "doc": "The preset.",
-          "options": ["carrara_marble", "nero_marquina", "travertine", "granite", "slate", "concrete", "terrazzo", "oak", "pine", "walnut", "brushed_steel", "hammered_copper", "rusted_iron", "verdigris_copper", "galvanized_steel", "leather", "cork", "car_paint", "linen", "terracotta", "brick_wall"]
+          "options": ["carrara_marble", "nero_marquina", "travertine", "granite", "slate", "concrete", "terrazzo", "oak", "pine", "walnut", "brushed_steel", "hammered_copper", "rusted_iron", "verdigris_copper", "galvanized_steel", "leather", "cork", "car_paint", "linen", "terracotta", "brick_wall", "dust", "grime", "rain_streaks", "moss", "lichen", "mud_splash", "worn_edges", "grey_granite", "weathered_granite", "black_galaxy", "quartzite", "engineered_quartz", "quartz_crystal", "rose_quartz", "calacatta_marble", "verde_marble", "limestone", "basalt", "dried_mud", "asphalt", "glazed_tiles", "plaster", "weathered_oak", "maple", "ebony", "aged_bronze", "cast_iron", "chipped_paint"]
         },
         {"name": "scale", "kind": "number", "default": 1, "doc": "Size of every pattern in the material, and of its relief."},
-        {"name": "seed", "kind": "integer", "default": 0, "doc": "Moves every pattern to another part of its noise, so objects of one material differ."}
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Moves every pattern to another part of its noise, so objects of one material differ."},
+        {"name": "over", "kind": "material", "default": null, "doc": "For an overlay (dust, grime, rain_streaks, moss, lichen, mud_splash, worn_edges): the material it lies over, a name or a definition."}
       ],
       "example": {"type": "library", "name": "oak"}
     },

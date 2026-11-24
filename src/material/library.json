@@ -2074,11 +2074,11 @@
     "doc": "Overlay: a fine pale dust settled on whatever faces up, thickest in corners, over the material given as \"over\".",
     "overlay": true,
     "variables": {
-      "amount": 0.7,
+      "amount": 0.9,
       "color": [
-        0.56,
-        0.52,
-        0.45
+        0.66,
+        0.62,
+        0.55
       ],
       "lie": {
         "node": "multiply",

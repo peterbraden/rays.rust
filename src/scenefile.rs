@@ -519,7 +519,7 @@ impl SceneFile {
                 "step" => Interpolation::Step,
                 s => panic!("a color_map's interpolation is linear, smooth or step, not \"{}\"", s),
             };
-            return crate::textures::ColorTexture::Pattern(PatternTexture { pattern, map, interpolation });
+            return crate::textures::ColorTexture::Pattern(Box::new(PatternTexture { pattern, map, interpolation }));
         }
         if v.get("node").is_some() {
             return crate::textures::ColorTexture::Graph(Arc::new(crate::graph::Graph::parse(v)

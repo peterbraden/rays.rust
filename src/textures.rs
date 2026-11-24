@@ -364,7 +364,7 @@ pub enum ColorTexture {
     Graph(std::sync::Arc<crate::graph::Graph>),
     Slope(SlopeTexture),
     Terrain(TerrainTexture),
-    Pattern(PatternTexture),
+    Pattern(Box<PatternTexture>),
 }
 
 /// How a colour map blends between its entries.

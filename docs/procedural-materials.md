@@ -8,12 +8,11 @@ same pieces, built on its function graphs (`src/graph.rs`), with sources of nois
 literature, filtering so detail finer than a pixel fades instead of aliasing, and a library of
 ready-made materials.
 
-![The material library](material-library.png)
+![The material library](material-library.jpg)
 
 The library, by `scripts/material-gallery.py` (each preset alone, on a block 40 cm across and a
-sphere): carrara_marble, nero_marquina, travertine, granite, slate, concrete, terrazzo; oak,
-pine, walnut, brushed_steel, hammered_copper, rusted_iron, verdigris_copper; galvanized_steel,
-leather, cork, car_paint, linen, terracotta, brick_wall.
+sphere, in rows of seven, in the library's order: the first table's first 21, then the seven
+overlays, over plain grey stone (`worn_edges` over red paint), then the rest of the first table).
 
 ## Using the library
 
@@ -54,7 +53,58 @@ Each preset is an ordinary material definition in
 | `linen` | A plain weave of threads a millimetre apart, in the x-z plane (for cloth lying flat). |
 | `terracotta` | Fired clay, mottled, with a gritty surface. |
 | `brick_wall` | Bricks in running bond (courses along y), each its own shade, in recessed mortar. |
+| `grey_granite` | `granite` with a grey `palette`: white feldspar, grey quartz, black biotite. |
+| `weathered_granite` | Granite left outdoors: honed dull, feldspar chalky, iron stains, `grime` in its hollows and `lichen` on top: overlays on a preset. |
+| `black_galaxy` | Polished black granite flecked with coppery bronzite that glints (a mix with a conductor, by cell). |
+| `quartzite` | Sugary fused quartz grains, faintly banded grey and rose, each grain its own roughness. |
+| `engineered_quartz` | A worktop of crushed quartz in white resin, grey specks and tiny mirror flecks. |
+| `quartz_crystal` | Clear quartz (n = 1.544) with milky veils of inclusions: a mix of clear and frosted glass by billowed noise; `tint` for smoky quartz. |
+| `rose_quartz` | `quartz_crystal` tinted pink. |
+| `calacatta_marble` | Warm white with bold, wide grey and gold veins. |
+| `verde_marble` | `nero_marquina`'s vein network in a green `palette`: Verde Alpi. |
+| `limestone` | Pale cream, mottled, with scattered shell fragments (flattened cells' walls) and pores. |
+| `basalt` | Fine dark grey with vesicles: round gas holes, dark and hollow. |
+| `dried_mud` | A crust cracked into polygons (cells' walls, warped), the plates curling up at their edges. |
+| `asphalt` | Black bitumen packed with grey and pale stones, worn smooth on top. |
+| `glazed_tiles` | 15 cm glazed tiles (`brick` with square bricks), each a shade between `color` and `color2`, in grout. |
+| `plaster` | Trowelled lime plaster, off-white, with the shallow sweeps of the trowel. |
+| `weathered_oak` | Oak's rings silvered grey, the earlywood worn back so the grain stands up, and checks split along it. |
+| `maple` | Curly maple: pale, with the rippling flame figure of phasor noise across the grain. |
+| `ebony` | Nearly black, with faint brown streaks along the grain, French polished. |
+| `aged_bronze` | Brown-black patina, darkest in hollows, rubbed bright on its edges (`worn_edges` over a patina). |
+| `cast_iron` | Dark, sand-rough cast metal with a little rust in its hollows. |
+| `chipped_paint` | Paint (`color`) flaking in patches and worn on edges, rusted iron beneath. |
 
+Presets have parameters: the variables a preset defines can be set by fields of the same name,
+`{"type": "library", "name": "granite", "palette": [[0, [0.1, 0.1, 0.1]], ...]}`, as
+`grey_granite` is made. Those worth knowing: `palette` (granite, nero_marquina, oak),
+`color` (glazed_tiles, chipped_paint, the overlays), `tint` (quartz_crystal), `amount` (the
+overlays).
+
+### Weathering
+
+Overlays lie over another material, `"over"` (a name, or a definition), so anything can be
+weathered, and stacked:
+
+```json
+"OLD_STEP": { "type": "library", "name": "moss", "amount": 0.5,
+              "over": { "type": "library", "name": "grime", "over": "STONE" } }
+```
+
+| Overlay | Lies where |
+|---|---|
+| `dust` | On what faces up, thicker in places (slope, broken up by noise). `amount`, `color`. |
+| `grime` | In crevices, corners and where objects meet: the `occlusion` node's short rays find them. `amount`, `color`, `reach` (metres). |
+| `rain_streaks` | Dark runs down steep faces, long and thin. `amount`, `color`. |
+| `moss` | Raised cushions on what faces up and in damp hollows. `amount`. |
+| `lichen` | Round crusts with paler rims, more on faces turned up. `amount` (the share of possible patches), `color`, `rim`. |
+| `mud_splash` | Thick at the foot, spattered above, up to `height` metres above the ground (the scene's y = 0). `amount`, `color`. |
+| `worn_edges` | Wears through the material on convex edges and corners (the `occlusion` node, cast inwards) to what is `under` it (bare steel by default). `amount`, `width` (metres: about the edges' rounding). |
+
+Overlays are `surface_layers`: the base's bump stays under them (dust lies on the stone's
+relief), and a layer with its own bump adds it (moss cushions). Their masks read slope, aspect
+and altitude in the scene's directions, whichever way the object is turned, and noise in the
+object's own space.
 ## Patterns and colour maps
 
 Any colour (a lambertian's or plastic's `albedo`, a mix's `amount`, a roughness) can be a
@@ -86,6 +136,7 @@ Beyond Perlin noise (`fractal`, with `ridged` and `billow` styles) and Worley's 
 | `gradient`, `rings`, `spherical` | POV-Ray's gradient (distance along `direction`), cylindrical rings (distance from the line through `center` along `axis`), and onion shells, each over `scale`. |
 | `wave` | Any input turned into repeating bands, `frequency` per unit of it, `phase`, as POV-Ray's wave types: `shape` `ramp`, `triangle`, `sine`, `scallop` (\|sin\|), `square`; `exponent` sharpens. |
 | `checker`, `brick` | POV-Ray's: alternate cubes `size` across; bricks `size` [x, y, z] (default a UK brick in metres) in running bond with `mortar` between, `style` `mortar` (1 in it) or `id` (a value per brick). |
+| `occlusion` | The share of `rays` (6) short rays, `radius` (0.05 m) long, that meet something: cast out from the surface, how enclosed it is (`style` `cavity`: crevices, corners, where objects meet, as dirt gathers there); cast in from under it, how near a convex edge it is (`style` `edges`: wear). Directions are hashed from the point, so they converge over a pixel. Costs rays: use it in masks, not in bumps. |
 | `transform` | Its `input` scaled, rotated (degrees about x, then y, then z) and moved (`translate`): stretch cells into pores, turn bands. |
 
 ### Filtering

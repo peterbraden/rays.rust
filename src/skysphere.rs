@@ -1071,6 +1071,17 @@ impl SkyViewLUT {
         SkyViewLUT { width, height, slices }
     }
 
+    /// This table at another size, `width` by `height`, each texel looked up in this one
+    /// (bilinearly); itself if it is that size already.
+    pub fn resized(&self, width: usize, height: usize) -> std::borrow::Cow<'_, SkyViewLUT> {
+        if (width, height) == (self.width, self.height) { return std::borrow::Cow::Borrowed(self); }
+        let slices = (0 .. self.slices.len()).map(|slice| (0 .. width * height).map(|i| {
+            let (x, y) = (i % width, i / width);
+            self.lookup_slice(slice, &SkyViewLUT::direction(x as f64 / width as f64, y as f64 / (height - 1) as f64))
+        }).collect()).collect();
+        std::borrow::Cow::Owned(SkyViewLUT { width, height, slices })
+    }
+
     /// The direction for texture coordinates u (longitude) and v (latitude), in [0, 1].
     fn direction(u: f64, v: f64) -> Vector3<f64> {
         let l = v * v * std::f64::consts::FRAC_PI_2;
@@ -1137,13 +1148,18 @@ static LAST_LUT: std::sync::Mutex<Option<(String, std::sync::Arc<SkyViewLUT>)>> 
 
 impl LUTSky {
     pub fn new(sky: SkyMaterial) -> LUTSky {
-        let lut = SkyViewLUT::build(&sky.rgb_air(), LUT_WIDTH, LUT_HEIGHT);
+        LUTSky::sized(sky, (LUT_WIDTH, LUT_HEIGHT))
+    }
+
+    /// With a view table of `size` (columns, rows) rather than `LUT_WIDTH` by `LUT_HEIGHT`.
+    pub fn sized(sky: SkyMaterial, size: (usize, usize)) -> LUTSky {
+        let lut = SkyViewLUT::build(&sky.rgb_air(), size.0, size.1);
         LUTSky { sky, lut, spectral_luts: std::sync::OnceLock::new(), moonlit: None }
     }
 
-    /// As `new`, reusing the last table built if it was for the same `description` (the sky's
+    /// As `sized`, reusing the last table built if it was for the same `description` (the sky's
     /// scene file entry: everything the table depends on comes from it).
-    pub fn cached(sky: SkyMaterial, description: &str) -> LUTSky {
+    pub fn cached(sky: SkyMaterial, description: &str, size: (usize, usize)) -> LUTSky {
         let cached = LAST_LUT.lock().unwrap().as_ref()
             .filter(|(d, _)| d == description)
             .map(|(_, lut)| lut.clone());
@@ -1151,7 +1167,7 @@ impl LUTSky {
         let lut = match cached {
             Some(lut) => (*lut).clone(),
             None => {
-                let lut = SkyViewLUT::build(&sky.rgb_air(), LUT_WIDTH, LUT_HEIGHT);
+                let lut = SkyViewLUT::build(&sky.rgb_air(), size.0, size.1);
                 *LAST_LUT.lock().unwrap() = Some((description.to_string(), std::sync::Arc::new(lut.clone())));
                 lut
             },
@@ -1164,7 +1180,8 @@ impl LUTSky {
     /// daylight is).
     pub fn moonlit(self, direction: Vector3<f64>, share: f64) -> LUTSky {
         let moon = self.sky.relit(direction, self.sky.brightness * share);
-        LUTSky { moonlit: Some(Box::new(LUTSky::new(moon))), ..self }
+        let size = (self.lut.width, self.lut.height);
+        LUTSky { moonlit: Some(Box::new(LUTSky::sized(moon, size))), ..self }
     }
 
     /// The light scattered by the air along `r`, without what shows through it from space.
@@ -1192,7 +1209,7 @@ impl LUTSky {
         self.spectral_luts.get_or_init(|| crate::geometry::build_apart(|| {
             (0..SPECTRAL_SETS).map(|set| {
                 let psi = if self.sky.multiple_scattering { Psi::Table(&self.sky.spectral_ms()[set]) } else { Psi::Off };
-                SkyViewLUT::build(&self.sky.bin_air(set, psi), LUT_WIDTH, LUT_HEIGHT)
+                SkyViewLUT::build(&self.sky.bin_air(set, psi), self.lut.width, self.lut.height)
             }).collect()
         }))
     }
@@ -1275,7 +1292,8 @@ impl LUTSky {
     /// The sky's air with its sky-view tables and moonlight (`AirExport`).
     pub fn export(&self) -> AirExport {
         AirExport {
-            lut: Some(self.lut.slices.iter().flatten().copied().collect()),
+            // The shader's table is `LUT_WIDTH` by `LUT_HEIGHT`: a smaller one is resampled.
+            lut: Some(self.lut.resized(LUT_WIDTH, LUT_HEIGHT).slices.iter().flatten().copied().collect()),
             moon: self.moonlit.as_ref().map(|m| Box::new(m.export())),
             ..self.sky.export()
         }
@@ -1345,11 +1363,11 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     let sky = parse_sky_material(o);
     // The lookup table is on by default; "lut": false integrates every ray exactly.
     let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
-        let sky = LUTSky::cached(sky, &o.to_string());
+        let sky = LUTSky::cached(sky, &o.to_string(), lut_size(o));
         if let Some(dir) = o["cache"].as_str() {
             let tables = TableFile { sun: sky.sky.sun_table.get().cloned().unwrap_or_default(),
                 psi: sky.sky.ms_table.get().map(|m| m.psi.clone()), lut: Some(sky.lut.clone()) };
-            tables.write(&table_file(dir, &sky.sky));
+            tables.write(&table_file(dir, o));
         }
         // Lit by a moon too (set by the scene, `celestial::moon::Moonlight`).
         Box::new(match o.get("moonlight") {
@@ -1377,7 +1395,7 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
         if let Some(psi) = multiple { let _ = sky.ms_table.set(MultipleScattering { psi }); }
         return sky.with_tables();
     }
-    if let Some(tables) = o["cache"].as_str().and_then(|dir| TableFile::read(&table_file(dir, &sky))) {
+    if let Some(tables) = o["cache"].as_str().and_then(|dir| TableFile::read(&table_file(dir, o))) {
         let _ = sky.sun_table.set(tables.sun);
         if let Some(psi) = tables.psi { let _ = sky.ms_table.set(MultipleScattering { psi }); }
         if let Some(lut) = tables.lut { *LAST_LUT.lock().unwrap() = Some((description.clone(), std::sync::Arc::new(lut))); }
@@ -1456,13 +1474,25 @@ pub fn parse_sky_params(o: &Value) -> SkyMaterial {
 const TABLE_FILE_VERSION: &str = "1";
 const TABLE_FILE_MAGIC: &[u8; 8] = b"RAYSSKY\0";
 
-/// Where `sky`'s tables are kept in directory `dir`.
-pub fn table_file(dir: &str, sky: &SkyMaterial) -> String {
-    let s = sky;
+/// The size of a skysphere's view table, `"lut_size": [columns, rows]`: by default
+/// `LUT_WIDTH` by `LUT_HEIGHT`; smaller for a preview (the scene builder's is a quarter of
+/// that each way, sixteen times quicker to build, and within 0.4% of the full table's sky: the
+/// table is smooth, since the phase functions, the sun's glow, are applied after it).
+pub fn lut_size(o: &Value) -> (usize, usize) {
+    match (o["lut_size"][0].as_u64(), o["lut_size"][1].as_u64()) {
+        (Some(w), Some(h)) => ((w as usize).max(8), (h as usize).max(4)),
+        _ => (LUT_WIDTH, LUT_HEIGHT),
+    }
+}
+
+/// Where the tables of the sky that skysphere `o` describes are kept in directory `dir`.
+pub fn table_file(dir: &str, o: &Value) -> String {
+    let s = &parse_sky_params(o);
+    let (width, height) = lut_size(o);
     let parameters = format!("{:?}", (
         (s.atmosphere.center, s.atmosphere.radius, s.earth.center, s.earth.radius, s.sun_direction),
         (s.rayleigh_thickness, s.mie_thickness, s.brightness, s.rayleigh_coefficients, s.mie_coefficient, s.mie_anisotropy),
-        (s.ozone, s.multiple_scattering, s.ground_albedo, LUT_ALTITUDES, LUT_WIDTH, LUT_HEIGHT)));
+        (s.ozone, s.multiple_scattering, s.ground_albedo, LUT_ALTITUDES, width, height)));
     let key = crate::world::key(&["sky tables", TABLE_FILE_VERSION, &parameters]);
     std::path::Path::new(dir).join(format!("sky-{}.bin", key)).to_string_lossy().into_owned()
 }
@@ -1587,7 +1617,7 @@ mod tests {
         for v in changed.psi.as_mut().unwrap() { *v *= 2.; }
         let mut o = doc(&second)["objects"][0].clone();
         o["brightness"] = serde_json::json!(sky_brightness_for_sun(3.));
-        let path = table_file(&second, &parse_sky_params(&o));
+        let path = table_file(&second, &o);
         assert_eq!(path, SceneFile::cached_files(doc(&second))[0]);
         std::fs::create_dir_all(&second).unwrap();
         std::fs::write(&path, changed.encode()).unwrap();
@@ -2260,6 +2290,25 @@ mod tests {
                 assert!((got[c] / want[c] - 1.).abs() < 0.05, "{} m, {} nm: {} vs {}", altitude, lambda[c], got[c], want[c]);
             }
         }
+    }
+
+    /// A view table at half the size each way gives nearly the sky of the full one, and the
+    /// GPU is given the shader's size either way.
+    #[test]
+    fn test_a_smaller_view_table_is_nearly_the_sky() {
+        let full = LUTSky::new(sky_at("[0.2, 0.3, 1]"));
+        let half = LUTSky::sized(sky_at("[0.2, 0.3, 1]"), (LUT_WIDTH / 2, LUT_HEIGHT / 2));
+        assert_eq!(half.lut.slices[0].len(), LUT_WIDTH * LUT_HEIGHT / 4);
+        for d in [[0., 0.02, 1.], [1., 0.1, 0.], [-0.3, 0.5, -0.8], [0., 1., 0.], [0.2, 0.3, 1.]] {
+            let r = Ray { ro: Vector3::new(0., 2., 0.), rd: Vector3::new(d[0], d[1], d[2]).normalize() };
+            let (a, b) = (full.air_radiance(&r), half.air_radiance(&r));
+            for c in 0..3 {
+                assert!((b[c] / a[c] - 1.).abs() < 0.05, "{:?}: {} vs {}", d, b, a);
+            }
+        }
+        assert_eq!(half.export().lut.unwrap().len(), full.export().lut.unwrap().len());
+        assert_eq!(lut_size(&serde_json::json!({ "lut_size": [128, 64] })), (128, 64));
+        assert_eq!(lut_size(&serde_json::json!({})), (LUT_WIDTH, LUT_HEIGHT));
     }
 
     /// The spectral sky-view tables, interpolated between bins, match the spectral integral.

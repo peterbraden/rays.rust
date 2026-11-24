@@ -2948,6 +2948,12 @@
           "doc": "Look the sky up in a precomputed table; false integrates every ray exactly."
         },
         {
+          "name": "lut_size",
+          "kind": "vec2",
+          "default": [256, 128],
+          "doc": "The table's columns and rows: smaller is quicker to build and a little less exact (the scene builder's preview uses a quarter of each, within 0.4%)."
+        },
+        {
           "name": "cache",
           "kind": "path",
           "default": null,

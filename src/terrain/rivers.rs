@@ -490,8 +490,9 @@ pub fn falls(courses: &[Course], levels: &mut [Vec<f64>], kind: &mut [Vec<Kind>]
 }
 
 /// A river vertex with its level, and how far below the drawn ground that is; or in a lake.
+/// With how far it is along its course, metres.
 #[derive(Clone, Copy, Debug)]
-struct Vertex { node: Node, level: f64, cut: f64, kind: Kind }
+struct Vertex { node: Node, level: f64, cut: f64, kind: Kind, along: f64 }
 
 /// What a stretch of a course is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -620,8 +621,13 @@ impl Carve {
     /// and the course's `falls`.
     pub fn new(courses: &[Course], levels: &[Vec<f64>], ground: &[Vec<f64>], kind: &[Vec<Kind>], falls: Vec<Fall>) -> Carve {
         let courses: Vec<Vec<Vertex>> = courses.iter().zip(levels).zip(ground).zip(kind)
-            .map(|(((c, l), g), k)| c.nodes.iter().zip(l).zip(g).zip(k)
-                .map(|(((&node, &level), &g), &kind)| Vertex { node, level, cut: if kind == Kind::River { (g - level).max(0.) } else { 0. }, kind }).collect()).collect();
+            .map(|(((c, l), g), k)| {
+                let mut along = 0.;
+                c.nodes.iter().enumerate().zip(l).zip(g).zip(k).map(|((((j, &node), &level), &g), &kind)| {
+                    if j > 0 { along += dist(c.nodes[j - 1].p, node.p); }
+                    Vertex { node, level, cut: if kind == Kind::River { (g - level).max(0.) } else { 0. }, kind, along }
+                }).collect()
+            }).collect();
         // Lakes are drawn as before (the mask; step 8 of the plan), so neither carved nor
         // given a surface; nor is water in the air.
         let segments: Vec<Segment> = courses.iter()
@@ -732,9 +738,10 @@ impl Carve {
     }
 
     /// The flow at `q` if it is on a river's surface (as `ribbon` draws it): the node there,
-    /// interpolated, and the direction of flow (patch coordinates, unit).
-    pub fn water_at(&self, q: Point) -> Option<(Node, Point)> {
-        let mut best: Option<(f64, Node, Point)> = None;
+    /// interpolated, the direction of flow (patch coordinates, unit), and where `q` is on the
+    /// river: metres along its course and across it.
+    pub fn water_at(&self, q: Point) -> Option<(Node, Point, [f64; 2])> {
+        let mut best: Option<(f64, Node, Point, [f64; 2])> = None;
         for s in self.near(q) {
             let (t, r) = nearest_on(s.a.node.p, s.b.node.p, q);
             let (half, _, _) = s.at(t);
@@ -749,9 +756,13 @@ impl Carve {
             };
             let (dx, dz) = (b.p[0] - a.p[0], b.p[1] - a.p[1]);
             let len = dx.hypot(dz).max(1e-12);
-            best = Some((r, node, [dx / len, dz / len]));
+            let (ux, uz) = (dx / len, dz / len);
+            // Where on the river: how far along its course, and how far across (left of the
+            // flow positive).
+            let station = [l(s.a.along, s.b.along), (q[0] - a.p[0]) * -uz + (q[1] - a.p[1]) * ux];
+            best = Some((r, node, [ux, uz], station));
         }
-        best.map(|(_, n, d)| (n, d))
+        best.map(|(_, n, d, s)| (n, d, s))
     }
 
     /// The river node nearest `q`, not in a lake: its point, level and node.

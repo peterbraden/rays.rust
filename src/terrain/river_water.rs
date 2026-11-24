@@ -157,6 +157,74 @@ pub struct RiverWater {
     pub noise: crate::noise::PerlinNoise,
     /// The lakes' waves.
     pub waves: LakeWaves,
+    /// The rivers' standing waves.
+    pub currents: RiverWaves,
+}
+
+/// The wavelength (m) of the waves that stand still on a current `speed` m/s and `depth` m
+/// deep: those travelling upstream as fast as the water carries them down, ω(k) = k U, so
+/// tanh(k d) = k U² / g by the dispersion of gravity waves over depth d. Behind each stone
+/// and riffle they are what the surface of a shallow, quick river is patterned by, their
+/// crests across the flow. Below critical flow (U² < g d) there is one such k; at and above,
+/// none in shallow water, and the deep-water one, g / U², is taken.
+pub fn stationary_wavelength(speed: f64, depth: f64) -> f64 {
+    let (g, u2, d) = (9.81, speed.max(0.05).powi(2), depth.max(0.01));
+    let deep = g / u2;
+    let k = if u2 >= g * d { deep } else {
+        // tanh(kd) - k U²/g falls through zero once, between deep (where tanh < 1 = k U²/g)
+        // and 0.
+        let (mut lo, mut hi) = (1e-9, deep);
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if (mid * d).tanh() > mid * u2 / g { lo = mid } else { hi = mid }
+        }
+        0.5 * (lo + hi)
+    };
+    std::f64::consts::TAU / k
+}
+
+/// The rivers' surfaces: Tessendorf's waves, as the sea's (`ocean::WaveField`), peaking at the
+/// stationary wavelength of each stretch's flow (`stationary_wavelength`), crests across the
+/// flow, laid out along and across the river so they follow its bends; their slopes as rough
+/// as the flow's Froude number makes them (`roughness`, a model choice, the share of it
+/// above the ripples the material keeps). A field for each half power of two of wavelength,
+/// made when first wanted.
+pub struct RiverWaves {
+    fields: Vec<std::sync::OnceLock<crate::ocean::WaveField>>,
+    seed: u64,
+}
+
+/// The shortest river wavelength given a field of its own (2^(LOWEST/2) m) and how many.
+const LOWEST: i32 = -6;
+const BINS: usize = 16;
+/// The ripples the material keeps (`roughness` at rest): the rest of the river's roughness is
+/// in its waves.
+const RIPPLES: f64 = 0.0005;
+
+impl RiverWaves {
+    pub fn new(seed: u64) -> RiverWaves {
+        RiverWaves { fields: (0..BINS).map(|_| std::sync::OnceLock::new()).collect(), seed }
+    }
+
+    /// The slopes (along the flow and across it) of the waves on the river `node` at `station`
+    /// (metres along and across it).
+    pub fn slopes(&self, node: &Node, station: [f64; 2]) -> (f64, f64) {
+        let speed = node.froude * (9.81 * node.depth.max(0.)).sqrt();
+        if speed <= 0.01 { return (0., 0.); }
+        let lambda = stationary_wavelength(speed, node.depth);
+        let bin = ((2. * lambda.log2()).round() as i32 - LOWEST).clamp(0, BINS as i32 - 1);
+        let field = self.fields[bin as usize].get_or_init(|| {
+            let peak = 2f64.powf((bin + LOWEST) as f64 / 2.);
+            let scale = (25. * peak / 487.).min(1.);
+            crate::ocean::WaveField::sea(nalgebra::Vector2::new(speed, 0.), 0., self.seed.wrapping_add(bin as u64),
+                crate::ocean::SeaState { peak: Some(peak), scale, choppiness: 0., resolved: Some(1.), ..Default::default() })
+        });
+        let wanted = (roughness(node.froude) - RIPPLES).max(0.);
+        if field.mean_square_slope <= 0. { return (0., 0.); }
+        let k = (wanted / field.mean_square_slope).sqrt();
+        let w = field.at(station[0], station[1]);
+        (k * w.y, k * w.z)
+    }
 }
 
 /// The waves the wind raises on the lakes (`ocean::WaveField::lake`): Tessendorf's, as on the
@@ -213,16 +281,17 @@ impl RiverWater {
     }
 
     /// The flow at scene point `p`, and its direction there (scene, unit); its Froude number
-    /// varying through pools and riffles.
-    fn flow(&self, p: &Vector3<f64>) -> Option<(Node, Vector3<f64>)> {
+    /// varying through pools and riffles. With where `p` is on the river: metres along its
+    /// course and across it.
+    fn flow(&self, p: &Vector3<f64>) -> Option<(Node, Vector3<f64>, [f64; 2])> {
         let (d, _) = self.frame.on_planet(p);
-        let (mut node, along) = self.relief.river_at(&d)?;
+        let (mut node, along, station) = self.relief.river_at(&d)?;
         // The flow's direction, from the patch's tangent plane into the scene.
         let ahead = (self.frame.to_scene(&(d + along / self.frame.radius).normalize(), 0.) - self.frame.to_scene(&d, 0.)).normalize();
         let width = 2. * node.half;
         let wander = 2. * self.noise.noise(p.x / (20. * width), p.y / (20. * width), p.z / (20. * width)) - 1.;
-        node.froude *= riffles(p.dot(&ahead), width, wander);
-        Some((node, ahead))
+        node.froude *= riffles(station[0], width, wander);
+        Some((node, ahead, station))
     }
 
     /// The sea's water as it is here.
@@ -231,7 +300,7 @@ impl RiverWater {
         // Bubbles left by the foam pale the water and turn it green-blue.
         let bubbles = Color::new(0.01, 0.05, 0.06) * foam;
         PhysicalOcean {
-            water: body + bubbles, roughness: roughness(node.froude), center: Some(self.frame.centre()),
+            water: body + bubbles, roughness: RIPPLES, center: Some(self.frame.centre()),
             absorption: Some(attenuation), foam: None,
         }
     }
@@ -249,16 +318,24 @@ impl RiverWater {
 }
 
 impl RiverWater {
-    /// The hit as the lake's waves tilt it, seen from above: its normal from their slopes.
-    /// Unchanged off the lakes, from below, or where a wave would face away from the ray.
-    fn on_waves<'a>(&self, r: &Ray, intersection: &Intersection<'a>) -> Intersection<'a> {
+    /// The hit as the waves tilt it, seen from above: its normal from their slopes, the river's
+    /// (`RiverWaves`) where it flows, else the lake's. Unchanged from below, or where a wave
+    /// would face away from the ray.
+    fn on_waves<'a>(&self, r: &Ray, intersection: &Intersection<'a>, flow: Option<&(Node, Vector3<f64>, [f64; 2])>) -> Intersection<'a> {
         let p = intersection.point;
         let up = (p - self.frame.centre()).normalize();
         if r.rd.dot(&up) >= 0. { return *intersection; }
-        let Some((sx, sz)) = self.waves.slopes(&self.relief, &self.frame, &p) else { return *intersection };
-        let tx = (Vector3::x() - up * up.x).normalize();
-        let tz = (Vector3::z() - up * up.z).normalize();
-        let n = (up - tx * sx - tz * sz).normalize();
+        let n = if let Some((node, ahead, station)) = flow {
+            let side = up.cross(ahead).normalize();
+            let ahead = side.cross(&up);
+            let (sa, sc) = self.currents.slopes(node, *station);
+            (up - ahead * sa - side * sc).normalize()
+        } else {
+            let Some((sx, sz)) = self.waves.slopes(&self.relief, &self.frame, &p) else { return *intersection };
+            let tx = (Vector3::x() - up * up.x).normalize();
+            let tz = (Vector3::z() - up * up.z).normalize();
+            (up - tx * sx - tz * sz).normalize()
+        };
         if r.rd.dot(&n) >= 0. { return *intersection; }
         Intersection { normal: n, ..*intersection }
     }
@@ -266,9 +343,10 @@ impl RiverWater {
 
 impl MaterialModel for RiverWater {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
-        let waved = self.on_waves(r, intersection);
+        let flow = self.flow(&intersection.point);
+        let waved = self.on_waves(r, intersection, flow.as_ref());
         let intersection = &waved;
-        let Some((node, along)) = self.flow(&intersection.point) else {
+        let Some((node, along, _)) = flow else {
             return self.water(&Node::still(), 0.).scatter(r, intersection, s);
         };
         let cover = whitewater(node.froude, 1.5 * node.depth / node.grain.max(1e-4));
@@ -282,7 +360,8 @@ impl MaterialModel for RiverWater {
     }
 
     fn sun_glint(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> Option<Color> {
-        let waved = self.on_waves(r, intersection);
+        let flow = self.flow(&intersection.point);
+        let waved = self.on_waves(r, intersection, flow.as_ref());
         let intersection = &waved;
         let node = self.flow(&intersection.point).map_or(Node::still(), |f| f.0);
         self.water(&node, 0.).sun_glint(r, intersection, s)
@@ -386,6 +465,41 @@ mod tests {
         assert_eq!(curtain(3., 8.), 1.);
         assert!(curtain(20., 8.) < 0.7 && curtain(20., 8.) > curtain(40., 8.));
         assert_eq!(curtain(1000., 8.), 0.2);
+    }
+
+    #[test]
+    fn test_waves_stand_on_the_current() {
+        // In deep water, waves stand still on a current U when their phase speed √(g/k) is U:
+        // λ = 2π U² / g, 64 cm for 1 m/s.
+        assert!((stationary_wavelength(1., 100.) - std::f64::consts::TAU / 9.81).abs() < 1e-6);
+        // Over 29 cm, the same current: a little longer (kd is 2.8, so the bed barely slows
+        // them), satisfying the dispersion relation, tanh(kd) = k U² / g.
+        let l = stationary_wavelength(1., 0.29);
+        let k = std::f64::consts::TAU / l;
+        assert!(l > std::f64::consts::TAU / 9.81 && ((k * 0.29).tanh() - k / 9.81).abs() < 1e-6, "{}", l);
+        // Nearer critical flow they lengthen without bound.
+        assert!(stationary_wavelength(1.6, 0.29) > 3. * l);
+    }
+
+    #[test]
+    fn test_a_river_is_as_rough_as_its_froude_number_makes_it() {
+        let waves = RiverWaves::new(1);
+        let mut node = Node::still();
+        node.depth = 0.29;
+        node.froude = 0.57;
+        let n = 4000;
+        let mss = (0..n).map(|i| {
+            let (a, c) = waves.slopes(&node, [0.37 * i as f64, 0.11 * (i % 50) as f64]);
+            a * a + c * c
+        }).sum::<f64>() / n as f64;
+        let wanted = roughness(0.57) - RIPPLES;
+        assert!((mss / wanted - 1.).abs() < 0.25, "{} vs {}", mss, wanted);
+        // The crests lie across the flow: the slopes are steeper along it than across.
+        let (along, across) = (0..n).map(|i| waves.slopes(&node, [0.37 * i as f64, 0.11 * (i % 50) as f64]))
+            .fold((0., 0.), |(x, y), (a, c)| (x + a * a, y + c * c));
+        assert!(along > 2. * across, "{} {}", along, across);
+        // Still water: none.
+        assert_eq!(waves.slopes(&Node::still(), [3., 1.]), (0., 0.));
     }
 
     #[test]

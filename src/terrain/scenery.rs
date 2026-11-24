@@ -476,12 +476,12 @@ impl Relief {
 
     /// The river at direction `d`, if `d` is on a river's surface: the flow there, and its
     /// direction (a unit vector in the planet's frame).
-    pub fn river_at(&self, d: &Vector3<f64>) -> Option<(crate::terrain::rivers::Node, Vector3<f64>)> {
+    pub fn river_at(&self, d: &Vector3<f64>) -> Option<(crate::terrain::rivers::Node, Vector3<f64>, [f64; 2])> {
         let l = self.layers.iter().find(|l| l.contains(d))?;
         let (q, carve) = l.carve(d)?;
-        let (node, along) = carve.water_at(q)?;
+        let (node, along, station) = carve.water_at(q)?;
         match &l.domain.layout {
-            Layout::Patch { east, north, .. } => Some((node, east * along[0] + north * along[1])),
+            Layout::Patch { east, north, .. } => Some((node, east * along[0] + north * along[1], station)),
             Layout::Sphere { .. } => None,
         }
     }

@@ -670,7 +670,7 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         let at = frame.to_scene(&patch_dir(&l.domain, p), level);
         // A place to see it from: on a bank a few metres from the water, eyes 1.7 m above the
         // ground, looking along it 150 m, where the relief doesn't hide the water.
-        let (_, along) = carve.water_at(p)?;
+        let (_, along, _) = carve.water_at(p)?;
         let across = [-along[1], along[0]];
         let ground = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.height(&d, relief.slope(&d), 1.) };
         let shift = |o: crate::terrain::channel::Point, a: f64, c: f64| [o[0] + along[0] * a + across[0] * c, o[1] + along[1] * a + across[1] * c];
@@ -770,7 +770,7 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
     let waves = crate::terrain::river_water::LakeWaves::new(relief, frame, p.wind, seed);
     let water = Arc::new(crate::terrain::river_water::RiverWater {
         relief: relief.clone(), frame: frame.clone(), noise: crate::noise::PerlinNoise::shuffled(seed.wrapping_add(0x5a7e5)),
-        waves,
+        waves, currents: crate::terrain::river_water::RiverWaves::new(seed.wrapping_add(0x71de)),
     });
     let lookup = water.clone();
     let surface = crate::terrain::rivers::WaterSurface { mesh, centre: frame.centre(), attenuation: Box::new(move |p| lookup.attenuation(p)) };

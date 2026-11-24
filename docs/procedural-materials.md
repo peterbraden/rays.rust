@@ -308,6 +308,7 @@ Beyond Perlin noise (`fractal`, with `ridged` and `billow` styles) and Worley's 
 | `cells` | Worley's noise, now with styles `f2` and `id` (a random value per cell: crystals, chips, granules), a `metric` (`euclidean`, `manhattan`: faceted, `chebyshev`: square) and `jitter` (0: a regular lattice, 1 the default). |
 | `gradient`, `rings`, `spherical` | POV-Ray's gradient (distance along `direction`), cylindrical rings (distance from the line through `center` along `axis`), and onion shells, each over `scale`. |
 | `wave` | Any input turned into repeating bands, `frequency` per unit of it, `phase`, as POV-Ray's wave types: `shape` `ramp`, `triangle`, `sine`, `scallop` (\|sin\|), `square`; `exponent` sharpens. |
+| `bombing` | Texture bombing (Glanville, GPU Gems 2004): sprites scattered over the ground plane (x, z) from a grid of `cell`s, `density` a cell on average, each at its own place, angle, length (`size` [smallest, largest]) and layer; where they overlap the topmost shows. `shape` `leaf` (a lens pointed at both ends, `width` 0.35 of its length, with a midrib) or `disc` (an ellipse). `output`: `mask` (coverage, softened over the footprint), `id` (the topmost's own random value: a colour each), `vein` (its midrib) or `height` (stacked and rounded at the edge, for a bump). Unlike cells, which tile the plane, sprites overlap and leave gaps, each turned its own way: leaf litter, petals, flakes. |
 | `checker`, `brick` | POV-Ray's: alternate cubes `size` across; bricks `size` [x, y, z] (default a UK brick in metres) in running bond with `mortar` between, `style` `mortar` (1 in it) or `id` (a value per brick). |
 | `occlusion` | The share of `rays` (6) short rays, `radius` (0.05 m) long, that meet something: cast out from the surface, how enclosed it is (`style` `cavity`: crevices, corners, where objects meet, as dirt gathers there); cast in from under it, how near a convex edge it is (`style` `edges`: wear). Directions are hashed from the point, so they converge over a pixel. Costs rays: use it in masks, not in bumps. |
 | `transform` | Its `input` scaled, rotated (degrees about x, then y, then z) and moved (`translate`): stretch cells into pores, turn bands. |
@@ -368,6 +369,7 @@ scaled, so a library material keeps its size in metres on any object (`Geometry:
 - D. S. Ebert, F. K. Musgrave, D. Peachey, K. Perlin and S. Worley, "Texturing and Modeling: A Procedural Approach", 3rd ed., 2003.
 - A. A. Apodaca and L. Gritz, "Advanced RenderMan", 2000, chapter 11 (antialiasing procedural textures).
 - A. J. Liu, Z. Dong, M. Hašan and S. Marschner, "Simulating the structure and texture of solid wood", SIGGRAPH Asia 2016.
+- S. Glanville, "Texture bombing", GPU Gems, chapter 20, 2004.
 - J. F. Blinn, "Simulation of wrinkled surfaces", SIGGRAPH 1978.
 - I. Quilez, "Domain warping", <https://iquilezles.org/articles/warp/>.
 - POV-Ray 3.7 reference: "Pattern", "Color Map", "Normal"; and its include files `stones.inc`, `woods.inc`, `metals.inc`.

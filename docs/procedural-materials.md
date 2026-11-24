@@ -30,6 +30,29 @@ replaces the preset's own (here a more polished travertine). Patterns are sized 
 Each preset is an ordinary material definition in
 [`src/material/library.json`](../src/material/library.json): copy one into a scene to change it.
 
+### Presets of your own
+
+A scene can bring its own presets with a top-level `"library"`, read when the scene is loaded:
+a file in the same form as `library.json`, an object of presets written in the scene, or a list
+of these (later ones over earlier). They come before the built-in presets, so one of the same
+name replaces it, and they can build on built-in ones:
+
+```json
+"library": ["materials/alpine.json", {
+  "red_granite": { "doc": "Granite with a red palette.",
+    "material": { "type": "library", "name": "granite",
+      "palette": [[0, [0.03, 0.02, 0.02]], [0.25, [0.5, 0.2, 0.15]], [1, [0.7, 0.3, 0.22]]] } } }],
+"materials": { "PLINTH": { "type": "library", "name": "red_granite", "scale": 2 } }
+```
+
+A preset is `{"doc", "variables", "material"}` (and optionally `overlay`, `seed_direction`,
+`show`): `variables` are graphs and values used in `material` as `"$name"`, and are also its
+parameters. The scene's own `variables` don't reach into a library; presets have their own.
+Files are found as a scene's other files are (`crate::assets`, so the browser builder can
+provide them). A resumed render hashes the library files' contents with the scene, so editing
+a preset starts it afresh. To tune a preset, put it in a file and render it with
+`scripts/material-gallery.py --library FILE --only NAME`: no rebuild is needed.
+
 | Preset | What it is, and what it's made of |
 |---|---|
 | `carrara_marble` | White marble with grey veins: Perlin's marble, a wave of a gradient bent by turbulence (\|sin\| for veins that are thin and sharp), over cloudy white. Polished. |

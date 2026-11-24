@@ -5,6 +5,12 @@
       "doc": "Top-level keys of the scene file that are plain render settings. Any string \"$name\" anywhere in the file is replaced by the value of \"variables\"[name]. Colours are [r, g, b] or one of the names black, white, red, green, blue. Integers may be written as whole floats.",
       "fields": [
         {
+          "name": "library",
+          "kind": "json",
+          "default": null,
+          "doc": "Material presets of the scene's own, for {\"type\": \"library\"} materials, before the built-in ones (replacing any of the same name): a file of presets in library.json's form, an object of presets, or a list of these. Not subject to the scene's variables (presets have their own). Editing a library file restarts a resumed render. See docs/procedural-materials.md."
+        },
+        {
           "name": "width",
           "kind": "integer",
           "default": 640,

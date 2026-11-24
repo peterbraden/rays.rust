@@ -11,7 +11,11 @@ hills a few hundred metres across from above, so it is seen from a metre to the 
 "bark" (a trunk). Overlays that are natural are shown over "over_for_landscape" in the library
 (default granite_outcrop; "plain" for a plain grey rock) in those views.
 
-    scripts/material-gallery.py [--size 320] [--samples 64] [--only name,...] [-o docs/material-library.jpg]
+    scripts/material-gallery.py [--size 320] [--samples 64] [--only name,...] [--library FILE] [-o docs/material-library.jpg]
+
+--library adds a file of presets (library.json's form) over the built-in ones, as a scene's
+"library" does: presets are read at run time, so one can be tuned there and re-rendered
+without rebuilding the renderer.
 """
 import argparse, json, os, subprocess, sys, tempfile
 
@@ -102,11 +106,15 @@ def main():
     a.add_argument("--samples", type=int, default=64)
     a.add_argument("--columns", type=int, default=7)
     a.add_argument("--only", default="")
+    a.add_argument("--library", default="", help="a file of presets over the built-in ones")
     a.add_argument("--rays", default=os.path.join(ROOT, "target/release/rays"))
     a.add_argument("-o", "--output", default=os.path.join(ROOT, "docs/material-library.jpg"))
     args = a.parse_args()
     from PIL import Image, ImageDraw
     library = json.load(open(os.path.join(ROOT, "src/material/library.json")))
+    extra = os.path.abspath(args.library) if args.library else None
+    if extra:
+        library.update(json.load(open(extra)))
     names = list(library.keys())
     if args.only:
         names = [n for n in names if n in args.only.split(",")]
@@ -124,6 +132,8 @@ def main():
                      "bark": lambda: [trunk(m, args.size, args.samples)]}[show]()
             parts = []
             for k, v in enumerate(views):
+                if extra:
+                    v["library"] = extra
                 json.dump(v, open(path, "w"))
                 out = os.path.join(tmp, "%s-%d.png" % (n, k))
                 subprocess.run([args.rays, path, "--fresh", "-o", out], check=True, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

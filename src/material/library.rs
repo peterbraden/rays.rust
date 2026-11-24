@@ -8,6 +8,14 @@
 //! of them can be copied into a scene and changed; docs/procedural-materials.md describes
 //! each and what it is modelled on.
 //!
+//! A scene can add presets of its own, or replace built-in ones of the same name, with a
+//! top-level `"library"`: a file of presets in the same form as `library.json` (read through
+//! `crate::assets`, so the browser builder can provide it), an object of presets written in
+//! place, or a list of either, later ones over earlier. They are loaded at run time (`load`),
+//! so a preset can be tuned without rebuilding; the render key hashes the files' contents
+//! (`files`), so editing one restarts a resumable render. They reach the material parser in
+//! the scene's materials map under `SCENE_PRESETS`.
+//!
 //! `{"type": "library", "name": "oak", "scale": 1, "seed": 0}` uses one. `scale` sizes every
 //! pattern in it (and the depth of its relief with them); `seed` moves every pattern to another
 //! part of its noise, so two objects of the same material differ; any other field is put in
@@ -41,6 +49,53 @@ pub fn names() -> Vec<&'static str> {
     library().keys().map(|k| k.as_str()).collect()
 }
 
+/// The key under which a scene's own presets travel in its materials map: not a name a
+/// material can be referred to by.
+pub const SCENE_PRESETS: &str = "@library";
+
+/// The files a scene's `"library"` names, in order.
+pub fn files(spec: &Value) -> Vec<String> {
+    match spec {
+        Value::String(path) => vec![path.clone()],
+        Value::Array(items) => items.iter().flat_map(files).collect(),
+        _ => vec![],
+    }
+}
+
+/// A scene's own presets, from its `"library"`: a file's path, an object of presets, or a
+/// list of these, each over those before it.
+pub fn load(spec: &Value) -> Result<Map<String, Value>, String> {
+    let mut presets = Map::new();
+    let mut add = |found: Map<String, Value>, from: &str| -> Result<(), String> {
+        for (name, preset) in found {
+            if !preset.get("material").is_some_and(Value::is_object) {
+                return Err(format!("{}: preset \"{}\" needs a \"material\" object", from, name));
+            }
+            presets.insert(name, preset);
+        }
+        Ok(())
+    };
+    let parts: Vec<&Value> = match spec {
+        Value::Array(items) => items.iter().collect(),
+        Value::Null => vec![],
+        v => vec![v],
+    };
+    for part in parts {
+        match part {
+            Value::String(path) => {
+                let bytes = crate::assets::read(path).map_err(|e| format!("can't read library {}: {}", path, e))?;
+                match serde_json::from_slice(&bytes).map_err(|e| format!("library {}: {}", path, e))? {
+                    Value::Object(m) => add(m, path)?,
+                    _ => return Err(format!("library {} must be an object of presets", path)),
+                }
+            },
+            Value::Object(m) => add(m.clone(), "the scene's library")?,
+            v => return Err(format!("a library is a file's path, an object of presets, or a list of these, not {}", v)),
+        }
+    }
+    Ok(presets)
+}
+
 /// Whether a preset is an overlay, lying over the material given as `"over"`.
 pub fn is_overlay(name: &str) -> bool {
     library().get(name).and_then(|p| p.get("overlay")).and_then(Value::as_bool).unwrap_or(false)
@@ -51,10 +106,20 @@ pub fn doc(name: &str) -> Option<&'static str> {
     library().get(name)?.get("doc")?.as_str()
 }
 
-/// The definition a `{"type": "library", ...}` material stands for.
+/// The definition a `{"type": "library", ...}` material stands for, from the built-in presets.
 pub fn expand(props: &Value) -> Result<Value, String> {
+    expand_in(props, None)
+}
+
+/// The same, looking in a scene's own presets (`load`) before the built-in ones.
+pub fn expand_in(props: &Value, scene: Option<&Map<String, Value>>) -> Result<Value, String> {
     let name = props["name"].as_str().ok_or("a library material needs a \"name\"")?;
-    let preset = library().get(name).ok_or_else(|| format!("no library material \"{}\": {}", name, names().join(", ")))?;
+    let preset = scene.and_then(|s| s.get(name)).or_else(|| library().get(name)).ok_or_else(|| {
+        let mut all: Vec<&str> = scene.into_iter().flat_map(|s| s.keys().map(String::as_str)).chain(names()).collect();
+        all.sort();
+        all.dedup();
+        format!("no library material \"{}\": {}", name, all.join(", "))
+    })?;
     let scale = props.get("scale").map_or(Some(1.), Value::as_f64).filter(|s| *s > 0.)
         .ok_or("a library material's scale must be a positive number")?;
     let seed = props.get("seed").map_or(Some(0), Value::as_u64).ok_or("a library material's seed is a whole number, at least 0")?;
@@ -189,6 +254,29 @@ mod tests {
         assert!(text.contains("\"transform\""), "{}", text);
         assert!(expand(&serde_json::json!({"type": "library", "name": "unobtainium"})).unwrap_err().contains("no library material"));
         assert!(expand(&serde_json::json!({"type": "library", "name": names()[0], "scale": 0})).is_err());
+    }
+
+    #[test]
+    fn test_scene_presets_load_and_come_first() {
+        let dir = std::env::temp_dir().join(format!("rays-library-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("extra.json");
+        std::fs::write(&file, r#"{ "blue_stone": { "doc": "d", "material": { "type": "lambertian", "albedo": [0.1, 0.2, 0.5] } },
+                                   "granite": { "doc": "mine", "material": { "type": "lambertian", "albedo": [1, 0, 0] } } }"#).unwrap();
+        let path = file.to_str().unwrap().to_string();
+        let inline = serde_json::json!({ "green_stone": { "material": { "type": "lambertian", "albedo": [0, 1, 0] } } });
+        let presets = load(&serde_json::json!([path, inline])).unwrap();
+        assert_eq!(files(&serde_json::json!([path, inline])), vec![path.clone()]);
+        // The scene's own, and its own over the built-in one of the same name; the rest built in.
+        let m = |name: &str| expand_in(&serde_json::json!({"type": "library", "name": name}), Some(&presets)).unwrap();
+        assert_eq!(m("blue_stone")["albedo"], serde_json::json!([0.1, 0.2, 0.5]));
+        assert_eq!(m("green_stone")["albedo"], serde_json::json!([0, 1, 0]));
+        assert_eq!(m("granite")["albedo"], serde_json::json!([1, 0, 0]));
+        assert_eq!(m("oak")["type"], "plastic");
+        assert!(expand_in(&serde_json::json!({"type": "library", "name": "nope"}), Some(&presets)).unwrap_err().contains("blue_stone"));
+        assert!(load(&serde_json::json!({"bad": {"doc": "no material"}})).unwrap_err().contains("bad"));
+        assert!(load(&serde_json::json!("/no/such/library.json")).unwrap_err().contains("can't read"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

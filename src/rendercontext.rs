@@ -51,8 +51,9 @@ const STATE_PIXEL: usize = 56;
 /// contents (all but its `supersamples` and `adaptive`, so more can be asked for later, or
 /// fewer pixels given them; sample k of a pixel is the same either way) and of the overrides
 /// of its size and seed. A saved state is resumed only for the same key, so editing the scene
-/// starts the render afresh. Files the scene refers to (meshes, cached simulations) and the
-/// renderer itself aren't covered: after changing those, render with --fresh.
+/// starts the render afresh, as does editing a library file it names (`"library"`, whose
+/// contents are hashed too). Other files the scene refers to (meshes, cached simulations) and
+/// the renderer itself aren't covered: after changing those, render with --fresh.
 pub fn render_key(scene: &str, overrides: (Option<usize>, Option<usize>, Option<u64>)) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -67,6 +68,10 @@ pub fn render_key(scene: &str, overrides: (Option<usize>, Option<usize>, Option<
                 o.remove("output");
             }
             v.to_string().hash(&mut h);
+            // The presets in the library files it names.
+            for path in crate::material::library::files(&v["library"]) {
+                crate::assets::read(&path).ok().hash(&mut h);
+            }
         },
         Err(_) => scene.hash(&mut h),
     }
@@ -739,6 +744,15 @@ mod tests {
         // Nor does which pixels take them.
         let adaptive = r#"{"width": 10, "supersamples": 16, "camera": {"angle": 0.5}, "adaptive": 0.02}"#;
         assert_eq!(render_key(a, none), render_key(adaptive, none));
+        // Editing a library file the scene names changes the key.
+        let file = std::env::temp_dir().join(format!("rays-key-library-{}.json", std::process::id()));
+        std::fs::write(&file, r#"{"a": {"material": {"type": "lambertian", "albedo": [1, 1, 1]}}}"#).unwrap();
+        let with = format!(r#"{{"width": 10, "library": {:?}}}"#, file.to_str().unwrap());
+        let before = render_key(&with, none);
+        assert_eq!(before, render_key(&with, none));
+        std::fs::write(&file, r#"{"a": {"material": {"type": "lambertian", "albedo": [0, 1, 1]}}}"#).unwrap();
+        assert_ne!(before, render_key(&with, none));
+        std::fs::remove_file(&file).ok();
     }
 
     #[test]

@@ -100,7 +100,9 @@ After PBRT's chapter 5. The `"camera"` takes a `"type"`:
   drawn alike, 120° apart; 30 gives pixel art's 2:1 diamonds), `"distance"` back (default twice
   the height); `"location"` isn't needed. Orthographic and isometric cameras take an `"aperture"`
   (default 0) and `"focus_distance"` (default `lookat`) for a model's shallow depth of field:
-  blur grows as aperture × |depth − focus| / focus, so a camera further back needs a wider one.
+  blur grows as aperture × |depth − focus| / focus, so a camera further back needs a wider one;
+  or `"blur"` instead, the blur's radius per unit of depth from the focus, the same from any
+  distance (`"blur": 0.03`: a point 100 m off focus blurs over a disc 3 m in radius).
 - `"realistic"`: rays traced through a real lens (`"lens": "dgauss.50mm"`, `"wide.22mm"`,
   `"telephoto.250mm"`, `"fisheye.10mm"` or a pbrt `.dat` file), with `"f_number"`, `"blades"`
   and `"film_diagonal"`: depth of field, vignetting, distortion and aberrations come from the

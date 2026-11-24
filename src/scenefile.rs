@@ -576,7 +576,8 @@ impl SceneFile {
     /// - `"orthographic"`: parallel rays from a rectangle `"height"` tall (by default what the
     ///   perspective camera sees at the point looked at); through a thin lens of radius
     ///   `"aperture"` (default 0, all in focus) focused at the point looked at or
-    ///   `"focus_distance"`, which blurs by aperture × |depth - focus| / focus.
+    ///   `"focus_distance"`, which blurs by aperture × |depth - focus| / focus; or by `"blur"`
+    ///   × |depth - focus| (the aperture `"blur"` × focus), the same however far back it is.
     /// - `"isometric"`: an orthographic camera looking at `"lookat"` from `"azimuth"` degrees
     ///   round `"up"` (default 45, from x towards z) and `"elevation"` degrees above the ground
     ///   (default `camera::ISOMETRIC_ELEVATION`, 35.26°, true isometric; 30° gives pixel art's
@@ -627,8 +628,12 @@ impl SceneFile {
             Some("orthographic") => {
                 let h = c["height"].as_f64().unwrap_or_else(|| angle().tan() * (lookat - location).norm());
                 let focus = c["focus_distance"].as_f64().unwrap_or((lookat - location).norm());
-                Box::new(camera::OrthographicCamera::new(placement, h, aspect)
-                    .with_lens(SceneFile::parse_number(&c["aperture"], 0.), focus))
+                let aperture = match (c["blur"].as_f64(), c["aperture"].as_f64()) {
+                    (Some(_), Some(_)) => panic!("An orthographic camera takes \"blur\" or \"aperture\", not both"),
+                    (Some(b), None) => b * focus,
+                    (None, a) => a.unwrap_or(0.),
+                };
+                Box::new(camera::OrthographicCamera::new(placement, h, aspect).with_lens(aperture, focus))
             },
             Some("spherical") => Box::new(camera::SphericalCamera::new(placement, match c["mapping"].as_str() {
                 None | Some("equirectangular") => camera::SphereMapping::Equirectangular,
@@ -5361,6 +5366,17 @@ mod tests {
             let r = cam.get_ray(0.5, 0.5, 0., 0.);
             let t = r.rd.dot(&(-r.ro));
             assert!((r.ro + r.rd * t).norm() < 1e-9, "{:?}", r);
+        }
+        // "blur" blurs alike from any distance: a point 1 beyond focus by a disc of radius 0.1.
+        for distance in [5., 50.] {
+            let cam = SceneFile::parse_camera(serde_json::json!({"type": "isometric", "lookat": [0, 0, 0],
+                "height": 2, "distance": distance, "blur": 0.1, "elevation": 90}), 100, 100);
+            let widest = (0..256).map(|_| {
+                let r = cam.get_ray(0.5, 0.5, 0., 0.);
+                let t = (-1. - r.ro.y) / r.rd.y;
+                (r.ro + r.rd * t).xz().norm()
+            }).fold(0f64, f64::max);
+            assert!(widest > 0.08 && widest <= 0.1 + 1e-9, "{} at {}", widest, distance);
         }
         let other = serde_json::json!({"type": "orthographic", "location": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]});
         assert_eq!(SceneFile::axonometric(other.clone()), other);

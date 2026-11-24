@@ -181,6 +181,12 @@
           "doc": "Perspective, orthographic and isometric: lens radius in scene units, for depth of field; 0 for a pinhole. The orthographic cameras default to 0, and blur by aperture × |depth − focus| / focus, depth measured from the camera's plane."
         },
         {
+          "name": "blur",
+          "kind": "number",
+          "default": null,
+          "doc": "Orthographic and isometric, instead of aperture: the blur's radius per unit of depth away from the plane of focus (the aperture is blur × focus_distance), so the look doesn't change with the camera's distance. Around 0.01-0.05 for a model's shallow focus."
+        },
+        {
           "name": "focus_distance",
           "kind": "number",
           "default": null,

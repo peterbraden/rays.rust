@@ -37,6 +37,10 @@ and `overlay`):
         "params": [...],
         "fit": {"loss": {"start": ..., "fitted": ...}, "values": {...}, "applied": false, ...}} ] }
 
+A reference's `"view": "wall"` renders it on a vertical plane facing the camera, for scans of
+cliffs and walls (taken facing them, their up the scene's up); by default it is ground, seen
+from above.
+
 Fit it with `scripts/fit-material.py scree` (its first reference; `scree:1` the second): the
 scan is fetched into references/materials/ if it isn't there (fetch-material-reference.py), and
 `--record` writes the result into the reference's `fit`: the losses, the settings, and the
@@ -246,14 +250,22 @@ class Problem:
         return preset, usage
 
 
-def scene(usage, library_path, size, resolution, samples, seed):
+def scene(usage, library_path, size, resolution, samples, seed, view="ground"):
+    # A scan of a cliff was taken facing the cliff, its up the scene's up: seen as a wall (the
+    # plane z = 0, from in front), so a preset's beds and streaks along y line up with it.
+    if view == "wall":
+        camera = {"type": "orthographic", "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "height": size}
+        ground = {"type": "plane", "normal": [0, 0, -1], "distance": 0, "material": "M"}
+    else:
+        camera = {"type": "orthographic", "location": [0, 5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "height": size}
+        ground = {"type": "plane", "y": 0, "material": "M"}
     return {
         "width": 2 * resolution, "height": 2 * resolution, "supersamples": samples, "max_depth": 2, "seed": seed,
         "background": [1, 1, 1], "output": {"tonemap": "none", "exposure": 1.0},
         "library": library_path,
-        "camera": {"type": "orthographic", "location": [0, 5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "height": size},
+        "camera": camera,
         "materials": {"M": usage},
-        "objects": [{"type": "plane", "y": 0, "material": "M"}],
+        "objects": [ground],
     }
 
 
@@ -261,7 +273,7 @@ def render(preset, usage, name, args, size, tmp, tag):
     library_path = os.path.join(tmp, "library-%s.json" % tag)
     json.dump({name: preset}, open(library_path, "w"))
     path = os.path.join(tmp, "scene-%s.json" % tag)
-    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed), open(path, "w"))
+    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view), open(path, "w"))
     out = os.path.join(tmp, "render-%s.png" % tag)
     subprocess.run([args.rays, path, "--fresh", "-o", out], check=True, cwd=ROOT,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -310,6 +322,7 @@ def main():
     name = spec.get("name", spec["preset"] + "_fit")
     usage = {"type": "library", "name": name, **spec.get("usage", {})}
     size = float(spec["size"])
+    args.view = spec.get("view", "ground")
     reference = load_reference(os.path.join(base, spec["reference"]), args.resolution)
     loss = PatchLoss()
     problem = Problem(spec, preset)

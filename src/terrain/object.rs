@@ -535,6 +535,9 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     p.treeline = o["treeline"].as_f64();
     p.min_river_width = number(o, "min_river_width", p.min_river_width);
     p.hydraulics.flow = number(o, "river_flow", p.hydraulics.flow).max(0.);
+    if let Some(w) = o["wind"].as_array() {
+        p.wind = [w.first().and_then(|v| v.as_f64()).unwrap_or(0.), w.get(1).and_then(|v| v.as_f64()).unwrap_or(0.)];
+    }
     let radius = params.planet.radius;
     let time = number(o, "time", 0.);
     let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
@@ -764,8 +767,10 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
     // Clear water, a little more absorbing than the sea's (its colour from suspended sediment
     // is for step 3).
     // Shaded by the flow under each point (`terrain::river_water`).
+    let waves = crate::terrain::river_water::LakeWaves::new(relief, frame, p.wind, seed);
     let water = Arc::new(crate::terrain::river_water::RiverWater {
         relief: relief.clone(), frame: frame.clone(), noise: crate::noise::PerlinNoise::shuffled(seed.wrapping_add(0x5a7e5)),
+        waves,
     });
     let lookup = water.clone();
     let surface = crate::terrain::rivers::WaterSurface { mesh, centre: frame.centre(), attenuation: Box::new(move |p| lookup.attenuation(p)) };

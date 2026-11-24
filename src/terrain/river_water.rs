@@ -155,6 +155,55 @@ pub struct RiverWater {
     pub relief: Arc<Relief>,
     pub frame: Frame,
     pub noise: crate::noise::PerlinNoise,
+    /// The lakes' waves.
+    pub waves: LakeWaves,
+}
+
+/// The waves the wind raises on the lakes (`ocean::WaveField::lake`): Tessendorf's, as on the
+/// sea, but a young sea's, short of fetch. Each lake takes the field for its length along the
+/// wind, rounded to a half power of two (so lakes of about the same size share one). The waves
+/// are centimetres high, so they only tilt the surface's normals; the water is still drawn flat.
+pub struct LakeWaves {
+    fields: Vec<crate::ocean::WaveField>,
+    /// For each layer of the relief, each lake's field.
+    lakes: Vec<Vec<usize>>,
+}
+
+impl LakeWaves {
+    pub fn new(relief: &Relief, frame: &Frame, wind: [f64; 2], seed: u64) -> LakeWaves {
+        let w = nalgebra::Vector2::new(wind[0], wind[1]);
+        if w.norm() < 0.1 {
+            return LakeWaves { fields: vec![], lakes: vec![] };
+        }
+        let bin = |fetch: f64| (2. * fetch.max(1.).log2()).round() as i32;
+        let mut bins: Vec<i32> = vec![];
+        let lengths: Vec<Vec<i32>> = relief.layers.iter().map(|l| {
+            let Some(b) = l.rivers.as_ref().and_then(|r| r.basins.get()) else { return vec![] };
+            // The wind in the patch's coordinates, from the scene's at the patch's centre.
+            let o = crate::terrain::rivers::patch_dir(&l.domain, [0., 0.]);
+            let at = frame.to_scene(&o, 0.);
+            let towards = at + Vector3::new(w.x, 0., w.y).normalize() * 100.;
+            let (d, _) = frame.on_planet(&towards);
+            let dir = crate::terrain::rivers::patch_point(&l.domain, &d).map_or([1., 0.], |q| { let n = q[0].hypot(q[1]).max(1e-9); [q[0] / n, q[1] / n] });
+            (0..b.count()).map(|k| { let f = bin(b.length(k as u32, dir)); if !bins.contains(&f) { bins.push(f); } f }).collect()
+        }).collect();
+        use rayon::prelude::*;
+        let fields = bins.par_iter().map(|&f| crate::ocean::WaveField::lake(w, 2f64.powf(f as f64 / 2.), 0., seed.wrapping_add(f as u64))).collect();
+        let lakes = lengths.into_iter().map(|l| l.into_iter().map(|f| bins.iter().position(|&b| b == f).unwrap()).collect()).collect();
+        LakeWaves { fields, lakes }
+    }
+
+    /// The waves' slopes (along scene x and z) at scene point `p` on a lake, if it is on one.
+    pub fn slopes(&self, relief: &Relief, frame: &Frame, p: &Vector3<f64>) -> Option<(f64, f64)> {
+        if self.fields.is_empty() { return None; }
+        let (d, _) = frame.on_planet(p);
+        let k = relief.layers.iter().position(|l| l.contains(&d))?;
+        let l = &relief.layers[k];
+        let q = crate::terrain::rivers::patch_point(&l.domain, &d)?;
+        let lake = l.rivers.as_ref()?.basins.get()?.lake_at(q)?;
+        let w = self.fields[*self.lakes.get(k)?.get(lake as usize)?].at(p.x, p.z);
+        Some((w.y, w.z))
+    }
 }
 
 impl RiverWater {
@@ -199,8 +248,26 @@ impl RiverWater {
     }
 }
 
+impl RiverWater {
+    /// The hit as the lake's waves tilt it, seen from above: its normal from their slopes.
+    /// Unchanged off the lakes, from below, or where a wave would face away from the ray.
+    fn on_waves<'a>(&self, r: &Ray, intersection: &Intersection<'a>) -> Intersection<'a> {
+        let p = intersection.point;
+        let up = (p - self.frame.centre()).normalize();
+        if r.rd.dot(&up) >= 0. { return *intersection; }
+        let Some((sx, sz)) = self.waves.slopes(&self.relief, &self.frame, &p) else { return *intersection };
+        let tx = (Vector3::x() - up * up.x).normalize();
+        let tz = (Vector3::z() - up * up.z).normalize();
+        let n = (up - tx * sx - tz * sz).normalize();
+        if r.rd.dot(&n) >= 0. { return *intersection; }
+        Intersection { normal: n, ..*intersection }
+    }
+}
+
 impl MaterialModel for RiverWater {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
+        let waved = self.on_waves(r, intersection);
+        let intersection = &waved;
         let Some((node, along)) = self.flow(&intersection.point) else {
             return self.water(&Node::still(), 0.).scatter(r, intersection, s);
         };
@@ -215,6 +282,8 @@ impl MaterialModel for RiverWater {
     }
 
     fn sun_glint(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> Option<Color> {
+        let waved = self.on_waves(r, intersection);
+        let intersection = &waved;
         let node = self.flow(&intersection.point).map_or(Node::still(), |f| f.0);
         self.water(&node, 0.).sun_glint(r, intersection, s)
     }

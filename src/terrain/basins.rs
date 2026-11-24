@@ -42,14 +42,20 @@ pub struct Basins {
     n: usize,
     ground: Vec<f32>,
     filled: Vec<f32>,
-    /// Which samples are under a lake large enough to trust (`SMALLEST`).
-    lake: Vec<bool>,
+    /// Which lake each sample is under (`NONE` if dry, or in a lake too small to trust:
+    /// `SMALLEST`).
+    lake: Vec<u32>,
+    /// Each lake's samples.
+    lakes: Vec<Vec<u32>>,
 }
 
 /// Lakes covering fewer samples than this are left dry: a few samples across, they are below
 /// what the grid resolves of the drawn ground (a river's narrow gorge between samples reads as
 /// a pond over it, and its water would hang over the gorge).
 pub const SMALLEST: usize = 16;
+
+/// No lake.
+const NONE: u32 = u32::MAX;
 
 #[derive(PartialEq)]
 struct Entry(f64, usize);
@@ -90,14 +96,15 @@ impl Basins {
             ground[k] = ground[k].min(h as f32);
         }
         let filled = Basins::fill(n, &ground, (margin / step).ceil() as usize);
-        let lake = Basins::large(n, &ground, &filled);
-        Basins { origin, step, n, ground, filled, lake }
+        let (lake, lakes) = Basins::large(n, &ground, &filled);
+        Basins { origin, step, n, ground, filled, lake, lakes }
     }
 
     /// The samples of lakes of at least `SMALLEST` samples (8-connected).
-    fn large(n: usize, ground: &[f32], filled: &[f32]) -> Vec<bool> {
+    fn large(n: usize, ground: &[f32], filled: &[f32]) -> (Vec<u32>, Vec<Vec<u32>>) {
         let wet: Vec<bool> = (0..n * n).map(|k| (filled[k] - ground[k]) as f64 > LAKE_DEPTH).collect();
-        let mut keep = vec![false; n * n];
+        let mut keep = vec![NONE; n * n];
+        let mut lakes = vec![];
         let mut seen = vec![false; n * n];
         for start in 0..n * n {
             if !wet[start] || seen[start] { continue; }
@@ -115,9 +122,12 @@ impl Basins {
                     if wet[j] && !seen[j] { seen[j] = true; component.push(j); }
                 }
             }
-            if component.len() >= SMALLEST { for k in component { keep[k] = true; } }
+            if component.len() >= SMALLEST {
+                for &k in &component { keep[k] = lakes.len() as u32; }
+                lakes.push(component.into_iter().map(|k| k as u32).collect());
+            }
         }
-        keep
+        (keep, lakes)
     }
 
     /// Priority-Flood over an n × n grid (8 neighbours), without the ε that routing needs (a
@@ -166,7 +176,30 @@ impl Basins {
     }
 
     fn lake_level(&self, k: usize) -> Option<f64> {
-        self.lake[k].then_some(self.filled[k] as f64)
+        (self.lake[k] != NONE).then_some(self.filled[k] as f64)
+    }
+
+    /// The lake at `q`: under the sample nearest it, or failing that one beside it (the ring
+    /// of water drawn about a lake, `water`).
+    pub fn lake_at(&self, q: Point) -> Option<u32> {
+        let (u, v) = self.at(q)?;
+        let (i, j) = (u.round() as i64, v.round() as i64);
+        let k = |a: i64, b: i64| (a >= 0 && b >= 0 && a < self.n as i64 && b < self.n as i64).then(|| self.lake[b as usize * self.n + a as usize]).filter(|&l| l != NONE);
+        k(i, j).or_else(|| [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)].iter().find_map(|(a, b)| k(i + a, j + b)))
+    }
+
+    /// How many lakes there are (numbered from 0, as `lake_at` names them).
+    pub fn count(&self) -> usize { self.lakes.len() }
+
+    /// A lake's length along `dir` (a unit vector in patch coordinates), metres: the fetch of a
+    /// wind blowing that way across it, at most (from shore to shore over its widest).
+    pub fn length(&self, lake: u32, dir: Point) -> f64 {
+        let (lo, hi) = self.lakes[lake as usize].iter().fold((f64::MAX, f64::MIN), |(lo, hi), &k| {
+            let (x, z) = ((k as usize % self.n) as f64, (k as usize / self.n) as f64);
+            let along = (x * dir[0] + z * dir[1]) * self.step;
+            (lo.min(along), hi.max(along))
+        });
+        hi - lo + self.step
     }
 
     /// The level of the lake over `q`, if the sample nearest it is under one.
@@ -238,6 +271,13 @@ mod tests {
         assert!((level - 105.).abs() < 0.1, "{}", level);
         assert_eq!(b.lake([100., 100.]), Some(level));
         assert_eq!(b.lake([600., 0.]), None);
+        // One lake, filling the bowl inside its rim (520 m across, and a sample) whichever way
+        // the wind blows.
+        assert_eq!(b.count(), 1);
+        let l = b.lake_at([0., 0.]).unwrap();
+        for dir in [[1., 0.], [0., 1.], [0.6, 0.8]] {
+            assert!((b.length(l, dir) - 540.).abs() < 30., "{}", b.length(l, dir));
+        }
         assert!((b.filled([600., 0.]).unwrap() - 100.).abs() < 1e-3);
         // Its water: rectangles at the level, covering the bowl.
         let w = b.water(|_| true);

@@ -2219,6 +2219,12 @@
           "min": 0
         },
         {
+          "name": "wind",
+          "kind": "vec2",
+          "default": [4, 0],
+          "doc": "Full scale: the wind over the lakes (scene x and z, m/s), raising waves by their fetch along it (JONSWAP, as the ocean's)."
+        },
+        {
           "name": "map",
           "kind": "path",
           "default": null,

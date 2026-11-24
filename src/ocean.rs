@@ -678,6 +678,18 @@ pub fn significant_wave_height(speed: f64, fetch: Option<f64>) -> f64 {
     }
 }
 
+/// The peak wavelength (m) of the waves a wind of `speed` m/s raises over `fetch` m of water:
+/// JONSWAP's peak frequency f_p = 3.5 (g/U) (g F / U²)^-0.33 (K. Hasselmann et al., 1973),
+/// no lower than the fully developed sea's, ω_p = 0.877 g/U (Pierson and Moskowitz); as deep
+/// water waves, λ = g / (2π f²).
+pub fn jonswap_peak(speed: f64, fetch: f64) -> f64 {
+    let g = 9.81;
+    let u = speed.max(0.1);
+    let young = 3.5 * g / u * (g * fetch.max(1.) / (u * u)).powf(-0.33);
+    let f = young.max(0.877 * g / (u * 2. * std::f64::consts::PI));
+    g / (2. * std::f64::consts::PI * f * f)
+}
+
 /// How the sea's waves are scaled and shaped.
 #[derive(Clone, Copy, Debug)]
 pub struct SeaState {
@@ -692,11 +704,17 @@ pub struct SeaState {
     /// The choppy displacement's strength, λ: 1 for the first-order Lagrangian (Gerstner)
     /// surface, 0 for none.
     pub choppiness: f64,
+    /// The spectrum's peak wavelength (m), if not the fully developed sea's for the wind: a
+    /// young sea's, short of fetch (`jonswap_peak`).
+    pub peak: Option<f64>,
+    /// The wave tiles' sizes as a fraction of the sea's (487, 61.3 and 7.9 m): smaller for the
+    /// short waves of a lake.
+    pub scale: f64,
 }
 
 impl Default for SeaState {
     fn default() -> SeaState {
-        SeaState { amplitude: None, resolved: None, wave_height: None, fetch: None, choppiness: 1. }
+        SeaState { amplitude: None, resolved: None, wave_height: None, fetch: None, choppiness: 1., peak: None, scale: 1. }
     }
 }
 
@@ -709,6 +727,7 @@ impl SeaState {
             wave_height: opts["wave_height"].as_f64().map(|h| h.max(0.)),
             fetch: opts["fetch"].as_f64(),
             choppiness: SceneFile::parse_number(&opts["choppiness"], 1.).max(0.),
+            ..SeaState::default()
         }
     }
 }
@@ -751,16 +770,24 @@ impl WaveField {
     pub fn sea(wind: Vector2<f64>, time: f64, seed: u64, state: SeaState) -> WaveField {
         // The largest tile holds the wind sea's peak, λ_p = 2π g / ω_p², ω_p = 0.877 g/U
         // (Pierson-Moskowitz), with room to spare.
-        let peak = 2. * std::f64::consts::PI * wind.norm().powi(2) / (0.877f64.powi(2) * 9.81);
-        let (big, small, tiny, n) = (487f64.max(1.2 * peak), 61.3, 7.9, 256);
+        let developed = 2. * std::f64::consts::PI * wind.norm().powi(2) / (0.877f64.powi(2) * 9.81);
+        let peak = state.peak.unwrap_or(developed);
+        // A younger sea's spectrum: Phillips's, peaking at k = 1 / (√2 L) for L = U² / g, for
+        // the wind that would peak at `peak` (its height is scaled below to the real wind's).
+        let spectral = match state.peak {
+            Some(p) if wind.norm() > 0. => wind.normalize() * (9.81 * p / (2. * std::f64::consts::PI * 2f64.sqrt())).sqrt(),
+            _ => wind,
+        };
+        let s = state.scale;
+        let (big, small, tiny, n) = ((487. * s).max(1.2 * peak), 61.3 * s, 7.9 * s, 256);
         let choppy = state.choppiness > 0.;
         // Each tile takes over just short of the previous one's shortest waves.
         let k_split = std::f64::consts::PI * n as f64 / big * 0.9;
         let k_tiny = std::f64::consts::PI * (n / 2) as f64 / small * 0.9;
         let mut tiles = vec![
-            WaveTile::new(wind, big, n, 0., k_split, time, seed, choppy),
-            WaveTile::new(wind, small, n / 2, k_split, k_tiny, time, seed.wrapping_add(1), choppy),
-            WaveTile::new(wind, tiny, n / 2, k_tiny, f64::INFINITY, time, seed.wrapping_add(2), false),
+            WaveTile::new(spectral, big, n, 0., k_split, time, seed, choppy),
+            WaveTile::new(spectral, small, n / 2, k_split, k_tiny, time, seed.wrapping_add(1), choppy),
+            WaveTile::new(spectral, tiny, n / 2, k_tiny, f64::INFINITY, time, seed.wrapping_add(2), false),
         ];
         // Each wave's amplitude should be √P(k) Δk, but `create_amplitude_tile` leaves out the
         // grid's spacing Δk = 2π/L, which is larger on a smaller tile: put it back, relative to
@@ -793,6 +820,27 @@ impl WaveField {
         field.max_height = h;
         field.mean_square_slope = field.measure_slope();
         field.max_slope = field.measure_max_slope();
+        field
+    }
+
+    /// The waves a wind raises on a lake: `fetch` metres of water upwind, so a young sea of
+    /// short waves (`jonswap_peak`, `significant_wave_height`), on tiles scaled to them, without
+    /// choppiness (they are centimetres high: they only tilt the surface).
+    pub fn lake(wind: Vector2<f64>, fetch: f64, time: f64, seed: u64) -> WaveField {
+        let peak = jonswap_peak(wind.norm(), fetch);
+        let scale = (25. * peak / 487.).min(1.);
+        let mut field = WaveField::sea(wind, time, seed, SeaState { fetch: Some(fetch), peak: Some(peak), scale, choppiness: 0., ..SeaState::default() });
+        // JONSWAP's fits were made over kilometres of fetch; over a lake's few hundred metres
+        // the height they give, on waves that short, is steeper than the open sea in the same
+        // wind. Lakes are no rougher than the sea: their slopes at most Cox and Munk's.
+        let most = cox_munk_slope(wind.norm());
+        if field.mean_square_slope > most {
+            let k = (most / field.mean_square_slope).sqrt();
+            for t in field.tiles.iter_mut() { t.scale(k); }
+            field.max_height *= k;
+            field.mean_square_slope = field.measure_slope();
+            field.max_slope = field.measure_max_slope();
+        }
         field
     }
 
@@ -1813,6 +1861,27 @@ mod curved_tests {
         let covered = (0..n * n).map(|i| foam.at((i % n) as f64 * 2.31, (i / n) as f64 * 2.17)).sum::<f64>() / (n * n) as f64;
         let w = whitecap_coverage(wind.norm());
         assert!((covered - w).abs() < 0.4 * w, "{} vs {}", covered, w);
+    }
+
+    #[test]
+    fn test_a_short_fetch_raises_short_waves() {
+        // JONSWAP's peak for 10 m/s over 10 km: f_p = 3.5 g/U (gF/U²)^-0.33 = 0.354 Hz, so
+        // λ = g / (2π f²) = 12.5 m; over the open ocean it is Pierson-Moskowitz's, 2π U² / (0.877² g).
+        assert!((jonswap_peak(10., 10_000.) - 12.5).abs() < 0.2, "{}", jonswap_peak(10., 10_000.));
+        let developed = 2. * std::f64::consts::PI * 100. / (0.877f64.powi(2) * 9.81);
+        assert!((jonswap_peak(10., 1e9) / developed - 1.).abs() < 1e-9);
+        // A lake's waves, 500 m of fetch in a 7 m/s wind: under a metre long and a few
+        // centimetres high, as JONSWAP has them, or lower where that would be steeper than the
+        // open sea in the same wind (Cox and Munk).
+        let wind = Vector2::new(7., 0.);
+        let w = WaveField::lake(wind, 500., 0., 1);
+        let peak = jonswap_peak(7., 500.);
+        assert!(peak > 0.5 && peak < 1.5, "{}", peak);
+        let (_, sd) = w.height_exceeded(0.5);
+        let hs = significant_wave_height(7., Some(500.));
+        assert!(4. * sd < 1.1 * hs && 4. * sd > 0.2 * hs, "{} vs {}", 4. * sd, hs);
+        assert!(w.mean_square_slope <= 1.01 * cox_munk_slope(7.), "{}", w.mean_square_slope);
+        assert!(w.mean_square_slope > 0.5 * cox_munk_slope(7.), "{}", w.mean_square_slope);
     }
 
     #[test]

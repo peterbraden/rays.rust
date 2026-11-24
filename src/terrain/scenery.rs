@@ -155,6 +155,8 @@ pub struct SceneryParams {
     pub hydraulics: crate::terrain::hydraulics::HydraulicParams,
     /// Cells per face edge of the mesh over the whole planet.
     pub globe: usize,
+    /// The wind over the lakes (scene x and z, m/s), which raises their waves.
+    pub wind: [f64; 2],
 }
 
 impl Default for SceneryParams {
@@ -162,6 +164,7 @@ impl Default for SceneryParams {
         SceneryParams {
             resolution: 384, min_spacing: 0.5, roughness: 1., exaggeration: 1.,
             snowline: None, treeline: None, min_river_width: 0., hydraulics: Default::default(), globe: 192,
+            wind: [4., 0.],
         }
     }
 }

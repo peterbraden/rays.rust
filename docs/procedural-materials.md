@@ -220,7 +220,7 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
 
 ![The first ten presets and their scans](material-fit-scans.png)
 
-*Each: the scan, the preset as written, and fitted (the first ten; the six after them aren't pictured). Fifteen of the sixteen fits are applied; leaf_litter_gravel's isn't.*
+*Each: the scan, the preset as written, and fitted (the first ten; the six after them aren't pictured). All sixteen fits are applied (leaf_litter_gravel's after its leaves were remade by `bombing`).*
 
 Sixteen presets were written to imitate particular Poly Haven scans, each scan recorded in the
 preset's `references`:
@@ -242,7 +242,7 @@ preset's `references`:
 | `weathered_pink_granite` | rock_04 | Coarse granite weathered rough, salmon feldspar among grey-brown |
 | `caliche_ground` | coral_gravel | Brown gravelly soil with ragged patches of pale lime crust |
 | `stony_bank` | river_small_rocks | Grey-beige silt with small flat stones bedded in it |
-| `leaf_litter_gravel` | leaf_scattered_gravel | Dark gravel strewn with fallen leaves (fit not applied: the leaves are blobs, not leaf shapes, and the gravel reads blue beside them) |
+| `leaf_litter_gravel` | leaf_scattered_gravel | Dark gravel with small brown leaves, pointed, ribbed and each its own shade (`bombing`), heaped between the stones and a few lying on them |
 
 Cliffs are fitted as walls (`"view": "wall"`), so their beds and streaks run along y as on a
 landscape's cliffs.

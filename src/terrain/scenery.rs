@@ -839,29 +839,65 @@ pub struct Ground {
 /// What lies bare on the ground at a point, under any snow or ice: plants and soil (the
 /// cover's colour), or bare rock of a kind, or loose stones, sand or gravel.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Bare { Plain, Rock(Rock), Scree, Sand, Gravel }
+pub enum Bare {
+    Plain, Scree, Sand, Gravel,
+    /// A dry river bed's packed, rounded pebbles.
+    Pebbles,
+    /// Beach shingle: small flat stones and grit.
+    Shingle,
+    /// Till's unsorted angular rubble, soil in its gaps.
+    Rubble,
+    /// Bare soil: the tropics' red laterite, and brown earth with stones elsewhere.
+    Laterite, Dirt,
+    /// Sandstone weathered in a desert to an ochre crust with dark varnish.
+    Crust,
+    /// Sandstone's cliffs, thin-bedded.
+    Bedded,
+    /// Foliated schist and gneiss in faces.
+    Foliated,
+    /// Rock in humid, wooded country: slabs grown over with moss and lichen, and dark rock
+    /// speckled with lichen.
+    Mossy, Lichened,
+    Rock(Rock),
+}
 
 impl Bare {
-    const COUNT: usize = 4 + 9;
+    /// The kinds that aren't a rock of their own, in the order of their indices.
+    const LOOSE: [Bare; 14] = [
+        Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel, Bare::Pebbles, Bare::Shingle, Bare::Rubble,
+        Bare::Laterite, Bare::Dirt, Bare::Crust, Bare::Bedded, Bare::Foliated, Bare::Mossy, Bare::Lichened,
+    ];
+    const COUNT: usize = Bare::LOOSE.len() + 9;
 
     fn index(self) -> usize {
         match self {
-            Bare::Plain => 0,
-            Bare::Scree => 1,
-            Bare::Sand => 2,
-            Bare::Gravel => 3,
-            Bare::Rock(r) => 4 + r.index(),
+            Bare::Rock(r) => Bare::LOOSE.len() + r.index(),
+            s => Bare::LOOSE.iter().position(|&l| l == s).expect("a loose kind"),
         }
     }
 
-    /// The library's material for it, and its seed's salt: rocks by their lithology (slate
-    /// for shale), loose ground by what it is.
+    fn from_index(k: usize) -> Bare {
+        if k < Bare::LOOSE.len() { Bare::LOOSE[k] } else { Bare::Rock(Rock::from_index(k - Bare::LOOSE.len())) }
+    }
+
+    /// The library's material for it: rocks by their lithology (slate for shale), the rest by
+    /// what they are, many of them presets fitted to photographs (`scripts/fit-material.py`).
     fn library(self) -> Option<&'static str> {
         Some(match self {
             Bare::Plain => return None,
             Bare::Scree => "scree",
             Bare::Sand => "dune_sand",
             Bare::Gravel => "river_gravel",
+            Bare::Pebbles => "pebble_bed",
+            Bare::Shingle => "shingle",
+            Bare::Rubble => "angular_rubble",
+            Bare::Laterite => "laterite",
+            Bare::Dirt => "trail_dirt",
+            Bare::Crust => "ochre_crust",
+            Bare::Bedded => "bedded_sandstone",
+            Bare::Foliated => "foliated_rock",
+            Bare::Mossy => "mossy_slab",
+            Bare::Lichened => "lichened_ironstone",
             Bare::Rock(r) => match r {
                 Rock::Sediment => "scree",
                 Rock::Shale => "slate",
@@ -899,10 +935,7 @@ impl Shares {
         let mut x = rand() * self.0.iter().sum::<f64>();
         for (k, &w) in self.0.iter().enumerate() {
             if x < w || k == Bare::COUNT - 1 {
-                return match k {
-                    0 => Bare::Plain, 1 => Bare::Scree, 2 => Bare::Sand, 3 => Bare::Gravel,
-                    k => Bare::Rock(Rock::from_index(k - 4)),
-                };
+                return Bare::from_index(k);
             }
             x -= w;
         }
@@ -953,7 +986,7 @@ impl Ground {
             snow: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("firn"), 1., seed)],
             ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
             materials: (0..Bare::COUNT).map(|k| {
-                let s = if k < 4 { [Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel][k] } else { Bare::Rock(Rock::from_index(k - 4)) };
+                let s = Bare::from_index(k);
                 let name = s.library().filter(|_| p.ground_materials)?;
                 let definition = serde_json::json!({"type": "library", "name": name, "seed": seed.wrapping_mul(31).wrapping_add(k as u64)});
                 Some(crate::scenefile::SceneFile::parse_material_definition(&definition, name, &serde_json::Map::new()))
@@ -1155,7 +1188,8 @@ impl Ground {
         let tree = treeline + (n(1500., 0.3) - 0.5) * 400.;
         // What grows here: by the climate's biome, its edges wandering with the weather from
         // year to year (noise in temperature and rain); without a climate, forest and grass.
-        let (mut ground, dry) = match &self.climate {
+        // And whether it is dry, tropical, and wooded (moss and lichen on its rock).
+        let (mut ground, dry, tropical, wooded) = match &self.climate {
             Some(_) => {
                 let local = self.wandering_climate(&d, h).expect("a climate");
                 let biome = Biome::of(&local);
@@ -1175,11 +1209,11 @@ impl Ground {
                     // Grass, scrub and the odd copse.
                     g = mix(g, colour(FOREST), 0.5 * smoothstep(0.6, 0.75, n(800., 0.5)));
                 }
-                (g, local.precipitation < local.dry_threshold())
+                (g, local.precipitation < local.dry_threshold(), matches!(biome, Biome::Rainforest | Biome::Savanna), biome.forest())
             }
             None => {
                 let forest = smoothstep(0.38, 0.55, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat)) * (1. - smoothstep(tree - 150., tree + 50., h));
-                (mix(colour(GRASS), colour(FOREST), forest), false)
+                (mix(colour(GRASS), colour(FOREST), forest), false, false, forest > 0.5)
             }
         };
         // Alpine meadow from the treeline up.
@@ -1194,7 +1228,7 @@ impl Ground {
             let grown = if dry { 0.15 } else { 0.6 * (1. - smoothstep(tree - 200., tree + 100., h)) };
             let g = grown * smoothstep(0.3, 0.6, n(200., 0.45));
             ground = mix(rubble, ground, g);
-            shares = Shares::of(Bare::Scree);
+            shares = Shares::of(Bare::Rubble);
             shares.mix(Shares::of(Bare::Plain), g);
         }
         if class == ALLUVIUM {
@@ -1203,7 +1237,8 @@ impl Ground {
             let fields = mix(colour(GRASS), colour(FIELDS), smoothstep(0.4, 0.6, n(350., 0.8)));
             let barren = if dry { 1. } else { smoothstep(tree, tree + 300., h) };
             ground = mix(fields, colour(GRAVEL), barren);
-            shares.mix(Shares::of(Bare::Gravel), barren);
+            // Where it is dry, the beds the floods last ran in: packed, rounded pebbles.
+            shares.mix(Shares::of(if dry { Bare::Pebbles } else { Bare::Gravel }), barren);
         }
         // Playas: the flat floors of closed basins, white with salt where the water last
         // evaporated, cracked into polygons a few metres across, darker and browner where the
@@ -1236,7 +1271,10 @@ impl Ground {
         // Beaches.
         let beach = 1. - smoothstep(2., 12., h + 8. * n(150., 0.4));
         ground = mix(ground, colour(SAND), beach);
-        shares.mix(Shares::of(Bare::Sand), beach);
+        // Sand, and shingle along stretches of the shore.
+        let mut shore = Shares::of(Bare::Sand);
+        shore.mix(Shares::of(Bare::Shingle), smoothstep(0.5, 0.6, n(400., 0.15)));
+        shares.mix(shore, beach);
         // Bare rock on steep slopes (about 40°), and scree and rock above the meadows.
         let high = smoothstep(tree + 300., tree + 900., h + (n(600., 0.6) - 0.5) * 300.);
         // (Bare at gentler slopes on rock that keeps thin soils, steeper on rock that weathers to
@@ -1247,7 +1285,37 @@ impl Ground {
         let stone = mix(self.stone(&d, h), colour(SCREE), loose) * (0.7 + 0.6 * n(250., 0.7));
         ground = mix(ground, stone, rock) * grain;
         if rock > 0. {
-            let mut bare = Shares::of(Bare::Rock(self.rock(&d, h).filter(|&r| r != Rock::Sediment).unwrap_or(Rock::Sediment)));
+            let r = self.rock(&d, h).filter(|&r| r != Rock::Sediment).unwrap_or(Rock::Sediment);
+            let mut bare = Shares::of(Bare::Rock(r));
+            if r == Rock::Sediment && !dry {
+                // Bare sediment is scree on steep ground and high up, and soil below the
+                // treeline where it lies at a slant: red earth in the tropics, brown with
+                // stones elsewhere.
+                let soil = (1. - smoothstep(tree - 300., tree, h)) * smoothstep(0.6, 0.8, flat);
+                bare.mix(Shares::of(if tropical { Bare::Laterite } else { Bare::Dirt }), soil);
+            }
+            let cliff = 1. - smoothstep(0.35, 0.6, flat);
+            match r {
+                // Sandstone's cliffs show its thin beds; elsewhere in a desert it weathers to an
+                // ochre crust under dark varnish.
+                Rock::Sandstone => {
+                    if dry { bare.mix(Shares::of(Bare::Crust), 0.7 * (1. - cliff)); }
+                    bare.mix(Shares::of(Bare::Bedded), cliff);
+                }
+                // Schist's and gneiss's foliation, in faces here and there.
+                Rock::Schist | Rock::Gneiss => bare.mix(Shares::of(Bare::Foliated), smoothstep(0.45, 0.6, n(60., 0.33))),
+                _ => {}
+            }
+            if wooded && r != Rock::Sediment {
+                // In woods, rock grows lichen and, where it lies at a slant rather than stands
+                // as a cliff, moss.
+                let below = 1. - smoothstep(tree - 200., tree + 100., h);
+                let patches = smoothstep(0.4, 0.6, n(40., 0.71));
+                if matches!(r, Rock::Basalt | Rock::Shale | Rock::Schist | Rock::Gneiss) {
+                    bare.mix(Shares::of(Bare::Lichened), 0.4 * below * (1. - patches));
+                }
+                bare.mix(Shares::of(Bare::Mossy), 0.7 * below * patches * smoothstep(0.45, 0.8, flat));
+            }
             bare.mix(Shares::of(Bare::Scree), loose);
             shares.mix(bare, rock);
         }
@@ -1372,6 +1440,19 @@ impl Medium for LandscapeMedium {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every kind of bare ground is its own index, and names a material the library has.
+    #[test]
+    fn test_every_kind_of_bare_ground_is_in_the_library() {
+        let names = crate::material::library::names();
+        for k in 0..Bare::COUNT {
+            let b = Bare::from_index(k);
+            assert_eq!(b.index(), k);
+            if let Some(name) = b.library() {
+                assert!(names.contains(&name), "{:?}: no preset {}", b, name);
+            }
+        }
+    }
     use crate::terrain::simulation::TerrainParams;
 
     fn frame() -> Frame { Frame::new(45., 7., 6.36e6, 1.) }

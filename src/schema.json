@@ -2843,7 +2843,7 @@
           "name": "ground_materials",
           "kind": "boolean",
           "default": true,
-          "doc": "Full scale, with the default ground cover: shade bare rock (by its lithology), scree, sand and gravel with the library's natural materials; false for plain colours."
+          "doc": "Full scale, with the default ground cover: shade bare rock (by its lithology and the climate), scree, sand, gravel, shingle, till and bare soil with the library's natural materials, those fitted to photographs among them; false for plain colours."
         },
         {
           "name": "height_map",

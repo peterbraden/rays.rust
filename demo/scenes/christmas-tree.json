@@ -48,8 +48,7 @@
     "BAUBLE_FROSTED": {"type": "rough_dielectric", "refractive_index": "BK7", "roughness": 0.3},
     "CAP": {"type": "conductor", "metal": "CuZn", "roughness": 0.25},
     "ICICLE": {"type": "dielectric", "refractive_index": 1.31, "attenuate": [1, 1, 1]},
-    "STAR": {"type": "conductor", "metal": "Au", "roughness": 0.12},
-    "STAR_GLOW": {"type": "diffuse-light", "temperature": 2800, "intensity": 60},
+    "STAR": {"type": "diffuse-light", "color": [1, 0.7, 0.25], "intensity": 1.5},
     "WRAP_RED": {"type": "checker", "colors": [[0.55, 0.03, 0.03], [0.7, 0.62, 0.5]], "checks": 0.08},
     "WRAP_GREEN": {"type": "coated_diffuse", "albedo": [0.04, 0.22, 0.08], "roughness": 0.1},
     "WRAP_BLUE": {"type": "checker", "colors": [[0.05, 0.1, 0.4], [0.75, 0.75, 0.8]], "checks": 0.05},
@@ -3499,7 +3498,6 @@
     {"type": "cone", "base": [-0.7355, 0.5354, 0.8694], "base_radius": 0.009, "cap": [-0.7355, 0.3833, 0.8694], "cap_radius": 0.0005, "material": "ICICLE"},
     {"type": "cone", "base": [-0.895, 0.8977, -0.4343], "base_radius": 0.009, "cap": [-0.895, 0.7647, -0.4343], "cap_radius": 0.0005, "material": "ICICLE"},
     {"type": "transform", "item": {"type": "prism", "height1": -0.015, "height2": 0.015, "points": [[0.0, 0.21], [0.05, 0.0688], [0.1997, 0.0649], [0.0808, -0.0263], [0.1234, -0.1699], [0.0, -0.085], [-0.1234, -0.1699], [-0.0808, -0.0263], [-0.1997, 0.0649], [-0.05, 0.0688], [0.0, 0.21]]}, "rotate": {"roll": -90}, "translate": [0, 3.52, 0], "material": "STAR"},
-    {"type": "sphere", "location": [0, 3.52, -0.025], "radius": 0.03, "material": "STAR_GLOW"},
     {"type": "cylinder", "base": [0, 3.25, 0], "cap": [0, 3.42, 0], "radius": 0.008, "material": "CAP"},
     {"type": "transform", "item": {"type": "box", "min": [-0.1898, 0, -0.1142], "max": [0.1898, 0.1824, 0.1142], "material": "WRAP_GREEN"}, "rotate": {"pitch": 79.4}, "translate": [-0.7103, -0.02, 0.1663]},
     {"type": "transform", "item": {"type": "box", "min": [-0.018, -0.001, -0.1162], "max": [0.018, 0.1844, 0.1162], "material": "RIBBON_RED"}, "rotate": {"pitch": 79.4}, "translate": [-0.7103, -0.02, 0.1663]},
@@ -3552,5 +3550,6 @@
     {"type": "tree", "species": "norway-spruce", "seed": 23, "location": [7.5, 0, 7.5], "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"], "params": {"scale": 3.0, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},
     {"type": "forest", "seed": 12, "lod": {"pixels": 1}, "area": {"min": [-80, -30], "max": [80, 110]}, "spacing": 4.5, "clearings": 0.05, "patch_size": 30, "patchiness": 0.3, "variants": 8, "where": "min(1, max(0, (sqrt(x * x + 0.6 * (z - 10) * (z - 10)) - 24) / 20)) * min(1, max(0, (sqrt(x * x + (z + 10) * (z + 10)) - 7) / 2))", "species": [{"species": "norway-spruce", "weight": 4, "spacing": 0.8, "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"]}, {"species": "balsam-fir", "weight": 3, "spacing": 0.7, "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"]}, {"species": "scots-pine", "weight": 1, "bark": "SNOWY_BARK", "leaves": "LADEN_PINE_NEEDLE"}]},
     {"type": "volume", "min": [-80, -0.5, -80], "max": [80, 25, 100], "density": {"node": "expr", "expr": "0.025 * exp(-max(y, 0) / 5) * (0.7 + 0.3 * noise3d(x / 9, y / 4, z / 9))", "range": [0, 0.025]}, "albedo": [0.98, 0.98, 0.98], "g": 0.75}
-  ]
+  ],
+  "lights": [{"location": [0, 3.17, -0.3], "intensity": 1.2, "temperature": 2600}]
 }

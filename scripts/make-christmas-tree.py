@@ -85,8 +85,7 @@ materials = {
     "BAUBLE_FROSTED": {"type": "rough_dielectric", "refractive_index": "BK7", "roughness": 0.3},
     "CAP": {"type": "conductor", "metal": "CuZn", "roughness": 0.25},
     "ICICLE": {"type": "dielectric", "refractive_index": 1.31, "attenuate": [1, 1, 1]},
-    "STAR": {"type": "conductor", "metal": "Au", "roughness": 0.12},
-    "STAR_GLOW": {"type": "diffuse-light", "temperature": 2800, "intensity": 60},
+    "STAR": {"type": "diffuse-light", "color": [1, 0.7, 0.25], "intensity": 1.5},
     # Presents: wrapping paper, checked and plain, and satin ribbon.
     "WRAP_RED": {"type": "checker", "colors": [[0.55, 0.03, 0.03], [0.7, 0.62, 0.5]], "checks": 0.08},
     "WRAP_GREEN": {"type": "coated_diffuse", "albedo": [0.04, 0.22, 0.08], "roughness": 0.1},
@@ -201,7 +200,8 @@ for i in range(16):
     add({"type": "cone", "base": r3(p), "base_radius": 0.009, "cap": r3([p[0], p[1] - length, p[2]]),
          "cap_radius": 0.0005, "material": "ICICLE"})
 
-# The star on top: a five-pointed prism of gold standing upright, a light at its heart.
+# The star on top: a glowing five-pointed prism standing upright, and a warm light just in
+# front of it, cheap to sample, lighting the top of the tree that the string barely reaches.
 points = []
 for k in range(10):
     rad = 0.21 if k % 2 == 0 else 0.085
@@ -211,7 +211,6 @@ points.append(points[0])
 star_y = TREE_H + 0.12
 add({"type": "transform", "item": {"type": "prism", "height1": -0.015, "height2": 0.015, "points": points},
      "rotate": {"roll": -90}, "translate": [0, star_y, 0], "material": "STAR"})
-add(sphere([0, star_y, -0.025], 0.03, "STAR_GLOW"))
 add(cylinder([0, TREE_H - 0.15, 0], [0, star_y - 0.1, 0], 0.008, "CAP"))
 
 # Presents under the tree, in paper and ribbon, a few with snow on their lids.
@@ -286,6 +285,7 @@ scene = {
     "camera": camera,
     "materials": materials,
     "objects": objects,
+    "lights": [{"location": [0, star_y - 0.35, -0.3], "intensity": 1.2, "temperature": 2600}],
 }
 
 # A preview for working on the composition: the same objects, cheaply lit. The bulbs and the

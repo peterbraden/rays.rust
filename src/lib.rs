@@ -159,6 +159,7 @@ pub mod procedural {
 }
 pub mod participatingmedia;
 pub mod noise;
+pub mod patterns;
 pub mod terrain;
 pub mod expr;
 pub mod graph;

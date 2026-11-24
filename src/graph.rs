@@ -181,6 +181,21 @@ impl<'a> Context<'a> {
         c.with_fields(i.object.medium.fields())
     }
 
+    /// As `at_hit`, its detail filtered to the pixel's footprint there (`textures::footprint`)
+    /// where the surface wasn't displaced (a displaced surface's filter is its vertices'
+    /// spacing): what textures and bumps read, so detail finer than a pixel fades to its mean
+    /// rather than aliasing.
+    pub fn at_hit_filtered(i: &'a crate::intersection::Intersection, s: &crate::scene::Scene) -> Context<'a> {
+        let c = Context::at_hit(i);
+        if c.filter > 0. {
+            return c;
+        }
+        match crate::textures::footprint(i, s) {
+            Some((dx, dy)) => Context { filter: dx.norm().max(dy.norm()), ..c },
+            None => c,
+        }
+    }
+
     /// The same, on a surface with these fields.
     pub fn with_fields(self, fields: Option<&'a dyn Fields>) -> Context<'a> {
         Context { fields, ..self }
@@ -202,13 +217,34 @@ impl<'a> Context<'a> {
 enum FractalStyle { Perlin, Ridged, Billow }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum CellStyle { F1, Edges, Stones }
+enum CellStyle { F1, F2, Edges, Stones, Id }
+
+/// How distance is measured between a point and cells' feature points (Worley, "A cellular
+/// texture basis function", SIGGRAPH 1996, section 4): Euclidean cells are rounded, Manhattan
+/// ones diamond-faceted, Chebyshev ones square, like crystals or paving.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Metric { Euclidean, Manhattan, Chebyshev }
 
 #[derive(Clone)]
 enum Op {
     Const(f64),
     Fractal { noise: Box<SeededNoise>, style: FractalStyle, scale: f64, smallest: f64, roughness: f64, lacunarity: f64, amplitude: f64, plan: bool },
-    Cells { seed: u32, style: CellStyle, scale: f64, amplitude: f64, plan: bool },
+    Cells { seed: u32, style: CellStyle, scale: f64, amplitude: f64, plan: bool, metric: Metric, jitter: f64 },
+    /// Sparse Gabor or phasor noise (`patterns::Gabor`), in [-amplitude, amplitude].
+    Gabor { noise: Box<crate::patterns::Gabor>, amplitude: f64 },
+    /// The distance along `direction` (a unit vector) over `scale`: POV-Ray's gradient.
+    Gradient { direction: Vector3<f64>, scale: f64 },
+    /// The distance from the line through `center` along `axis` (a unit vector) over `scale`:
+    /// rings about it, as a tree's growth rings.
+    Rings { center: Vector3<f64>, axis: Vector3<f64>, scale: f64 },
+    /// The distance from `center` over `scale`: shells, as an onion's.
+    Spherical { center: Vector3<f64>, scale: f64 },
+    /// `input` turned into repeating bands, `frequency` per unit of it, box filtered.
+    Wave { input: Box<Node>, shape: crate::patterns::Wave, frequency: f64, phase: f64, exponent: f64 },
+    Checker { size: f64, plan: bool },
+    Brick { size: Vector3<f64>, mortar: f64, style: crate::patterns::BrickStyle, seed: u64 },
+    /// `input` read at `inverse` (p - translate): moved, turned and stretched.
+    Transform { input: Box<Node>, inverse: crate::na::Matrix3<f64>, normals: crate::na::Matrix3<f64>, translate: Vector3<f64>, shrink: f64 },
     Slope { from: f64, to: f64, breakup: Option<Box<Node>> },
     Altitude { from: f64, to: f64, breakup: Option<Box<Node>> },
     Aspect { direction: Vector3<f64>, from: f64, to: f64, breakup: Option<Box<Node>> },
@@ -315,7 +351,38 @@ impl Node {
             Op::Fractal { noise, style, scale, smallest, roughness, lacunarity, amplitude, plan } => {
                 fractal(noise, *style, *scale, *smallest, *roughness, *lacunarity, *plan, c) * amplitude
             },
-            Op::Cells { seed, style, scale, amplitude, plan } => cells(*seed, *style, *scale, *plan, c) * amplitude,
+            Op::Cells { seed, style, scale, amplitude, plan, metric, jitter } => cells(*seed, *style, *scale, *plan, *metric, *jitter, c) * amplitude,
+            Op::Gabor { noise, amplitude } => {
+                let p = if noise.plan { Vector3::new(c.p.x, 0., c.p.z) } else { c.p };
+                noise.eval(p, c.filter) * amplitude
+            },
+            Op::Gradient { direction, scale } => c.p.dot(direction) / scale,
+            Op::Rings { center, axis, scale } => {
+                let d = c.p - center;
+                (d - axis * d.dot(axis)).norm() / scale
+            },
+            Op::Spherical { center, scale } => (c.p - center).norm() / scale,
+            Op::Wave { input, shape, frequency, phase, exponent } => {
+                let t = input.eval(c) * frequency + phase;
+                // The cycles the footprint spans: the input's change across it, along the
+                // surface (two more evaluations, only where filtering).
+                let w = if c.filter > 0. {
+                    let (u, v) = tangents(&c.normal);
+                    let h = c.filter;
+                    let base = input.eval(c);
+                    let du = input.eval(&Context { p: c.p + u * h, ..*c }) - base;
+                    let dv = input.eval(&Context { p: c.p + v * h, ..*c }) - base;
+                    (du * du + dv * dv).sqrt() * frequency.abs()
+                } else { 0. };
+                let v = shape.filtered(t, w);
+                if *exponent == 1. { v } else { v.powf(*exponent) }
+            },
+            Op::Checker { size, plan } => crate::patterns::checker(c.p, *size, c.filter, *plan),
+            Op::Brick { size, mortar, style, seed } => crate::patterns::brick(c.p, *size, *mortar, c.filter, *style, *seed),
+            Op::Transform { input, inverse, normals, translate, shrink } => {
+                let n = (normals * c.normal).try_normalize(1e-12).unwrap_or(c.normal);
+                input.eval(&Context { p: inverse * (c.p - translate), normal: n, filter: c.filter * shrink, ..*c })
+            },
             Op::Slope { from, to, breakup } => {
                 let s = c.slope() + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, s)
@@ -434,6 +501,12 @@ impl Op {
                 match style { FractalStyle::Perlin => (-a, a), _ => (amplitude.min(0.), amplitude.max(0.)) }
             },
             Op::Cells { amplitude, .. } => (amplitude.min(0.), amplitude.max(0.)),
+            Op::Gabor { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
+            Op::Gradient { .. } => (f64::NEG_INFINITY, f64::INFINITY),
+            Op::Rings { .. } | Op::Spherical { .. } => (0., f64::INFINITY),
+            Op::Wave { exponent, .. } => if *exponent >= 0. { (0., 1.) } else { (0., f64::INFINITY) },
+            Op::Checker { .. } | Op::Brick { .. } => (0., 1.),
+            Op::Transform { input, .. } => input.range(),
             Op::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
             // Hardness lies in [0.175, 1].
             Op::CrossBeds { amplitude, .. } => {
@@ -492,6 +565,15 @@ impl Op {
         let children: Vec<&Node> = match self {
             Op::Fractal { smallest, .. } => return *smallest,
             Op::Cells { scale, .. } => return 0.1 * scale,
+            Op::Gabor { noise, .. } => return noise.finest(),
+            Op::Gradient { .. } | Op::Rings { .. } | Op::Spherical { .. } => return f64::INFINITY,
+            Op::Checker { size, .. } => return *size,
+            Op::Brick { mortar, .. } => return *mortar,
+            Op::Wave { input, frequency, .. } => {
+                // A cycle is 1 / frequency of the input; how far that is depends on the input.
+                return input.finest().min(1. / frequency.abs().max(1e-9));
+            },
+            Op::Transform { input, shrink, .. } => return input.finest() / shrink.max(1e-12),
             Op::Talus(t) => return t.smallest,
             Op::Const(_) | Op::Biome { .. } => return f64::INFINITY,
             Op::CrossBeds { scale, set, .. } => return crate::material::rock::LAMINA_FINEST * set * scale,
@@ -556,7 +638,7 @@ fn fractal(noise: &SeededNoise, style: FractalStyle, scale: f64, smallest: f64, 
 
 /// Cellular noise at the context's point: one feature point jittered in each cell of a lattice
 /// `scale` across.
-fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, c: &Context) -> f64 {
+fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, metric: Metric, jitter: f64, c: &Context) -> f64 {
     let p = c.p / scale;
     let (cx, cy, cz) = (p.x.floor() as i64, if plan { 0 } else { p.y.floor() as i64 }, p.z.floor() as i64);
     let ys: &[i64] = if plan { &[0] } else { &[-1, 0, 1] };
@@ -565,11 +647,21 @@ fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, c: &Context) -> f6
         for &dy in ys {
             for dz in -1 ..= 1 {
                 let (i, j, k) = (cx + dx, cy + dy, cz + dz);
-                let f = Vector3::new(
+                let mut f = Vector3::new(
                     i as f64 + hash01(i, j, k, seed),
                     if plan { p.y } else { j as f64 + hash01(i, j, k, seed ^ 0x51ed) },
                     k as f64 + hash01(i, j, k, seed ^ 0xa2c3));
-                let d = (f - p).norm();
+                if jitter != 1. {
+                    // Pulled towards the cell's centre: 0 a regular lattice.
+                    let centre = Vector3::new(i as f64 + 0.5, if plan { p.y } else { j as f64 + 0.5 }, k as f64 + 0.5);
+                    f = centre + (f - centre) * jitter;
+                }
+                let e = f - p;
+                let d = match metric {
+                    Metric::Euclidean => e.norm(),
+                    Metric::Manhattan => e.x.abs() + e.y.abs() + e.z.abs(),
+                    Metric::Chebyshev => e.x.abs().max(e.y.abs()).max(e.z.abs()),
+                };
                 if d < f1 {
                     f2 = f1;
                     f1 = d;
@@ -582,6 +674,11 @@ fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, c: &Context) -> f6
     }
     let v = match style {
         CellStyle::F1 => f1,
+        CellStyle::F2 => f2,
+        CellStyle::Id => {
+            let (i, j, k) = nearest;
+            hash01(i, j, k, seed ^ 0x1d)
+        },
         CellStyle::Edges => f2 - f1,
         CellStyle::Stones => {
             // A stone round each feature point, at most halfway to the next, flattened.
@@ -646,6 +743,27 @@ fn pair(o: &Value, k: &str, def: (f64, f64)) -> Result<(f64, f64), String> {
     }
 }
 
+fn vec3(o: &Value, k: &str, def: Vector3<f64>) -> Result<Vector3<f64>, String> {
+    match &o[k] {
+        Value::Null => Ok(def),
+        Value::Array(a) if a.len() == 3 && a.iter().all(Value::is_number) =>
+            Ok(Vector3::new(a[0].as_f64().unwrap(), a[1].as_f64().unwrap(), a[2].as_f64().unwrap())),
+        v => Err(format!("graph node's \"{}\" must be [x, y, z], got {}", k, v)),
+    }
+}
+
+fn positive(o: &Value, k: &str, def: f64) -> Result<f64, String> {
+    let v = num(o, k, def)?;
+    if v > 0. { Ok(v) } else { Err(format!("graph node {}'s \"{}\" must be positive", o["node"], k)) }
+}
+
+/// Two unit vectors across a normal.
+fn tangents(n: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
+    let a = if n.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+    let u = n.cross(&a).try_normalize(1e-12).unwrap_or(Vector3::z());
+    (u, n.cross(&u))
+}
+
 fn child(o: &Value, k: &str) -> Result<Box<Node>, String> {
     match o.get(k) {
         Some(v) => Ok(Box::new(parse_node(v)?)),
@@ -699,13 +817,22 @@ fn parse_node(v: &Value) -> Result<Node, String> {
                 "f1" => CellStyle::F1,
                 "edges" => CellStyle::Edges,
                 "stones" => CellStyle::Stones,
-                s => return Err(format!("unknown cells style \"{}\": f1, edges or stones", s)),
+                "f2" => CellStyle::F2,
+                "id" => CellStyle::Id,
+                s => return Err(format!("unknown cells style \"{}\": f1, f2, edges, stones or id", s)),
+            };
+            let metric = match o["metric"].as_str().unwrap_or("euclidean") {
+                "euclidean" => Metric::Euclidean,
+                "manhattan" => Metric::Manhattan,
+                "chebyshev" => Metric::Chebyshev,
+                s => return Err(format!("unknown cells metric \"{}\": euclidean, manhattan or chebyshev", s)),
             };
             let scale = num(o, "scale", 1.)?;
             if scale <= 0. {
                 return Err("cells' scale must be positive".into());
             }
-            Op::Cells { seed: seed()? as u32, style, scale, amplitude: num(o, "amplitude", 1.)?, plan }
+            Op::Cells { seed: seed()? as u32, style, scale, amplitude: num(o, "amplitude", 1.)?, plan, metric,
+                jitter: num(o, "jitter", 1.)?.clamp(0., 1.) }
         },
         "slope" | "altitude" => {
             let (from, to) = (num(o, "from", 0.)?, num(o, "to", if kind == "slope" { 90. } else { 1. })?);
@@ -756,6 +883,77 @@ fn parse_node(v: &Value) -> Result<Node, String> {
                 return Err("cross_beds' scale and set must be positive".into());
             }
             Op::CrossBeds { noise: Box::new(SeededNoise::new(seed()?)), scale, set, amplitude: num(o, "amplitude", 0.05)? }
+        },
+        "gabor" | "phasor" => {
+            use crate::patterns::{Gabor, Profile};
+            let profile = if kind == "gabor" { Profile::Gabor } else {
+                match o["profile"].as_str().unwrap_or("sine") {
+                    "sine" => Profile::Sine,
+                    "saw" => Profile::Saw,
+                    "square" => Profile::Square,
+                    s => return Err(format!("unknown phasor profile \"{}\": sine, saw or square", s)),
+                }
+            };
+            let frequency = match o.get("wavelength") {
+                Some(_) => 1. / num(o, "wavelength", 1.)?,
+                None => num(o, "frequency", 1.)?,
+            };
+            let bandwidth = num(o, "bandwidth", 0.5 * frequency)?;
+            if !(frequency > 0. && frequency.is_finite()) || bandwidth <= 0. {
+                return Err(format!("{}'s frequency (or wavelength) and bandwidth must be positive", kind));
+            }
+            let direction = match o.get("direction") {
+                None => None,
+                Some(_) => Some(vec3(o, "direction", Vector3::x())?.try_normalize(1e-12).ok_or("a direction must not be zero")?),
+            };
+            let direction = direction.map(|d| if plan { Vector3::new(d.x, 0., d.z).try_normalize(1e-12).unwrap_or(Vector3::x()) } else { d });
+            Op::Gabor { noise: Box::new(Gabor { seed: seed()?, frequency, bandwidth, direction, spread: num(o, "spread", 0.)?.clamp(0., 1.),
+                impulses: num(o, "impulses", 16.)?.clamp(1., 256.), plan, profile }), amplitude: num(o, "amplitude", 1.)? }
+        },
+        "gradient" => {
+            let direction = vec3(o, "direction", Vector3::y())?.try_normalize(1e-12).ok_or("gradient's direction must not be zero")?;
+            Op::Gradient { direction, scale: positive(o, "scale", 1.)? }
+        },
+        "rings" => Op::Rings { center: vec3(o, "center", Vector3::zeros())?,
+            axis: vec3(o, "axis", Vector3::y())?.try_normalize(1e-12).ok_or("rings' axis must not be zero")?, scale: positive(o, "scale", 1.)? },
+        "spherical" => Op::Spherical { center: vec3(o, "center", Vector3::zeros())?, scale: positive(o, "scale", 1.)? },
+        "wave" => Op::Wave {
+            input: child(o, "input")?,
+            shape: crate::patterns::Wave::parse(o["shape"].as_str().unwrap_or("sine"))?,
+            frequency: num(o, "frequency", 1.)?, phase: num(o, "phase", 0.)?, exponent: num(o, "exponent", 1.)?,
+        },
+        "checker" => Op::Checker { size: positive(o, "size", 1.)?, plan },
+        "brick" => {
+            let size = vec3(o, "size", Vector3::new(0.215, 0.065, 0.1025))?;
+            if size.iter().any(|s| *s <= 0.) {
+                return Err("a brick's size must be positive".into());
+            }
+            let style = match o["style"].as_str().unwrap_or("mortar") {
+                "mortar" => crate::patterns::BrickStyle::Mortar,
+                "id" => crate::patterns::BrickStyle::Id,
+                s => return Err(format!("unknown brick style \"{}\": mortar or id", s)),
+            };
+            Op::Brick { size, mortar: num(o, "mortar", 0.01)?.max(0.), style, seed: seed()? }
+        },
+        "transform" => {
+            let scale = match &o["scale"] {
+                Value::Number(n) => Vector3::repeat(n.as_f64().unwrap()),
+                _ => vec3(o, "scale", Vector3::repeat(1.))?,
+            };
+            if scale.iter().any(|s| *s == 0.) {
+                return Err("a transform's scale must not be zero".into());
+            }
+            let r = vec3(o, "rotate", Vector3::zeros())?.map(f64::to_radians);
+            // Rotated about x, then y, then z, as POV-Ray's rotate <x, y, z>.
+            let rotation = crate::na::Rotation3::from_axis_angle(&Vector3::z_axis(), r.z)
+                * crate::na::Rotation3::from_axis_angle(&Vector3::y_axis(), r.y)
+                * crate::na::Rotation3::from_axis_angle(&Vector3::x_axis(), r.x);
+            // Scaled, then rotated, then moved: p = R S q + t, so q = S⁻¹ Rᵀ (p - t).
+            let inverse = crate::na::Matrix3::from_diagonal(&scale.map(|s| 1. / s)) * rotation.matrix().transpose();
+            let shrink = 1. / scale.iter().fold(f64::INFINITY, |m, s| m.min(s.abs()));
+            // Normals go by the inverse transpose.
+            let normals = inverse.transpose().try_inverse().unwrap_or(inverse);
+            Op::Transform { input: child(o, "input")?, inverse, normals, translate: vec3(o, "translate", Vector3::zeros())?, shrink }
         },
         "expr" => {
             let text = o["expr"].as_str().ok_or("an expr node needs an \"expr\" string")?;
@@ -818,6 +1016,67 @@ mod tests {
 
     fn graph(v: Value) -> Graph {
         Graph::parse(&v).unwrap()
+    }
+
+    #[test]
+    fn test_pattern_nodes() {
+        // Bands along y, turned to run along x by a transform.
+        let bands = json!({"node": "wave", "shape": "square", "input": {"node": "gradient", "direction": [0, 1, 0]}});
+        let g = graph(bands.clone());
+        assert_eq!(g.range(), (0., 1.));
+        assert_eq!(g.eval(&at(0., 0.25, 0.)), 1.);
+        assert_eq!(g.eval(&at(0., 0.75, 0.)), 0.);
+        let turned = graph(json!({"node": "transform", "rotate": [0, 0, -90], "input": bands}));
+        assert_eq!(turned.eval(&at(0.25, 0., 0.)), 1.);
+        assert_eq!(turned.eval(&at(0.75, 0., 0.)), 0.);
+        let doubled = graph(json!({"node": "transform", "scale": 2, "input": {"node": "gradient"}}));
+        assert!((doubled.eval(&at(0., 3., 0.)) - 1.5).abs() < 1e-12);
+        let moved = graph(json!({"node": "transform", "translate": [0, 1, 0], "input": {"node": "gradient"}}));
+        assert!((moved.eval(&at(0., 3., 0.)) - 2.).abs() < 1e-12);
+        // Rings about the y axis, and shells about the origin.
+        assert!((graph(json!({"node": "rings"})).eval(&at(3., 7., 4.)) - 5.).abs() < 1e-12);
+        assert!((graph(json!({"node": "spherical", "scale": 2})).eval(&at(0., 3., 4.)) - 2.5).abs() < 1e-12);
+        // Seen from far off, fine bands are their mean.
+        let fine = graph(json!({"node": "wave", "frequency": 100, "input": {"node": "gradient", "direction": [1, 0, 0]}}));
+        let far = Context::new(Vector3::new(0.123, 0., 0.), Vector3::y(), 1.);
+        assert!((fine.eval(&far) - 0.5).abs() < 0.01, "{}", fine.eval(&far));
+        let checker = graph(json!({"node": "checker", "size": 0.5}));
+        assert_eq!(checker.eval(&at(0.25, 0.25, 0.25)), 0.);
+        assert_eq!(checker.eval(&at(0.75, 0.25, 0.25)), 1.);
+        assert!(Graph::parse(&json!({"node": "wave", "shape": "zigzag", "input": 0})).is_err());
+    }
+
+    #[test]
+    fn test_cell_styles_and_metrics() {
+        let id = graph(json!({"node": "cells", "style": "id", "scale": 1, "jitter": 0}));
+        // With no jitter, the cells are a lattice: points near one centre share its value.
+        assert_eq!(id.eval(&at(0.4, 0.5, 0.6)), id.eval(&at(0.6, 0.45, 0.5)));
+        assert_ne!(id.eval(&at(0.5, 0.5, 0.5)), id.eval(&at(1.5, 0.5, 0.5)));
+        for metric in ["euclidean", "manhattan", "chebyshev"] {
+            let f1 = graph(json!({"node": "cells", "style": "f1", "metric": metric}));
+            let f2 = graph(json!({"node": "cells", "style": "f2", "metric": metric}));
+            for k in 0 .. 50 {
+                let c = at(k as f64 * 0.37, k as f64 * 0.11, k as f64 * 0.23);
+                assert!(f1.eval(&c) <= f2.eval(&c), "{}", metric);
+            }
+        }
+        let regular = graph(json!({"node": "cells", "style": "f1", "jitter": 0}));
+        assert!(regular.eval(&at(0.5, 0.5, 0.5)) < 1e-12);
+        assert!(Graph::parse(&json!({"node": "cells", "metric": "taxicab"})).is_err());
+    }
+
+    #[test]
+    fn test_gabor_nodes() {
+        let g = graph(json!({"node": "gabor", "wavelength": 0.1, "direction": [1, 0, 0], "amplitude": 2}));
+        assert_eq!(g.range(), (-2., 2.));
+        assert!((g.finest() - 0.1).abs() < 1e-12);
+        let p = graph(json!({"node": "phasor", "frequency": 10, "profile": "saw", "plan": true}));
+        let vs: Vec<f64> = (0 .. 200).map(|k| p.eval(&at(k as f64 * 0.0137, 0., k as f64 * 0.0071))).collect();
+        assert!(vs.iter().all(|v| (-1. ..= 1.).contains(v)));
+        assert!(vs.iter().any(|v| *v > 0.5) && vs.iter().any(|v| *v < -0.5));
+        // In plan, the same at any height.
+        assert_eq!(p.eval(&at(0.3, 0., 0.2)), p.eval(&at(0.3, 5., 0.2)));
+        assert!(Graph::parse(&json!({"node": "gabor", "frequency": 0})).is_err());
     }
 
     #[test]

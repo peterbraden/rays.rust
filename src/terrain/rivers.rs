@@ -656,6 +656,15 @@ impl Carve {
         self.grid.get(&key).into_iter().flatten().map(|&k| &self.segments[k as usize])
     }
 
+    /// How far `q` is from the nearest river's water (0 in it), metres, along the courses as
+    /// drawn (bent into their meanders); None beyond the carving's reach.
+    pub fn edge(&self, q: Point) -> Option<f64> {
+        self.near(q).filter_map(|s| {
+            let (t, r) = nearest_on(s.a.node.p, s.b.node.p, q);
+            (r <= s.reach()).then(|| (r - s.at(t).0).max(0.))
+        }).min_by(f64::total_cmp)
+    }
+
     /// The carved surface at `q`: the bed in the channel, the banks beside it; None away from
     /// rivers. With it, the half width of the river nearest.
     pub fn surface(&self, q: Point) -> Option<(f64, f64)> { self.surface_deeper(q, 0., 0.) }
@@ -1185,6 +1194,11 @@ mod tests {
         assert!((carve.surface([50., 35.]).unwrap().0 - 100.5).abs() < 1e-9);
         assert!((carve.surface([50., 45.5]).unwrap().0 - 105.5).abs() < 1e-9);
         assert!(carve.surface([50., 200.]).is_none());
+        // How far from the water: none in it, 3 m from a point 8 m off the line of a river 5 m
+        // in half width; and unknown beyond the carving's reach.
+        assert_eq!(carve.edge([50., 2.]), Some(0.));
+        assert!((carve.edge([50., -8.]).unwrap() - 3.).abs() < 1e-9);
+        assert_eq!(carve.edge([50., 200.]), None);
         // Ground above the water is cut down to the bed, but only where the mesh shows it.
         assert!((carve.carved([50., 0.], 104., 1.) - 98.5).abs() < 1e-9);
         assert_eq!(carve.carved([50., 0.], 104., 20.), 104.);

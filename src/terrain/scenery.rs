@@ -1017,9 +1017,15 @@ impl crate::graph::Fields for Ground {
             Field::Snowline => return Some(h - self.snowline(&d)),
             Field::Treeline => return Some(h - self.treeline(&d)),
             Field::River => {
+                // From the rivers as drawn, near them (the skeleton's straight segments cut
+                // across their bends by metres); from the skeleton farther out.
                 let far = crate::terrain::rivers::CLEAR;
                 return Some(self.layer_at(&d)
-                    .and_then(|l| Some(l.rivers.as_ref()?.skeleton.nearest(l.carve_point(&d)?)?.edge))
+                    .and_then(|l| {
+                        let q = l.carve_point(&d)?;
+                        let rivers = l.rivers.as_ref()?;
+                        rivers.carve.get().and_then(|c| c.edge(q)).or_else(|| Some(rivers.skeleton.nearest(q)?.edge))
+                    })
                     .map_or(far, |e| e.min(far)));
             },
             Field::Temperature | Field::Precipitation => {

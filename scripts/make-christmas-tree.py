@@ -65,11 +65,11 @@ materials = {
     "GRANITE": {"type": "rock", "preset": "granite", "lichen": 0.3, "seed": 1},
     "SNOWY_GRANITE": {"type": "snow_cover", "material": "GRANITE", "cover": 0.55, "drift": 0.15, "snow": {"preset": "fresh"}, "seed": 7},
     # Fairy lights: warm white bulbs with a few coloured ones, on a dark green wire.
-    "BULB_WARM": {"type": "diffuse-light", "temperature": 2400, "intensity": 40},
-    "BULB_RED": {"type": "diffuse-light", "color": [1, 0.12, 0.08], "intensity": 40},
-    "BULB_GREEN": {"type": "diffuse-light", "color": [0.15, 1, 0.25], "intensity": 30},
-    "BULB_BLUE": {"type": "diffuse-light", "color": [0.2, 0.35, 1], "intensity": 50},
-    "BULB_AMBER": {"type": "diffuse-light", "color": [1, 0.55, 0.12], "intensity": 40},
+    "BULB_WARM": {"type": "diffuse-light", "temperature": 2400, "intensity": 55},
+    "BULB_RED": {"type": "diffuse-light", "color": [1, 0.12, 0.08], "intensity": 55},
+    "BULB_GREEN": {"type": "diffuse-light", "color": [0.15, 1, 0.25], "intensity": 40},
+    "BULB_BLUE": {"type": "diffuse-light", "color": [0.2, 0.35, 1], "intensity": 65},
+    "BULB_AMBER": {"type": "diffuse-light", "color": [1, 0.55, 0.12], "intensity": 55},
     "WIRE": {"type": "plastic", "albedo": [0.02, 0.06, 0.03], "roughness": 0.2},
     "TINSEL_GOLD": {"type": "conductor", "metal": "Au", "roughness": 0.08},
     "TINSEL_SILVER": {"type": "conductor", "metal": "Ag", "roughness": 0.06},
@@ -134,15 +134,15 @@ add({"type": "tree", "species": "norway-spruce", "seed": 7, "location": [0, 0, 0
 
 # The fairy lights: a string spiralling up the tree, bulbs every few centimetres, each on a
 # short socket, the wire between them sagging.
-turns = 9
-bulbs = 320
+turns = 14
+bulbs = 650
 bulb_kinds = ["BULB_WARM"] * 6 + ["BULB_RED", "BULB_GREEN", "BULB_BLUE", "BULB_AMBER"]
 string = []
 for i in range(bulbs):
     t = i / (bulbs - 1)
     h = CROWN_BASE + 0.08 + t * (TREE_H - CROWN_BASE - 0.3)
     angle = t * turns * 2 * math.pi + rng.uniform(-0.04, 0.04)
-    string.append(on_crown(h, angle, rng.uniform(0.05, 0.2)))
+    string.append(on_crown(h, angle, rng.uniform(0.0, 0.1)))
 wire = []
 for a, b in zip(string, string[1:]):
     sag = 0.25 * math.dist(a, b)

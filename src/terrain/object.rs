@@ -1081,10 +1081,15 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         let q = crate::terrain::rivers::patch_point(&l.domain, &foot)?;
         let ground = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.height(&d, &relief.slope(&d), 1.) };
         let finest = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) };
-        let cells: Vec<(crate::terrain::channel::Point, f64, f64)> = r.basins.get()?.water(finest).into_iter()
-            .map(|(lo, hi, level)| ([(lo[0] + hi[0]) / 2., (lo[1] + hi[1]) / 2.], 0.5 * (hi[1] - lo[1]), level)).collect();
-        cells.into_iter().filter_map(|(c, half, level)| {
-            let dist = (c[0] - q[0]).hypot(c[1] - q[1]);
+        let mut cells: Vec<(crate::terrain::channel::Point, f64, f64, f64)> = r.basins.get()?.water(finest).into_iter()
+            .map(|(lo, hi, level)| {
+                let c = [(lo[0] + hi[0]) / 2., (lo[1] + hi[1]) / 2.];
+                (c, 0.5 * (hi[1] - lo[1]), level, (c[0] - q[0]).hypot(c[1] - q[1]))
+            }).collect();
+        // Nearest first, so the search for a shore stops at the first that has one (each walks
+        // the ground hundreds of times).
+        cells.sort_by(|a, b| a.3.total_cmp(&b.3));
+        cells.into_iter().find_map(|(c, half, level, dist)| {
             // The shore: towards the camera first, then round.
             let toward = (q[1] - c[1]).atan2(q[0] - c[0]);
             (0..8).map(|k| toward + k as f64 * std::f64::consts::FRAC_PI_4).find_map(|a| {
@@ -1097,7 +1102,7 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
                         (dist, eye, frame.to_scene(&patch_dir(&l.domain, across), level))
                     })
             })
-        }).min_by(|a, b| a.0.total_cmp(&b.0))
+        })
     }).min_by(|a, b| a.0.total_cmp(&b.0));
     if let Some((distance, eye, at)) = lake {
         say(format!("Landscape: the nearest lake is {:.0} m away; see it from [{:.0}, {:.1}, {:.0}] looking at [{:.0}, {:.1}, {:.0}]", distance, eye.x, eye.y, eye.z, at.x, at.y, at.z));

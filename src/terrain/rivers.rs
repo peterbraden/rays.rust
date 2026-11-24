@@ -664,11 +664,15 @@ impl Carve {
 
     /// How far `q` is from the nearest river's water (0 in it), metres, along the courses as
     /// drawn (bent into their meanders); None beyond the carving's reach.
-    pub fn edge(&self, q: Point) -> Option<f64> {
+    pub fn edge(&self, q: Point) -> Option<f64> { self.nearest_bed(q).map(|b| b.0) }
+
+    /// As `edge`, with the median grain of that river's bed there, metres.
+    pub fn nearest_bed(&self, q: Point) -> Option<(f64, f64)> {
         self.near(q).filter_map(|s| {
             let (t, r) = nearest_on(s.a.node.p, s.b.node.p, q);
-            (r <= s.reach()).then(|| (r - s.at(t).0).max(0.))
-        }).min_by(f64::total_cmp)
+            let grain = s.a.node.grain + (s.b.node.grain - s.a.node.grain) * t;
+            (r <= s.reach()).then(|| ((r - s.at(t).0).max(0.), grain))
+        }).min_by(|a, b| a.0.total_cmp(&b.0))
     }
 
     /// The carved surface at `q`: the bed in the channel, the banks beside it; None away from
@@ -1210,6 +1214,7 @@ mod tests {
         assert_eq!(carve.edge([50., 2.]), Some(0.));
         assert!((carve.edge([50., -8.]).unwrap() - 3.).abs() < 1e-9);
         assert_eq!(carve.edge([50., 200.]), None);
+        assert_eq!(carve.nearest_bed([50., -8.]).map(|b| b.1), Some(0.01));
         // Ground above the water is cut down to the bed, but only where the mesh shows it.
         assert!((carve.carved([50., 0.], 104., 1.) - 98.5).abs() < 1e-9);
         assert_eq!(carve.carved([50., 0.], 104., 20.), 104.);

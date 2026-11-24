@@ -1028,6 +1028,12 @@ impl crate::graph::Fields for Ground {
                     })
                     .map_or(far, |e| e.min(far)));
             },
+            Field::Grain => {
+                // Near a river drawn at full scale, its bed's; else the simulation's.
+                if let Some(g) = self.layer_at(&d).and_then(|l| l.rivers.as_ref()?.carve.get()?.nearest_bed(l.carve_point(&d)?)) {
+                    return Some(g.1);
+                }
+            },
             Field::Temperature | Field::Precipitation => {
                 let local = self.climate.as_ref()?.local(&d, h);
                 return Some(if f == Field::Temperature { local.mean } else { local.precipitation });

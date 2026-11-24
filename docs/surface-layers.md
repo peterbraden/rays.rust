@@ -67,6 +67,7 @@ value otherwise; either moved first by a `breakup`; `default`, 0, on surfaces wi
 | `temperature`, `precipitation` | The climate's mean annual °C and mm a year (full scale only) |
 | `discharge` | log10 of the mean flow of the river there, m³/s: the climate's runoff (rain less evaporation, by Budyko's curve) gathered over the area draining through the point |
 | `water_depth`, `flow_speed`, `froude` | How deep (m) and fast (m/s) that river runs, by Manning's equation, and its Froude number (above 1: rapids) |
+| `grain` | The median grain of that river's bed, metres (sand to boulders, as the flow can move them); near a river drawn at full scale, that river's: for sizing the stones of its bed and banks |
 | `river` | Metres from the nearest river's water (0 in it), up to 1 km: for banks, riparian plants, and keeping trees, rocks and displacement out of rivers (full scale only) |
 
 Each is kept at the simulation's cell corners and interpolated by Catmull-Rom splines, so

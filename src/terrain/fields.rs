@@ -33,6 +33,7 @@ pub struct SimFields {
     water_depth: Vec<f64>,
     flow_speed: Vec<f64>,
     froude: Vec<f64>,
+    grain: Vec<f64>,
     /// The least and most of `flow` and `wetness` at the corners, to which their splines'
     /// overshoot is clamped.
     flow_range: (f64, f64),
@@ -76,6 +77,7 @@ impl SimFields {
                 Field::WaterDepth => water.reaches[i].depth,
                 Field::FlowSpeed => water.reaches[i].speed,
                 Field::Froude => water.reaches[i].froude,
+                Field::Grain => water.reaches[i].grain,
                 _ => 0.,
             }
         };
@@ -98,6 +100,7 @@ impl SimFields {
             water_depth: corners(Field::WaterDepth),
             flow_speed: corners(Field::FlowSpeed),
             froude: corners(Field::Froude),
+            grain: corners(Field::Grain),
         }
     }
 
@@ -126,6 +129,7 @@ impl SimFields {
             Field::WaterDepth => s(&self.water_depth).max(0.),
             Field::FlowSpeed => s(&self.flow_speed).max(0.),
             Field::Froude => s(&self.froude).max(0.),
+            Field::Grain => s(&self.grain).max(0.),
             Field::Temperature | Field::Precipitation | Field::River => return None,
         })
     }
@@ -177,7 +181,7 @@ mod tests {
         let discharge = |i: usize| f.at(&t.domain, Field::Discharge, &t.domain.dirs[i], 0.).unwrap();
         assert!(discharge(wettest) > discharge(driest) + 1., "{} vs {}", discharge(wettest), discharge(driest));
         for d in &t.domain.dirs {
-            for g in [Field::WaterDepth, Field::FlowSpeed, Field::Froude] { assert!(f.at(&t.domain, g, d, 0.).unwrap() >= 0.); }
+            for g in [Field::WaterDepth, Field::FlowSpeed, Field::Froude, Field::Grain] { assert!(f.at(&t.domain, g, d, 0.).unwrap() >= 0.); }
         }
     }
 }

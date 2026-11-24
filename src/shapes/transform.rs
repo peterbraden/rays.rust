@@ -36,6 +36,8 @@ pub struct Transform {
     /// reflection and translation besides), which keeps area uniform, so the transformed surface
     /// can still be sampled as an area light.
     uniform_scale: Option<f64>,
+    /// Otherwise the transformed surface's area, estimated when first asked for (`stretched_area`).
+    area: std::sync::OnceLock<f64>,
 }
 
 impl Transform {
@@ -50,7 +52,67 @@ impl Transform {
         let gram = linear.transpose() * linear;
         let s2 = gram.trace() / 3.;
         let uniform_scale = ((gram - Matrix3::identity() * s2).norm() <= 1e-9 * s2).then(|| s2.sqrt());
-        Transform { item: item.into(), transform, inverse, normal_matrix, uniform_scale }
+        Transform { item: item.into(), transform, inverse, normal_matrix, uniform_scale, area: std::sync::OnceLock::new() }
+    }
+
+    /// How much the transformation stretches the item's area at a point with normal `n` (unit,
+    /// in the item's space): |det L| |L^-T n| (PBR 4th ed., section 3.10.3, for normals; Nanson's
+    /// formula for areas).
+    fn stretch(&self, n: &Vector3<f64>) -> f64 {
+        self.linear().determinant().abs() * (self.normal_matrix * n).norm()
+    }
+
+    /// The most `stretch` can be, for any normal: |det L| / σ_min(L), the largest singular value
+    /// of L^-T.
+    fn most_stretch(&self) -> f64 {
+        let singular = self.normal_matrix.singular_values();
+        self.linear().determinant().abs() * singular.max()
+    }
+
+    fn linear(&self) -> Matrix3<f64> {
+        self.transform.matrix().fixed_view::<3, 3>(0, 0).into()
+    }
+
+    /// The area of the item stretched by a transformation that doesn't scale evenly: its own area
+    /// times its mean stretch, over 64 × 64 points spread evenly by area (stratified, so the
+    /// estimate of a smooth surface's is good to well under a part in a thousand).
+    fn stretched_area(&self) -> f64 {
+        *self.area.get_or_init(|| {
+            let area = self.item.surface_area();
+            if area <= 0. {
+                return 0.;
+            }
+            let n = 64;
+            let mut total = 0.;
+            let mut count = 0;
+            for i in 0..n {
+                for j in 0..n {
+                    let u = [(i as f64 + 0.5) / n as f64, (j as f64 + 0.5) / n as f64, 0.5];
+                    if let Some((_, normal)) = self.item.sample_surface(u) {
+                        total += self.stretch(&normal);
+                        count += 1;
+                    }
+                }
+            }
+            if count == 0 { 0. } else { area * total / count as f64 }
+        })
+    }
+
+    /// A density per solid angle at `local_from` of choosing the point `p` (normal `n`) of the
+    /// item, both in the item's space, as one per solid angle at the transformed point: through
+    /// densities by area, which the transformation divides by its stretch there.
+    fn transformed_pdf(&self, local_from: &Vector3<f64>, p: &Vector3<f64>, n: &Vector3<f64>, pdf: f64) -> f64 {
+        let to = p - local_from;
+        let d2 = to.norm_squared();
+        let cos = n.dot(&to).abs() / d2.sqrt();
+        if !(cos > 0. && d2 > 0.) {
+            return 0.;
+        }
+        let by_area = pdf * cos / d2 / self.stretch(n);
+        let from = self.transform.transform_point(&Point3::from(*local_from)).coords;
+        let y = self.transform.transform_point(&Point3::from(*p)).coords;
+        let normal = (self.normal_matrix * n).normalize();
+        crate::shapes::geometry::area_pdf(&from, &y, &normal, 1. / by_area)
     }
 
     pub fn rotate(
@@ -200,36 +262,59 @@ impl Geometry for Transform {
     }
 
     fn surface_area(&self) -> f64 {
-        self.uniform_scale.map_or(0., |s| self.item.surface_area() * s * s)
+        match self.uniform_scale {
+            Some(s) => self.item.surface_area() * s * s,
+            None => self.stretched_area(),
+        }
     }
 
     /// A similarity (uniform scale, rotation, translation) keeps angles, so the item's own
-    /// sampling from the point in its space has the same density per solid angle.
+    /// sampling from the point in its space has the same density per solid angle. Other
+    /// transformations keep which points `from` sees (lines stay lines) but not angles or areas:
+    /// the item's sampling from the point in its space, its density converted
+    /// (`transformed_pdf`).
     fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> {
-        self.uniform_scale?;
         let local = self.inverse.transform_point(&Point3::from(*from)).coords;
         let (p, n, pdf) = self.item.sample_from(&local, u)?;
-        Some((self.transform.transform_point(&Point3::from(p)).coords, (self.normal_matrix * n).normalize(), pdf))
+        let pdf = match self.uniform_scale {
+            Some(_) => pdf,
+            None => self.transformed_pdf(&local, &p, &n, pdf),
+        };
+        (pdf > 0. && pdf.is_finite()).then(|| (self.transform.transform_point(&Point3::from(p)).coords, (self.normal_matrix * n).normalize(), pdf))
     }
 
     fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
-        if self.uniform_scale.is_none() {
-            return 0.;
-        }
         let local = |v: &Vector3<f64>| self.inverse.transform_point(&Point3::from(*v)).coords;
         // Normals map back by the transpose of the linear part (the inverse of `normal_matrix`).
-        let linear: crate::na::Matrix3<f64> = self.transform.matrix().fixed_view::<3, 3>(0, 0).into();
-        let ln = (linear.transpose() * n).normalize();
-        self.item.pdf_from(&local(from), &local(y), &ln)
+        let ln = (self.linear().transpose() * n).normalize();
+        let (from, y) = (local(from), local(y));
+        let pdf = self.item.pdf_from(&from, &y, &ln);
+        match self.uniform_scale {
+            Some(_) => pdf,
+            None if pdf > 0. => self.transformed_pdf(&from, &y, &ln, pdf),
+            None => 0.,
+        }
     }
 
+    /// Uniform scaling keeps samples uniform by area. Other transformations stretch some parts
+    /// more than others: a point uniform over the item, kept with the chance its stretch is of
+    /// the most there can be, or another drawn (with the renderer's own numbers past the first;
+    /// none after 64, as unlikely as the shape is stretched).
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
-        // Uniform scaling keeps samples uniform by area; otherwise the item isn't sampled.
-        self.uniform_scale?;
-        let (p, n) = self.item.sample_surface(u)?;
-        let point = self.transform.transform_point(&Point3::from(p)).coords;
-        let normal = (self.normal_matrix * n).normalize();
-        Some((point, normal))
+        let map = |(p, n): (Vector3<f64>, Vector3<f64>)| (self.transform.transform_point(&Point3::from(p)).coords, (self.normal_matrix * n).normalize());
+        if self.uniform_scale.is_some() {
+            return self.item.sample_surface(u).map(map);
+        }
+        let most = self.most_stretch();
+        let mut u = u;
+        for _ in 0..64 {
+            let (p, n) = self.item.sample_surface(u)?;
+            if crate::geometry::rand() * most <= self.stretch(&n) {
+                return Some(map((p, n)));
+            }
+            u = [crate::geometry::rand(), crate::geometry::rand(), crate::geometry::rand()];
+        }
+        None
     }
 }
 
@@ -280,9 +365,66 @@ mod tests {
         let i = t.intersects(&Ray { ro: p * 2., rd: -p }).unwrap();
         let expected = Vector3::new(p.x / 4., p.y, 0.).normalize();
         assert!((i.normal - expected).norm() < 1e-9, "{} vs {}", i.normal, expected);
-        // Area isn't uniform any more, so it can't be sampled as a light.
-        assert_eq!(t.surface_area(), 0.);
-        assert!(t.sample_surface([0.1, 0.2, 0.3]).is_none());
+    }
+
+    /// The ellipsoid's area, x²/a² + y²/b² + z²/c² = 1, by Knud Thomsen's formula (good to about
+    /// a percent).
+    fn ellipsoid_area(a: f64, b: f64, c: f64) -> f64 {
+        let p = 1.6075;
+        4. * std::f64::consts::PI * (((a * b).powf(p) + (a * c).powf(p) + (b * c).powf(p)) / 3.).powf(1. / p)
+    }
+
+    #[test]
+    fn test_stretched_emitters_are_sampled() {
+        // A sphere stretched into an ellipsoid, turned and moved.
+        crate::geometry::seed_rand(3, 0);
+        let (a, b, c) = (0.5, 1.3, 0.8);
+        let t = Transform::from_parts(unit_sphere(), Vector3::new(1., 2., 3.), Rotation3::from_euler_angles(0.3, 0.2, 0.1), Vector3::new(a, b, c));
+        let area = t.surface_area();
+        assert!((area / ellipsoid_area(a, b, c) - 1.).abs() < 0.012, "{} vs {}", area, ellipsoid_area(a, b, c));
+        // Samples lie on it, and agree with pdf_from.
+        let from = Vector3::new(4., 0., -1.);
+        let inside = |p: &Vector3<f64>| t.inverse.transform_point(&Point3::from(*p)).coords.norm();
+        for k in 0..200 {
+            let u = [(k as f64 * 0.618) % 1., (k as f64 * 0.414) % 1., (k as f64 * 0.732) % 1.];
+            let (y, n, pdf) = t.sample_from(&from, u).unwrap();
+            assert!((inside(&y) - 1.).abs() < 1e-9);
+            assert!((t.pdf_from(&from, &y, &n) / pdf - 1.).abs() < 1e-9);
+            let (s, _) = t.sample_surface(u).unwrap();
+            assert!((inside(&s) - 1.).abs() < 1e-9);
+        }
+        // The density integrates to one over the solid angle the ellipsoid subtends: the
+        // estimate of that solid angle, 1/pdf on average, matches the fraction of directions
+        // from `from` that hit it.
+        let n = 200_000;
+        let by_pdf: f64 = (0..n).map(|_| {
+            let (_, _, pdf) = t.sample_from(&from, [crate::geometry::rand(), crate::geometry::rand(), crate::geometry::rand()]).unwrap();
+            1. / pdf
+        }).sum::<f64>() / n as f64;
+        let hits = (0..n).filter(|_| {
+            let z = 1. - 2. * crate::geometry::rand();
+            let phi = 2. * std::f64::consts::PI * crate::geometry::rand();
+            let r = (1. - z * z).sqrt();
+            t.intersects(&Ray { ro: from, rd: Vector3::new(r * phi.cos(), r * phi.sin(), z) }).is_some()
+        }).count();
+        let by_hits = 4. * std::f64::consts::PI * hits as f64 / n as f64;
+        assert!((by_pdf / by_hits - 1.).abs() < 0.02, "{} vs {}", by_pdf, by_hits);
+        // Points by sample_surface are uniform by area: the share in the slab |y'| < 0.3 of
+        // the ellipsoid's own height (in its space) matches its share of the area, found by
+        // the stretch of a stratified grid.
+        let slab = |p: &Vector3<f64>| t.inverse.transform_point(&Point3::from(*p)).coords.y.abs() < 0.3;
+        let sampled = (0..n).filter(|_| slab(&t.sample_surface([crate::geometry::rand(), crate::geometry::rand(), crate::geometry::rand()]).unwrap().0)).count() as f64 / n as f64;
+        let m = 400;
+        let (mut inside_slab, mut total) = (0., 0.);
+        for i in 0..m {
+            for j in 0..m {
+                let (p, normal) = t.item.sample_surface([(i as f64 + 0.5) / m as f64, (j as f64 + 0.5) / m as f64, 0.5]).unwrap();
+                let w = t.stretch(&normal);
+                total += w;
+                if p.y.abs() < 0.3 { inside_slab += w; }
+            }
+        }
+        assert!((sampled - inside_slab / total).abs() < 0.006, "{} vs {}", sampled, inside_slab / total);
     }
 
     #[test]
@@ -321,10 +463,11 @@ mod tests {
     fn test_uniform_scale_survives_rotation() {
         let t = Transform::from_parts(unit_sphere(), Vector3::new(1., 2., 3.), Rotation3::from_euler_angles(0.3, 0.2, 0.1), Vector3::repeat(3.));
         assert!((t.surface_area() - 36. * std::f64::consts::PI).abs() < 1e-9);
-        // A shear is not uniform.
+        // A shear is not uniform: its area is estimated (`stretched_area`), and more than the
+        // sphere's, as the shear stretches it (a shear keeps volume).
         let shear = Matrix4::new(1., 0.5, 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.);
         let t = Transform::new(unit_sphere(), Affine3::from_matrix_unchecked(shear));
-        assert_eq!(t.surface_area(), 0.);
+        assert!(t.uniform_scale.is_none() && t.surface_area() > 4. * std::f64::consts::PI);
     }
 
     #[test]

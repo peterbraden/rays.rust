@@ -1,6 +1,9 @@
 # Research: learned and fitted levels of detail for aggregate geometry
 
-This is a research note, not a feature. No renderer behaviour changes here. It records:
+This began as a research note. What it found changed the renderer's forest levels of detail
+(described for users in [docs/adaptive-meshes.md](../../adaptive-meshes.md)); what was learned,
+whether it is research and how it compares with the literature are in
+**[conclusions.md](conclusions.md)**. It records:
 
 - the question;
 - what the literature does, checked against the papers' full texts wherever we could get them;
@@ -378,6 +381,20 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
       vanish from the side; crossed cards for clusters of 64 pieces or more, with their own
       leaves' shadowing, now the default: FLIP −11% from the air, −16% from low down at
       `pixels: 2`, for 7% more memory.
-- [ ] The far half of the low view overshoots to +5%; oak at L5 still under-covered from the side (−3% to −6% at mid range), common to cards and
-      volumes; SGGX lobes and palettes.
-- [ ] Read what could not be fetched (see [log.md](log.md)).
+- [x] Scenes that test it more widely ([suite.md](suite.md), `scripts/lod-suite.py`): nine
+      conditions (aerial, low, nadir, low sun, backlit, autumn broadleaves, conifers, sparse,
+      ground) at `pixels` 1, 2 and 4 against full detail.
+- [x] Rays leaving a card told by the vertex they leave, not their origin
+      ([stage8.md](stage8.md), `shapes::leaving`): the integrators offset rays differently, and
+      the CPU kernels' offsets (centimetres kilometres away) let leaving rays meet sibling cards.
+      The path tracer and the kernels now agree within 0.1–0.25%.
+- [x] Self-shadowing made consistent: one draw (`CardSet::stopped`) stops a shadow ray and the
+      path's next ray alike, and a stopped next ray scatters off the cluster's own leaves at the
+      vertex. `self_lit` is then plain visibility (its credit for light scattered within the
+      cluster had counted it twice, +1.2%).
+- [x] What it adds up to ([conclusions.md](conclusions.md)).
+- [ ] Slightly dark from the air (−1.5% to −2.8% at `pixels: 2`); nadir and sparse FLIP 8–9%
+      worse after the consistency fix. Candidate: a lit fraction by the light's elevation.
+- [ ] Eye height: levels between the mesh and the finest cards.
+- [ ] Read what could not be fetched (see [log.md](log.md)): Cook et al. 2007, Loubet and Neyret
+      2017, van Antwerpen et al. 2026.

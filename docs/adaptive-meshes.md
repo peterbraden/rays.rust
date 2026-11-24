@@ -130,11 +130,33 @@ A tree made of a few large cards was brighter the coarser it got: +3% at `"pixel
 three times as often. Leaves deep in a large cluster are shaded by its others, and a flat card
 can't be.
 
-So a card of a cluster of 2048 pieces or more carries a byte: the fraction of light its leaves
-let through to those a ray from outside sees. It is measured at build by casting rays at them,
-including light they scatter on to each other at the leaf material's own reflectance and
-transmittance. A shadow ray leaving the card is stopped with that probability (`self_lit`,
-`CardSet::occludes`). Smaller cards stay opaque to light from behind, as any surface is.
+So a card of a cluster of 2048 pieces or more (and every crossed card) carries a byte: the
+fraction of light its leaves let through to those a ray from outside sees (`self_lit`), measured
+at build by casting rays at them, weighted by each leaf's response. A ray leaving the card is
+stopped with that probability, by one draw from the ray (`CardSet::stopped`):
+
+- a shadow ray is blocked (`CardSet::occludes`);
+- the path's next ray scatters again at the same vertex, off a leaf of the cluster chosen as a
+  hit on it would be (`CardSet::intersects_range`), so the light the leaves pass among
+  themselves is followed by the path, not credited to the byte.
+
+Light sampling and the path's own sampling see the same cluster this way; an earlier version
+stopped only shadow rays and credited the scattered light to the byte, which once the next ray
+was stopped too counted it twice (+1.2%). Smaller cards stay opaque to light from behind, as any
+surface is.
+
+Which rays leave a card is told by the vertex they leave, not by where they start: integrators
+start rays off a surface by different amounts (the path tracer by its shadow bias, the kernels
+by a few millionths of the distance from the camera, centimetres for trees kilometres away). So
+whatever shades a vertex names it around the rays it traces (`shapes::leaving::with`: the path
+tracer in `trace_intersection`, the kernels' host in `kernels::host::shade` and, for the path's
+next ray, the batch loop, from the marker `HOST_VERTEX` in its state), an instance passes it to
+its model's frame (`forest::Placed::local_vertex`), and a card finds the one it lies on
+(`Card::holds`). A new integrator that shades vertices must do the same, or crossed and
+self-shadowing cards misbehave without failing. With it, the path tracer and the kernels agree
+within 0.1–0.25%.
+
+The table is from when the byte was first added, with scattering credited:
 
 | `"pixels"` | Mean FLIP before / after | Brightness before / after |
 |---|---|---|
@@ -158,6 +180,28 @@ passes the others, and is shadowed by the cluster's own leaves instead (`self_li
 On `forest-aerial` at `pixels: 2`, FLIP falls from 0.0627 to 0.0557 from the air and from 0.0367
 to 0.0309 from low down, for 7% more memory, with render time unchanged
 (docs/research/learned-lod/stage8.md).
+
+### Under many conditions
+
+`scripts/lod-suite.py` renders nine conditions at `pixels` 1, 2 and 4 against full detail
+(docs/research/learned-lod/suite.md). At the default, `pixels: 2`, after the fixes above:
+
+| Case | FLIP | Brightness | Peak MiB (full detail) | Render s (full detail) |
+|---|---|---|---|---|
+| aerial | 0.0608 | −1.5% | 503 (3937) | 30.1 (98.7) |
+| low | 0.0304 | −0.0% | 347 (3974) | 19.6 (47.0) |
+| nadir | 0.0672 | −2.8% | 224 (3973) | 29.4 (91.2) |
+| low sun | 0.0405 | −1.8% | 319 (3962) | 32.4 (101.9) |
+| backlit | 0.0489 | −1.5% | 314 (3953) | 33.4 (104.6) |
+| autumn broadleaves | 0.0734 | −0.4% | 419 (1967) | 24.7 (69.3) |
+| conifers | 0.0486 | −0.8% | 215 (2184) | 32.5 (115.6) |
+| sparse | 0.0427 | −2.2% | 198 (3896) | 19.8 (47.9) |
+| ground | 0.0411 | +0.8% | 2326 (3104) | 206.2 (241.8) |
+
+From the air the forest is slightly dark (one visibility number a card, averaged over the sky,
+shadows light from above a little too much). At eye height the nearest trees are at full detail
+and set memory and time, so levels save little there. What was learned, and how it compares
+with the literature, is in docs/research/learned-lod/conclusions.md.
 
 ## Speed
 

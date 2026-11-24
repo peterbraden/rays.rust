@@ -28,7 +28,21 @@ than showing as sampling noise.
 The parameters are found by CMA-ES (Hansen, "The CMA evolution strategy: a tutorial", 2016),
 which needs no gradients: the renderer isn't differentiable.
 
-A fit is described by a spec file:
+A fit is described by a reference in the preset's own entry in src/material/library.json,
+which the renderer ignores (it reads only a preset's `material`, `variables`, `seed_direction`
+and `overlay`):
+
+    "scree": { ..., "references": [
+       {"source": "ambientcg:Gravel043", "licence": "CC0", "size": 1.6, "usage": {"scale": 0.2},
+        "params": [...],
+        "fit": {"loss": {"start": ..., "fitted": ...}, "values": {...}, "applied": false, ...}} ] }
+
+Fit it with `scripts/fit-material.py scree` (its first reference; `scree:1` the second): the
+scan is fetched into references/materials/ if it isn't there (fetch-material-reference.py), and
+`--record` writes the result into the reference's `fit`: the losses, the settings, and the
+fitted values by parameter (a field's name, or the path joined with dots); `applied` says
+whether they were copied into the preset, which is left to a person who has looked at
+compare.png. Or give a spec file instead of a preset's name:
 
     {"preset": "scree", "name": "gravel043",
      "reference": "path/to/Color.jpg", "size": 1.6,
@@ -45,7 +59,7 @@ searched as a lightness (the mean of its channels, `min` to `max`, default 0 to 
 each channel within `chroma` (default 0.25) of the lightness, relatively, as natural materials
 are mostly low in saturation.
 
-    scripts/fit-material.py spec.json [--iterations 30] [--resolution 160] [--samples 8] [-o out_dir]
+    scripts/fit-material.py scree|spec.json [--iterations 30] [--resolution 160] [--samples 8] [--record] [-o out_dir]
 
 Writes to out_dir: fitted.json (a library file with the fitted preset under `name`, and the
 library material using it), compare.png (reference, start, fitted), and log.csv.
@@ -259,9 +273,10 @@ def render(preset, usage, name, args, size, tmp, tag):
 
 def main():
     a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    a.add_argument("spec")
+    a.add_argument("spec", help="a preset with references in the library (name or name:index), or a spec file")
+    a.add_argument("--record", action="store_true", help="write the fit into the preset's reference in library.json")
     a.add_argument("--iterations", type=int, default=30)
-    a.add_argument("--resolution", type=int, default=160)
+    a.add_argument("--resolution", type=int, default=160, help="pixels across (at least 64, for the loss's four levels)")
     a.add_argument("--samples", type=int, default=8)
     a.add_argument("--seed", type=int, default=1)
     a.add_argument("--sigma", type=float, default=0.2, help="CMA-ES's initial step, in the unit cube")
@@ -270,9 +285,25 @@ def main():
     args = a.parse_args()
     import cma
 
-    spec = json.load(open(args.spec))
-    base = os.path.dirname(os.path.abspath(args.spec))
-    library = json.load(open(os.path.join(ROOT, "src/material/library.json")))
+    library_path = os.path.join(ROOT, "src/material/library.json")
+    library = json.load(open(library_path))
+    reference_at = None
+    if os.path.exists(args.spec):
+        spec = json.load(open(args.spec))
+        base = os.path.dirname(os.path.abspath(args.spec))
+    else:
+        preset_name, _, index = args.spec.partition(":")
+        index = int(index or 0)
+        refs = library.get(preset_name, {}).get("references") or sys.exit("no preset %s with references in the library" % preset_name)
+        reference_at = (preset_name, index)
+        spec = dict(refs[index], preset=preset_name)
+        spec.setdefault("name", preset_name + "_fit")
+        asset = spec["source"].partition(":")[2]
+        base = os.path.join(ROOT, "references", "materials", asset)
+        if not os.path.exists(os.path.join(base, "albedo.jpg")):
+            subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "fetch-material-reference.py"), spec["source"],
+                            "--preset", preset_name] + (["--size", str(spec["size"])] if spec.get("size") else []), check=True)
+        spec["reference"] = "albedo.jpg"
     if spec.get("library"):
         library.update(json.load(open(os.path.join(base, spec["library"]))))
     preset = library[spec["preset"]]
@@ -318,6 +349,25 @@ def main():
             sheet.paste(Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)), (k * r, 0))
         sheet.save(os.path.join(args.output, "compare.png"))
         print("loss %.5f -> %.5f; wrote %s" % (start_loss, best[0], args.output), file=sys.stderr)
+        if args.record:
+            if reference_at is None:
+                sys.exit("--record needs a preset's reference, not a spec file")
+            values = {}
+            for p in spec["params"]:
+                if "field" in p:
+                    values[p["field"]] = round(fitted_usage[p["field"]], 4)
+                else:
+                    v = get(fitted, p["path"])
+                    values[".".join(map(str, p["path"]))] = [round(c, 4) for c in v] if isinstance(v, list) else round(v, 4)
+            library = json.load(open(library_path))
+            name, index = reference_at
+            library[name]["references"][index]["fit"] = {
+                "loss": {"start": round(start_loss, 6), "fitted": round(best[0], 6)},
+                "iterations": args.iterations, "resolution": args.resolution, "samples": args.samples,
+                "date": time.strftime("%Y-%m-%d"), "applied": False, "values": values}
+            with open(library_path, "w") as f:
+                json.dump(library, f, indent=2)
+            print("recorded in %s's reference %d" % (name, index), file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -188,14 +188,18 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
 
 `scripts/fit-material.py` tunes a preset's parameters to a scanned surface:
 
-1. `scripts/fetch-material-reference.py polyhaven:lichen_rock --preset granite_outcrop` fetches
-   a CC0 scan's albedo map and physical size from Poly Haven or ambientCG into
-   `references/materials/` (not committed), with a starting spec.
-2. The spec lists what to search: the library material's fields (`scale`, or a preset variable
-   by name) and places in the preset's JSON, numbers or colours (searched as a lightness and a
-   tint of limited `chroma`, as natural colours are mostly unsaturated). See the script's
-   documentation; `demo/material-fits/` has the two above.
-3. `scripts/fit-material.py demo/material-fits/gravel043.json -o fit` renders each candidate as
+1. A preset's entry in `library.json` lists the scans it is compared with, in `references`:
+   each a CC0 scan's `source` (`polyhaven:lichen_rock`, `ambientcg:Gravel043`), its `size` in
+   metres, and `params`, what to search: the library material's fields (`scale`, or a preset
+   variable by name) and places in the preset's JSON, numbers or colours (searched as a
+   lightness and a tint of limited `chroma`, as natural colours are mostly unsaturated). See the
+   script's documentation; `scree` and `granite_outcrop` have the two above. The renderer
+   ignores everything in an entry but its `material`, `variables`, `seed_direction` and
+   `overlay`, so tools may keep what they like there.
+2. `scripts/fetch-material-reference.py` fetches a scan's albedo map and size into
+   `references/materials/` (not committed); the fit does this itself when it needs to.
+3. `scripts/fit-material.py scree -o fit` (or `scree:1` for its second reference, or a spec
+   file of the same form) renders each candidate as
    the scan was taken: straight down, orthographic, at the scan's size, under a uniform white
    sky (so a lambertian surface renders as its albedo, checked exactly), at twice the
    resolution and averaged down; through a library file read at run time, so nothing is
@@ -207,7 +211,10 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
    confetti of saturated colours averaging grey). CMA-ES searches the parameters (the renderer
    isn't differentiable). About a second a candidate; 30 generations take 15 to 25 minutes.
 4. It writes `fitted.json` (the fitted preset as a library file, ready for a scene's
-   `"library"`), `compare.png` and `log.csv`.
+   `"library"`), `compare.png` and `log.csv`; with `--record`, it also writes the fit into the
+   reference's `fit` in `library.json`: the losses, the settings, and the fitted values by
+   parameter, with `"applied": false` until a person who has looked at the comparison copies
+   them into the preset.
 
 The comparison sees albedo only, so it fits colour and pattern, not relief or gloss (the scans'
 normal and roughness maps could be compared the same way), and the plastic presets' coats add a

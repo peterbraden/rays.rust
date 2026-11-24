@@ -16,6 +16,12 @@
 //! (`files`), so editing one restarts a resumable render. They reach the material parser in
 //! the scene's materials map under `SCENE_PRESETS`.
 //!
+//! A preset's entry may carry anything else for the tools around it, which the renderer
+//! ignores: it reads only `material`, `variables`, `seed_direction` and `overlay` (and `doc`
+//! for messages). The gallery reads `show` and `over_for_landscape`
+//! (`scripts/material-gallery.py`); `references` records the scanned surfaces a preset has been
+//! compared with and fitted to, and how the fit went (`scripts/fit-material.py`).
+//!
 //! `{"type": "library", "name": "oak", "scale": 1, "seed": 0}` uses one. `scale` sizes every
 //! pattern in it (and the depth of its relief with them); `seed` moves every pattern to another
 //! part of its noise, so two objects of the same material differ; any other field is put in
@@ -277,6 +283,36 @@ mod tests {
         assert!(load(&serde_json::json!({"bad": {"doc": "no material"}})).unwrap_err().contains("bad"));
         assert!(load(&serde_json::json!("/no/such/library.json")).unwrap_err().contains("can't read"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_other_properties_are_ignored() {
+        let presets = load(&serde_json::json!({ "plain": { "doc": "d", "references": [{"anything": [1, 2]}], "made_by": {"tool": 3},
+            "material": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } } })).unwrap();
+        let m = expand_in(&serde_json::json!({"type": "library", "name": "plain"}), Some(&presets)).unwrap();
+        assert_eq!(m, serde_json::json!({ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }));
+    }
+
+    #[test]
+    fn test_references_point_into_their_presets() {
+        // A preset's recorded fits name places in it; editing the preset mustn't leave them
+        // pointing nowhere.
+        for name in names() {
+            for r in library()[name].get("references").and_then(Value::as_array).into_iter().flatten() {
+                assert!(r["source"].as_str().is_some_and(|s| s.contains(':')), "{}: a reference's source is site:id", name);
+                assert!(r["size"].as_f64().is_some_and(|s| s > 0.), "{}: a reference needs its size", name);
+                for p in r["params"].as_array().into_iter().flatten() {
+                    let Some(path) = p["path"].as_array() else { continue };
+                    let mut at = &library()[name];
+                    for k in path {
+                        at = match k { Value::String(s) => &at[s.as_str()], _ => &at[k.as_u64().unwrap() as usize] };
+                    }
+                    let ok = at.is_number() || (p["kind"] == "color" && at.as_array().is_some_and(|a| a.len() == 3))
+                        || (at.is_null() && p.get("default").is_some());
+                    assert!(ok, "{}: {:?} is {}", name, path, at);
+                }
+            }
+        }
     }
 
     #[test]

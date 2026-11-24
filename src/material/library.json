@@ -4818,7 +4818,243 @@
           "mask": "$map_lichen"
         }
       ]
-    }
+    },
+    "references": [
+      {
+        "source": "polyhaven:lichen_rock",
+        "licence": "CC0",
+        "size": 2.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.3,
+            "max": 3,
+            "log": true,
+            "default": 1
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              0,
+              "material",
+              "albedo",
+              "color_map",
+              0,
+              1,
+              "color_map",
+              1,
+              1
+            ],
+            "kind": "color",
+            "max": 0.6,
+            "chroma": 0.5
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              0,
+              "material",
+              "albedo",
+              "color_map",
+              0,
+              1,
+              "color_map",
+              3,
+              1
+            ],
+            "kind": "color",
+            "max": 0.6,
+            "chroma": 0.5
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              0,
+              "material",
+              "albedo",
+              "color_map",
+              1,
+              1,
+              "color_map",
+              1,
+              1
+            ],
+            "kind": "color",
+            "max": 0.6,
+            "chroma": 0.5
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              0,
+              "material",
+              "albedo",
+              "color_map",
+              1,
+              1,
+              "color_map",
+              3,
+              1
+            ],
+            "kind": "color",
+            "max": 0.6,
+            "chroma": 0.5
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              1,
+              "material",
+              "albedo",
+              "color_map",
+              0,
+              1
+            ],
+            "kind": "color",
+            "max": 0.6,
+            "chroma": 0.5
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              1,
+              "material",
+              "albedo",
+              "color_map",
+              1,
+              1
+            ],
+            "kind": "color",
+            "max": 0.6,
+            "chroma": 0.5
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              1,
+              "coverage"
+            ],
+            "min": 0,
+            "max": 1
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              3,
+              "material",
+              "albedo",
+              "color_map",
+              0,
+              1
+            ],
+            "kind": "color",
+            "max": 0.8,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              3,
+              "material",
+              "albedo",
+              "color_map",
+              1,
+              1
+            ],
+            "kind": "color",
+            "max": 0.8,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              3,
+              "coverage"
+            ],
+            "min": 0,
+            "max": 1
+          },
+          {
+            "path": [
+              "material",
+              "layers",
+              4,
+              "coverage"
+            ],
+            "min": 0,
+            "max": 1,
+            "default": 1
+          }
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.299614,
+            "fitted": 0.007479
+          },
+          "iterations": 30,
+          "resolution": 128,
+          "date": "2026-11-24",
+          "applied": false,
+          "values": {
+            "scale": 2.748,
+            "material.layers.0.material.albedo.color_map.0.1.color_map.1.1": [
+              0.6708,
+              0.5171,
+              0.2883
+            ],
+            "material.layers.0.material.albedo.color_map.0.1.color_map.3.1": [
+              0.0963,
+              0.0461,
+              0.0622
+            ],
+            "material.layers.0.material.albedo.color_map.1.1.color_map.1.1": [
+              0.0743,
+              0.1118,
+              0.0902
+            ],
+            "material.layers.0.material.albedo.color_map.1.1.color_map.3.1": [
+              0.0751,
+              0.1167,
+              0.2022
+            ],
+            "material.layers.1.material.albedo.color_map.0.1": [
+              0.0339,
+              0.0353,
+              0.047
+            ],
+            "material.layers.1.material.albedo.color_map.1.1": [
+              0.0182,
+              0.0173,
+              0.008
+            ],
+            "material.layers.1.coverage": 0.9779,
+            "material.layers.3.material.albedo.color_map.0.1": [
+              0.0184,
+              0.0144,
+              0.0099
+            ],
+            "material.layers.3.material.albedo.color_map.1.1": [
+              0.0071,
+              0.0073,
+              0.0091
+            ],
+            "material.layers.3.coverage": 0.8997,
+            "material.layers.4.coverage": 0.9808
+          }
+        }
+      }
+    ]
   },
   "limestone_cliff": {
     "show": "landscape",
@@ -5796,7 +6032,242 @@
         },
         "amount": 1
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Gravel043",
+        "licence": "CC0",
+        "size": 1.6,
+        "usage": {
+          "scale": 0.2
+        },
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.12,
+            "max": 0.6,
+            "log": true,
+            "default": 1.0
+          },
+          {
+            "path": [
+              "variables",
+              "palette",
+              0,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "variables",
+              "palette",
+              1,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "variables",
+              "palette",
+              2,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "variables",
+              "palette",
+              3,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "variables",
+              "palette",
+              4,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "material",
+              "albedo",
+              "color_map",
+              0,
+              1,
+              "color_map",
+              0,
+              1,
+              "color_map",
+              0,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "material",
+              "albedo",
+              "color_map",
+              1,
+              1,
+              "color_map",
+              0,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "material",
+              "albedo",
+              "color_map",
+              1,
+              1,
+              "color_map",
+              1,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "material",
+              "albedo",
+              "color_map",
+              1,
+              1,
+              "color_map",
+              2,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "material",
+              "albedo",
+              "color_map",
+              1,
+              1,
+              "color_map",
+              3,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          },
+          {
+            "path": [
+              "material",
+              "albedo",
+              "color_map",
+              1,
+              1,
+              "color_map",
+              4,
+              1
+            ],
+            "kind": "color",
+            "max": 0.7,
+            "chroma": 0.3
+          }
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.001486,
+            "fitted": 0.000196
+          },
+          "iterations": 30,
+          "resolution": 128,
+          "date": "2026-11-24",
+          "applied": false,
+          "values": {
+            "scale": 0.12,
+            "variables.palette.0.1": [
+              0.3579,
+              0.3349,
+              0.3547
+            ],
+            "variables.palette.1.1": [
+              0.0607,
+              0.0605,
+              0.058
+            ],
+            "variables.palette.2.1": [
+              0.259,
+              0.2853,
+              0.2182
+            ],
+            "variables.palette.3.1": [
+              0.1409,
+              0.1622,
+              0.103
+            ],
+            "variables.palette.4.1": [
+              0.2829,
+              0.2903,
+              0.3065
+            ],
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1": [
+              0.3399,
+              0.2936,
+              0.2392
+            ],
+            "material.albedo.color_map.1.1.color_map.0.1": [
+              0.0482,
+              0.0342,
+              0.0435
+            ],
+            "material.albedo.color_map.1.1.color_map.1.1": [
+              0.1523,
+              0.1339,
+              0.1596
+            ],
+            "material.albedo.color_map.1.1.color_map.2.1": [
+              0.0819,
+              0.0794,
+              0.0934
+            ],
+            "material.albedo.color_map.1.1.color_map.3.1": [
+              0.1902,
+              0.2316,
+              0.153
+            ],
+            "material.albedo.color_map.1.1.color_map.4.1": [
+              0.4617,
+              0.5221,
+              0.4596
+            ]
+          }
+        }
+      }
+    ]
   },
   "river_gravel": {
     "show": "landscape",

@@ -125,8 +125,10 @@ impl Bump {
         let a = if n.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
         let u = n.cross(&a).normalize();
         let v = n.cross(&u);
-        // Half the footprint, but finer than the graph's finest detail where that is coarse.
-        let e = (0.5 * c.filter).min(0.1 * g.finest()).max(1e-6);
+        // Half the footprint, so relief finer than a pixel averages out of the differences
+        // rather than tilting the normal at random; where there is no footprint, a tenth of the
+        // graph's finest detail.
+        let e = if c.filter > 0. { 0.5 * c.filter } else { (0.1 * g.finest()).min(1e-3) }.max(1e-6);
         // Heights in the object's units, scaled with it to the scene's.
         let size = frame.map_or(1., |f| 1. / f.matrix().fixed_view::<3, 3>(0, 0).determinant().abs().cbrt().max(1e-300));
         let h = |p: Vector3<f64>| {
@@ -295,6 +297,20 @@ mod tests {
         // Twice the amount, twice the slope.
         let b2 = Bump { amount: 2., ..b };
         assert!((b2.perturb(&Vector3::zeros(), &Vector3::y()) - Vector3::new(-1., 1., 0.).normalize()).norm() < 1e-6);
+    }
+
+    #[test]
+    fn test_relief_finer_than_the_footprint_fades() {
+        // Stones a centimetre across: seen from close, they tilt the normal a lot; with a
+        // footprint of a metre, hardly at all, rather than at random.
+        let g = crate::graph::Graph::parse(&serde_json::json!({"node": "cells", "style": "stones", "scale": 0.01, "amplitude": 0.005})).unwrap();
+        let b = Bump { pattern: Pattern::Graph(std::sync::Arc::new(g.clone())), amount: 1., scale: Vector3::repeat(1.) };
+        let tilt = |filter: f64| (0 .. 200).map(|k| {
+            let c = crate::graph::Context::new(Vector3::new(k as f64 * 0.0137, 0., k as f64 * 0.0071), Vector3::y(), filter);
+            1. - b.perturb_graph(&g, &c, &Vector3::y(), None).y
+        }).sum::<f64>() / 200.;
+        assert!(tilt(0.0005) > 0.05, "{}", tilt(0.0005));
+        assert!(tilt(1.) < 1e-4, "{}", tilt(1.));
     }
 
     #[test]

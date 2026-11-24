@@ -142,6 +142,10 @@ pub fn draft(r: &Ray, s: &Scene) -> Color {
 
 pub(crate) fn shading<'a>(r: &Ray, medium: &(dyn Medium + Sync + Send), intersection: &Intersection<'a>, s: &Scene) -> Intersection<'a> {
     let n = medium.normal_at_hit(intersection, s);
+    let n = match medium.material_at(intersection.point).shading_normal(&Intersection { normal: n, ..*intersection }, s) {
+        Some(m) => m,
+        None => n,
+    };
     if n == intersection.normal || (n.dot(&r.rd) > 0.) != (intersection.normal.dot(&r.rd) > 0.) {
         return *intersection;
     }

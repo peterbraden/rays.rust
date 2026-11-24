@@ -59,6 +59,7 @@ pub mod material {
     pub mod noise;
     pub mod grass;
     pub mod bump;
+    pub mod library;
     pub mod rock;
     pub mod soil;
     pub mod snow;
@@ -163,6 +164,7 @@ pub mod procedural {
 }
 pub mod participatingmedia;
 pub mod noise;
+pub mod patterns;
 pub mod terrain;
 pub mod expr;
 pub mod graph;

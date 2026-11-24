@@ -67,6 +67,12 @@ pub trait MaterialModel: Sync{
     /// can't be.
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
 
+    /// The normal to shade with at a hit (whose normal is the surface's, already bumped by
+    /// its medium, if that is), if the material tilts it: a material's own bump map
+    /// (`bump::BumpedMaterial`), so its relief stays aligned with its pattern wherever it's
+    /// used. None to shade with the hit's normal.
+    fn shading_normal(&self, _i: &Intersection, _s: &crate::scene::Scene) -> Option<Vector3<f64>> { None }
+
     /// The sea's water, if this is its material and the GPU's kernel for it does all this one
     /// does (opaque water). See `ocean::PhysicalOcean`.
     fn water(&self) -> Option<Water> { None }

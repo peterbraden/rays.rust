@@ -507,6 +507,30 @@ impl SceneFile {
     /// `textures::SlopeTexture`), or from the elevation (`{"height": [from, to], ...}`).
     pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
         // A function graph's node (`graph.rs`): a grey level, eg. a mix's amount by slope.
+        // {"pattern": graph, "color_map": [[value, colour or texture], ...], "interpolation":
+        // "linear" | "smooth" | "step"}: a pattern coloured by a map (`textures::PatternTexture`).
+        if let Some(pattern) = v.get("pattern").filter(|p| !p.is_string()) {
+            use crate::textures::{Interpolation, PatternTexture};
+            let pattern = crate::graph::Graph::parse(pattern).unwrap_or_else(|e| panic!("texture pattern: {}", e));
+            let entries = v["color_map"].as_array().filter(|a| !a.is_empty())
+                .unwrap_or_else(|| panic!("a pattern texture needs a \"color_map\": [[value, colour], ...], got {}", v["color_map"]));
+            let mut map: Vec<(f64, crate::textures::ColorTexture)> = entries.iter().map(|e| match e.as_array() {
+                Some(pair) if pair.len() == 2 && pair[0].is_number() => (pair[0].as_f64().unwrap(), match &pair[1] {
+                    // A number is a grey level: for roughness maps.
+                    Value::Number(g) => { let g = g.as_f64().unwrap(); Color::new(g, g, g).into() },
+                    c => SceneFile::parse_color_texture(c),
+                }),
+                _ => panic!("a color_map entry is [value, colour], got {}", e),
+            }).collect();
+            map.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let interpolation = match v["interpolation"].as_str().unwrap_or("linear") {
+                "linear" => Interpolation::Linear,
+                "smooth" => Interpolation::Smooth,
+                "step" => Interpolation::Step,
+                s => panic!("a color_map's interpolation is linear, smooth or step, not \"{}\"", s),
+            };
+            return crate::textures::ColorTexture::Pattern(Box::new(PatternTexture { pattern, map, interpolation }));
+        }
         if v.get("node").is_some() {
             return crate::textures::ColorTexture::Graph(Arc::new(crate::graph::Graph::parse(v)
                 .unwrap_or_else(|e| panic!("texture graph: {}", e))));
@@ -1090,6 +1114,11 @@ impl SceneFile {
     /// "scale": 1 or [x, y, z], "octaves": 6 (wrinkles), "frequency": 1, "phase": 0 (ripples
     /// and waves, phase in cycles)}`.
     pub fn parse_bump(n: &Value) -> Bump {
+        // {"graph": node, "amount": 1}: relief from a function graph, in scene units.
+        if let Some(g) = n.get("graph") {
+            let graph = crate::graph::Graph::parse(g).unwrap_or_else(|e| panic!("normal graph: {}", e));
+            return Bump { pattern: Pattern::Graph(Arc::new(graph)), amount: SceneFile::parse_number(&n["amount"], 1.), scale: Vector3::repeat(1.) };
+        }
         let pattern = match n["pattern"].as_str() {
             Some("bumps") => Pattern::Bumps,
             Some("dents") => Pattern::Dents,
@@ -1098,7 +1127,7 @@ impl SceneFile {
                 frequency: SceneFile::parse_number(&n["frequency"], 1.), phase: SceneFile::parse_number(&n["phase"], 0.) },
             Some("waves") => Pattern::Waves {
                 frequency: SceneFile::parse_number(&n["frequency"], 1.), phase: SceneFile::parse_number(&n["phase"], 0.) },
-            _ => panic!("normal \"pattern\" must be \"bumps\", \"dents\", \"wrinkles\", \"ripples\" or \"waves\", got {}", n["pattern"]),
+            _ => panic!("normal \"pattern\" must be \"bumps\", \"dents\", \"wrinkles\", \"ripples\" or \"waves\" (or give a \"graph\"), got {}", n["pattern"]),
         };
         let scale = match &n["scale"] {
             Value::Number(s) => Vector3::repeat(s.as_f64().unwrap()),
@@ -3531,8 +3560,36 @@ impl SceneFile {
     /// Look up a material by name. None if there is no such material; panics if it exists but
     /// has an unknown type.
     pub fn parse_material_ref(key: &Value, materials: &Map<String, Value> ) -> Option<Box<dyn MaterialModel + Sync + Send>> {
+        // A material may be defined where it is used, rather than named.
+        if key.is_object() {
+            return Some(SceneFile::parse_material_definition(key, "(inline)", materials));
+        }
         let name = SceneFile::parse_string(key);
         let props = materials.get(&name)?;
+        Some(SceneFile::parse_material_definition(props, &name, materials))
+    }
+
+    /// A material from its definition (`name` for messages), bump mapped if it has a
+    /// `"normal"` (`bump::BumpedMaterial`: as an object's, see `parse_bump`), so its relief
+    /// goes wherever it does.
+    pub fn parse_material_definition(props: &Value, name: &str, materials: &Map<String, Value>) -> Box<dyn MaterialModel + Sync + Send> {
+        // {"type": "library", "name": ..., "scale", "seed"}: a ready-made material
+        // (`material::library`).
+        if props["type"].as_str() == Some("library") {
+            let scene = materials.get(crate::material::library::SCENE_PRESETS).and_then(Value::as_object);
+            let expanded = crate::material::library::expand_in(props, scene).unwrap_or_else(|e| panic!("material '{}': {}", name, e));
+            return SceneFile::parse_material_definition(&expanded, name, materials);
+        }
+        let m = SceneFile::parse_unbumped_material(props, name, materials)
+            .unwrap_or_else(|| panic!("Material '{}' has unknown type {}", name, props["type"]));
+        match props.get("normal") {
+            Some(n) if n.is_object() => Box::new(crate::material::bump::BumpedMaterial { inner: m, bump: SceneFile::parse_bump(n) }),
+            _ => m,
+        }
+    }
+
+    fn parse_unbumped_material(props: &Value, name: &str, materials: &Map<String, Value>) -> Option<Box<dyn MaterialModel + Sync + Send>> {
+        let name = name.to_string();
         if props["type"].as_str() == Some("noise") {
             return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
@@ -3585,10 +3642,7 @@ impl SceneFile {
                 SceneFile::parse_vec3_def(props, "up", Vector3::y()),
                 SceneFile::parse_number(&props["drift"], 0.3), seed)));
         }
-        match SceneFile::parse_material(props) {
-            Some(m) => Some(m),
-            None => panic!("Material '{}' has unknown type {}", name, props["type"]),
-        }
+        SceneFile::parse_material(props)
     }
 
     /// Look up a material that must exist; `context` names what references it.
@@ -3625,9 +3679,12 @@ impl SceneFile {
             } else {
                 Optics::Reflectance(SceneFile::parse_color_def(o, "reflectance", Color::new(0.9, 0.9, 0.9)))
             };
-            let r = SceneFile::parse_number(&o["roughness"], 0.);
+            // A roughness texture scales roughness_u and _v, 1 unless given.
+            let roughness_map = o["roughness"].is_object().then(|| SceneFile::parse_color_texture(&o["roughness"]));
+            let r = if roughness_map.is_some() { 1. } else { SceneFile::parse_number(&o["roughness"], 0.) };
             return Some(Box::new(Conductor {
                 optics,
+                roughness_map,
                 roughness: (SceneFile::parse_number(&o["roughness_u"], r), SceneFile::parse_number(&o["roughness_v"], r)),
                 tangent: SceneFile::parse_vec3_def(o, "tangent", Vector3::x()),
             }));
@@ -3704,7 +3761,8 @@ impl SceneFile {
             let d:Plastic = Plastic {
                 albedo: SceneFile::parse_color_texture(&o["albedo"]),
                 refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
-                roughness: SceneFile::parse_number(&o["roughness"], 0.),
+                roughness: if o["roughness"].is_object() { 0. } else { SceneFile::parse_number(&o["roughness"], 0.) },
+                roughness_map: o["roughness"].is_object().then(|| SceneFile::parse_color_texture(&o["roughness"])),
             };
             return Some(Box::new(d));
         }
@@ -4905,8 +4963,19 @@ impl SceneFile {
     /// Build a scene from a scene file's JSON, applying command-line overrides first.
     pub fn from_value_overridden(doc: Value, o: &Overrides) -> Scene {
         let (width, height) = (o.width, o.height);
+        // The scene's own library presets (`material::library::load`), taken out before the
+        // scene's variables are substituted: presets have variables of their own.
+        let mut doc = doc;
+        let presets = doc.as_object_mut().and_then(|d| d.remove("library"));
         let mut doc = SceneFile::substitute_variables(doc)
             .unwrap_or_else(|e| panic!("Scene file: {}", e));
+        if let Some(spec) = presets {
+            let presets = crate::material::library::load(&spec).unwrap_or_else(|e| panic!("Scene file's library: {}", e));
+            if !doc["materials"].is_object() {
+                doc["materials"] = Value::Object(Map::new());
+            }
+            doc["materials"].as_object_mut().unwrap().insert(crate::material::library::SCENE_PRESETS.into(), Value::Object(presets));
+        }
         crate::weather::scene::choose_seeds(&mut doc);
         let mut scene: SceneFile = serde_json::from_value(doc).unwrap();
         if let Some(seed) = o.seed {
@@ -5486,6 +5555,67 @@ mod tests {
         assert_eq!((s.image.width, s.image.height), (40, 2));
         let s = minimal_scene_sized("", None, Some(30));
         assert_eq!((s.image.width, s.image.height), (4, 30));
+    }
+
+    #[test]
+    fn test_a_scene_brings_its_own_library() {
+        // A preset written in the scene, with variables of its own that the scene's mustn't
+        // touch, used by name, scaled, and as an overlay's base.
+        let s = minimal_scene(r#", "variables": { "dark": [0.1, 0.1, 0.1] },
+            "library": { "striped": { "doc": "d", "variables": { "bands": {"node": "wave", "input": {"node": "gradient"}} },
+                "material": { "type": "lambertian", "albedo": {"pattern": "$bands", "color_map": [[0, [0, 0, 0]], [1, [1, 1, 1]]]} } } },
+            "materials": { "S": { "type": "library", "name": "striped", "scale": 2 },
+                           "D": { "type": "library", "name": "dust", "over": { "type": "library", "name": "striped" } },
+                           "P": { "type": "lambertian", "albedo": "$dark" } },
+            "objects": [ { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "S" },
+                         { "type": "sphere", "location": [3, 0, 0], "radius": 1, "material": "D" },
+                         { "type": "sphere", "location": [6, 0, 0], "radius": 1, "material": "P" } ]"#);
+        for x in [0., 3., 6.] {
+            let r = Ray { ro: Vector3::new(x + 0.1, 0.2, -5.), rd: Vector3::new(0., 0., 1.) };
+            assert!(crate::trace::trace(&r, 0, &s).1.rgb.iter().all(|v| v.is_finite()));
+        }
+    }
+
+    #[test]
+    fn test_patterns_go_with_their_objects() {
+        let s = minimal_scene(r#", "objects": [
+            { "type": "sphere", "location": [0, 0, 0], "radius": 1 },
+            { "type": "sphere", "location": [0, 0, 0], "radius": 1, "transform": [{"rotate": [0, 0, 90]}, {"translate": [5, 0, 0]}] },
+            { "type": "sphere", "location": [0, 0, 0], "radius": 0.5, "transform": [{"scale": 2}, {"rotate": [0, 0, 90]}, {"translate": [10, 0, 0]}] } ]"#);
+        let t = SceneFile::parse_color_texture(&serde_json::json!({"pattern": {"node": "gradient", "direction": [1, 0, 0]},
+            "color_map": [[-1, [0, 0, 0]], [1, [1, 1, 1]]]}));
+        let hit = |x: f64| s.objects.nearest_intersection(&Ray { ro: Vector3::new(x, 0.3, -5.), rd: Vector3::z() }, f64::INFINITY, 0.).unwrap();
+        // The sphere turned a quarter about z: its own x is the scene's y.
+        let (a, b) = (hit(0.), hit(5.));
+        let (ca, cb) = (t.eval(&a, &s), t.eval(&b, &s));
+        assert!((ca.rgb.x - 0.5).abs() < 1e-9, "{:?}", ca);
+        assert!((cb.rgb.x - 0.65).abs() < 1e-9, "{:?}", cb);
+        // Scaled, the pattern keeps its size: the same as the unscaled sphere's.
+        let cc = t.eval(&hit(10.), &s);
+        assert!((cc.rgb.x - 0.65).abs() < 1e-9, "{:?}", cc);
+    }
+
+    #[test]
+    fn test_materials_carry_their_own_bumps_and_may_be_inline() {
+        let s = minimal_scene(r#", "variables": { "veins": {"node": "wave", "shape": "triangle", "frequency": 4, "input": {"node": "gradient", "direction": [1, 0, 0]}} },
+            "materials": {
+                "STONE": { "type": "plastic", "albedo": {"pattern": "$veins", "color_map": [[0, [0.9, 0.9, 0.9]], [1, [0.2, 0.2, 0.2]]]},
+                           "roughness": {"node": "constant", "value": 0.3},
+                           "normal": {"graph": "$veins", "amount": 0.01} },
+                "WORN": { "type": "mix", "materials": ["STONE", { "type": "conductor", "metal": "Cu", "roughness": {"pattern": "$veins", "color_map": [[0, 0.1], [1, 0.5]]} }],
+                          "amount": 0.5 } },
+            "objects": [ { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "STONE" },
+                         { "type": "sphere", "location": [3, 0, 0], "radius": 1, "material": "WORN" } ]"#);
+        let r = Ray { ro: Vector3::new(0.1, 0.2, -5.), rd: Vector3::new(0., 0., 1.) };
+        let hit = s.objects.nearest_intersection(&r, f64::INFINITY, 0.).expect("hits the sphere");
+        let m = hit.object.medium.material_at(hit.point);
+        let n = m.shading_normal(&hit, &s).expect("the stone carries a bump");
+        assert!((n.norm() - 1.).abs() < 1e-9 && n.dot(&hit.normal) > 0.9 && n != hit.normal);
+        for x in [0., 3.] {
+            let r = Ray { ro: Vector3::new(x + 0.1, 0.2, -5.), rd: Vector3::new(0., 0., 1.) };
+            let c = crate::trace::trace(&r, 0, &s).1;
+            assert!(c.rgb.iter().all(|v| v.is_finite()));
+        }
     }
 
     #[test]

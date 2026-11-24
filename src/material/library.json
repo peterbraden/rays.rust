@@ -8084,74 +8084,10 @@
         "params": [
           {
             "field": "scale",
-            "min": 0.5,
-            "max": 2,
+            "min": 0.7,
+            "max": 1.4,
             "log": true,
             "default": 1
-          },
-          {
-            "path": [
-              "variables",
-              "bed_colours",
-              0,
-              1
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "bed_colours",
-              1,
-              1
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "bed_colours",
-              2,
-              1
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "bed_colours",
-              3,
-              1
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "bed_colours",
-              4,
-              1
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "crack"
-            ],
-            "kind": "color",
-            "max": 0.4,
-            "chroma": 0.6
           },
           {
             "path": [
@@ -8161,8 +8097,92 @@
             "min": 0.03,
             "max": 0.15,
             "log": true
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "bed_colours",
+                0,
+                1
+              ],
+              [
+                "variables",
+                "bed_colours",
+                1,
+                1
+              ],
+              [
+                "variables",
+                "bed_colours",
+                2,
+                1
+              ],
+              [
+                "variables",
+                "bed_colours",
+                3,
+                1
+              ],
+              [
+                "variables",
+                "bed_colours",
+                4,
+                1
+              ],
+              [
+                "variables",
+                "crack"
+              ]
+            ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.594523,
+            "fitted": 0.046075
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": false,
+          "values": {
+            "scale": 0.8929,
+            "variables.thickness": 0.0874,
+            "variables.bed_colours.0.1": [
+              0.1715,
+              0.0702,
+              0.029
+            ],
+            "variables.bed_colours.1.1": [
+              0.2792,
+              0.143,
+              0.0563
+            ],
+            "variables.bed_colours.2.1": [
+              0.3501,
+              0.1988,
+              0.083
+            ],
+            "variables.bed_colours.3.1": [
+              0.4224,
+              0.2634,
+              0.1291
+            ],
+            "variables.bed_colours.4.1": [
+              0.3857,
+              0.2276,
+              0.1027
+            ],
+            "variables.crack": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
       }
     ]
   },
@@ -8233,26 +8253,26 @@
         }
       },
       "pale": [
-        0.62,
-        0.56,
-        0.45
+        0.5968,
+        0.4151,
+        0.2355
       ],
       "pale2": [
-        0.75,
-        0.7,
-        0.6
+        0.7281,
+        0.5233,
+        0.3167
       ],
       "dark": [
-        0.09,
-        0.085,
-        0.08
+        0.0672,
+        0.0489,
+        0.0325
       ],
       "gap": [
-        0.06,
-        0.05,
-        0.04
+        0.0341,
+        0.0219,
+        0.0123
       ],
-      "dark_share": 0.75
+      "dark_share": 0.5154
     },
     "material": {
       "type": "lambertian",
@@ -8353,46 +8373,10 @@
         "params": [
           {
             "field": "scale",
-            "min": 0.5,
-            "max": 2,
+            "min": 0.7,
+            "max": 1.4,
             "log": true,
             "default": 1
-          },
-          {
-            "path": [
-              "variables",
-              "pale"
-            ],
-            "kind": "color",
-            "max": 0.9,
-            "chroma": 0.4
-          },
-          {
-            "path": [
-              "variables",
-              "pale2"
-            ],
-            "kind": "color",
-            "max": 0.9,
-            "chroma": 0.4
-          },
-          {
-            "path": [
-              "variables",
-              "dark"
-            ],
-            "kind": "color",
-            "max": 0.9,
-            "chroma": 0.4
-          },
-          {
-            "path": [
-              "variables",
-              "gap"
-            ],
-            "kind": "color",
-            "max": 0.9,
-            "chroma": 0.4
           },
           {
             "path": [
@@ -8401,10 +8385,67 @@
             ],
             "min": 0.5,
             "max": 0.95
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "pale"
+              ],
+              [
+                "variables",
+                "pale2"
+              ],
+              [
+                "variables",
+                "dark"
+              ],
+              [
+                "variables",
+                "gap"
+              ]
+            ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.9737,
+            "fitted": 0.010014
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 1.0846,
+            "variables.dark_share": 0.5154,
+            "variables.pale": [
+              0.5968,
+              0.4151,
+              0.2355
+            ],
+            "variables.pale2": [
+              0.7281,
+              0.5233,
+              0.3167
+            ],
+            "variables.dark": [
+              0.0672,
+              0.0489,
+              0.0325
+            ],
+            "variables.gap": [
+              0.0341,
+              0.0219,
+              0.0123
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.0846
   },
   "angular_rubble": {
     "show": "landscape",
@@ -8443,26 +8484,26 @@
         "smallest": 0.001
       },
       "light": [
-        0.5,
-        0.51,
-        0.5
+        0.4035,
+        0.3572,
+        0.2907
       ],
       "mid": [
-        0.38,
-        0.39,
-        0.39
+        0.2821,
+        0.2512,
+        0.2086
       ],
       "dark": [
-        0.28,
-        0.29,
-        0.29
+        0.1806,
+        0.1623,
+        0.1347
       ],
       "soil": [
-        0.2,
-        0.14,
-        0.1
+        0.0571,
+        0.0347,
+        0.0206
       ],
-      "gap_width": 0.05
+      "gap_width": 0.0888
     },
     "material": {
       "type": "lambertian",
@@ -8558,46 +8599,10 @@
         "params": [
           {
             "field": "scale",
-            "min": 0.5,
-            "max": 2,
+            "min": 0.7,
+            "max": 1.4,
             "log": true,
             "default": 1
-          },
-          {
-            "path": [
-              "variables",
-              "light"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "variables",
-              "mid"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "variables",
-              "dark"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "variables",
-              "soil"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.3
           },
           {
             "path": [
@@ -8607,10 +8612,67 @@
             "min": 0.01,
             "max": 0.15,
             "log": true
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "light"
+              ],
+              [
+                "variables",
+                "mid"
+              ],
+              [
+                "variables",
+                "dark"
+              ],
+              [
+                "variables",
+                "soil"
+              ]
+            ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.536726,
+            "fitted": 0.004374
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.9945,
+            "variables.gap_width": 0.0888,
+            "variables.light": [
+              0.4035,
+              0.3572,
+              0.2907
+            ],
+            "variables.mid": [
+              0.2821,
+              0.2512,
+              0.2086
+            ],
+            "variables.dark": [
+              0.1806,
+              0.1623,
+              0.1347
+            ],
+            "variables.soil": [
+              0.0571,
+              0.0347,
+              0.0206
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.9945
   },
   "lichened_ironstone": {
     "show": "landscape",
@@ -8766,46 +8828,10 @@
         "params": [
           {
             "field": "scale",
-            "min": 0.5,
-            "max": 2,
+            "min": 0.7,
+            "max": 1.4,
             "log": true,
             "default": 1
-          },
-          {
-            "path": [
-              "variables",
-              "dark"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "rust"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "lichen"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "lichen2"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
           },
           {
             "path": [
@@ -8814,8 +8840,64 @@
             ],
             "min": 0,
             "max": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "dark"
+              ],
+              [
+                "variables",
+                "rust"
+              ],
+              [
+                "variables",
+                "lichen"
+              ],
+              [
+                "variables",
+                "lichen2"
+              ]
+            ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.426751,
+            "fitted": 0.137405
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": false,
+          "values": {
+            "scale": 0.7035,
+            "variables.cover": 0.0114,
+            "variables.dark": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "variables.rust": [
+              0.1026,
+              0.0789,
+              0.0681
+            ],
+            "variables.lichen": [
+              0.2943,
+              0.6095,
+              1.0413
+            ],
+            "variables.lichen2": [
+              0.1809,
+              0.3764,
+              0.6402
+            ]
+          }
+        }
       }
     ]
   },
@@ -8881,29 +8963,29 @@
         ]
       },
       "rock": [
-        0.33,
-        0.35,
-        0.37
+        0.1638,
+        0.1686,
+        0.1748
       ],
       "yellow": [
-        0.5,
-        0.53,
-        0.17
+        0.2337,
+        0.2404,
+        0.0757
       ],
       "olive": [
-        0.3,
-        0.33,
-        0.16
+        0.1717,
+        0.1833,
+        0.0872
       ],
       "grey": [
-        0.45,
-        0.47,
-        0.45
+        0.1991,
+        0.2017,
+        0.1895
       ],
       "black": [
-        0.06,
-        0.06,
-        0.05
+        0.1015,
+        0.0985,
+        0.0805
       ]
     },
     "material": {
@@ -9009,59 +9091,79 @@
         "params": [
           {
             "field": "scale",
-            "min": 0.5,
-            "max": 2,
+            "min": 0.7,
+            "max": 1.4,
             "log": true,
             "default": 1
           },
           {
-            "path": [
-              "variables",
-              "rock"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "yellow"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "olive"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "grey"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "black"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "rock"
+              ],
+              [
+                "variables",
+                "yellow"
+              ],
+              [
+                "variables",
+                "olive"
+              ],
+              [
+                "variables",
+                "grey"
+              ],
+              [
+                "variables",
+                "black"
+              ]
+            ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.797597,
+            "fitted": 0.034182
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 1.3603,
+            "variables.rock": [
+              0.1638,
+              0.1686,
+              0.1748
+            ],
+            "variables.yellow": [
+              0.2337,
+              0.2404,
+              0.0757
+            ],
+            "variables.olive": [
+              0.1717,
+              0.1833,
+              0.0872
+            ],
+            "variables.grey": [
+              0.1991,
+              0.2017,
+              0.1895
+            ],
+            "variables.black": [
+              0.1015,
+              0.0985,
+              0.0805
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.3603
   },
   "ochre_crust": {
     "show": "landscape",
@@ -9234,46 +9336,10 @@
         "params": [
           {
             "field": "scale",
-            "min": 0.5,
-            "max": 2,
+            "min": 0.7,
+            "max": 1.4,
             "log": true,
             "default": 1
-          },
-          {
-            "path": [
-              "variables",
-              "ochre"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "tan"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "varnish_colour"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
-          },
-          {
-            "path": [
-              "variables",
-              "crack"
-            ],
-            "kind": "color",
-            "max": 0.8,
-            "chroma": 0.6
           },
           {
             "path": [
@@ -9282,8 +9348,64 @@
             ],
             "min": 0,
             "max": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "ochre"
+              ],
+              [
+                "variables",
+                "tan"
+              ],
+              [
+                "variables",
+                "varnish_colour"
+              ],
+              [
+                "variables",
+                "crack"
+              ]
+            ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.398391,
+            "fitted": 0.003868
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": false,
+          "values": {
+            "scale": 0.9992,
+            "variables.amount": 0.7271,
+            "variables.ochre": [
+              0.6947,
+              0.4063,
+              0.1965
+            ],
+            "variables.tan": [
+              0.5809,
+              0.3129,
+              0.1314
+            ],
+            "variables.varnish_colour": [
+              0.133,
+              0.0796,
+              0.0431
+            ],
+            "variables.crack": [
+              0.3229,
+              0.1159,
+              0.0419
+            ]
+          }
+        }
       }
     ]
   }

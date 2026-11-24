@@ -17,7 +17,8 @@
 //! the scene's materials map under `SCENE_PRESETS`.
 //!
 //! A preset's entry may carry anything else for the tools around it, which the renderer
-//! ignores: it reads only `material`, `variables`, `seed_direction` and `overlay` (and `doc`
+//! ignores: it reads only `material`, `variables`, `seed_direction`, `overlay` and `scale` (the
+//! size it was made at, as a fit to a scan finds it, multiplied into any asked for; and `doc`
 //! for messages). The gallery reads `show` and `over_for_landscape`
 //! (`scripts/material-gallery.py`); `references` records the scanned surfaces a preset has been
 //! compared with and fitted to, and how the fit went (`scripts/fit-material.py`).
@@ -128,6 +129,8 @@ pub fn expand_in(props: &Value, scene: Option<&Map<String, Value>>) -> Result<Va
     })?;
     let scale = props.get("scale").map_or(Some(1.), Value::as_f64).filter(|s| *s > 0.)
         .ok_or("a library material's scale must be a positive number")?;
+    // A preset's own scale, as fitted to a scan, under the one asked for.
+    let scale = scale * preset.get("scale").and_then(Value::as_f64).filter(|s| *s > 0.).unwrap_or(1.);
     let seed = props.get("seed").map_or(Some(0), Value::as_u64).ok_or("a library material's seed is a whole number, at least 0")?;
     // The material, with the preset's own variables substituted.
     let mut variables = match preset.get("variables") {
@@ -283,6 +286,14 @@ mod tests {
         assert!(load(&serde_json::json!({"bad": {"doc": "no material"}})).unwrap_err().contains("bad"));
         assert!(load(&serde_json::json!("/no/such/library.json")).unwrap_err().contains("can't read"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_presets_own_scale_multiplies() {
+        let presets = load(&serde_json::json!({ "small": { "scale": 0.5, "material": { "type": "lambertian",
+            "albedo": {"pattern": {"node": "gradient"}, "color_map": [[0, [0, 0, 0]], [1, [1, 1, 1]]]} } } })).unwrap();
+        let m = expand_in(&serde_json::json!({"type": "library", "name": "small", "scale": 3}), Some(&presets)).unwrap();
+        assert_eq!(m["albedo"]["pattern"]["scale"], 1.5);
     }
 
     #[test]

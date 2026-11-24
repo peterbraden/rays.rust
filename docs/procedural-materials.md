@@ -194,7 +194,7 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
    variable by name) and places in the preset's JSON, numbers or colours (searched as a
    lightness and a tint of limited `chroma`, as natural colours are mostly unsaturated). See the
    script's documentation; `scree` and `granite_outcrop` have the two above. The renderer
-   ignores everything in an entry but its `material`, `variables`, `seed_direction` and
+   ignores everything in an entry but its `material`, `variables`, `seed_direction`, `scale` and
    `overlay`, so tools may keep what they like there.
 2. `scripts/fetch-material-reference.py` fetches a scan's albedo map and size into
    `references/materials/` (not committed); the fit does this itself when it needs to.
@@ -215,6 +215,44 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
    reference's `fit` in `library.json`: the losses, the settings, and the fitted values by
    parameter, with `"applied": false` until a person who has looked at the comparison copies
    them into the preset.
+
+### Presets modelled on scans
+
+![Six presets and their scans](material-fit-scans.png)
+
+*Each: the scan, the preset as written, and fitted. Three fits were applied; three were not.*
+
+Six presets were written to imitate particular Poly Haven scans, each scan recorded in the
+preset's `references`: `pebble_bed` (dry_river_pebbles: packed rounded pebbles, pale and
+dark), `angular_rubble` (gray_rocks), `mossy_slab` (mossy_rock: a mosaic of mosses and
+lichens over grey rock, with a few cracks), `ochre_crust` (rock_06: ochre rock, dark varnish,
+cracks), `lichened_ironstone` (lichen_rock, a cliff face: iron-dark rock streaked along its
+grain, lichen in drifts) and `bedded_sandstone` (cliff_side: beds broken into blocks by
+joints). The two cliffs are fitted as walls (`"view": "wall"`), so their beds and streaks run
+along y as on a landscape's cliffs.
+
+A fit is applied only once someone has looked at it: `scripts/apply-fit.py pebble_bed` copies
+the recorded values into the preset and marks them applied. A fitted size becomes the
+preset's own `scale`, multiplied into whatever a scene asks for. Re-rendering an applied
+preset gives the recorded loss exactly. The fits of pebbles, rubble and moss were applied;
+ochre_crust's overshot (too much varnish), lichened_ironstone's turned its lichen blue (one
+set of gains can't serve colours of different hues: the rock's and the lichen's should be
+fitted as separate groups), and bedded_sandstone's structure is wrong (its partings too
+regular, its blotches too dark), which no colour can fix.
+
+What the first attempts taught, now built into `fit-material.py`:
+
+- An optimiser left free with each colour swaps their roles (the pale pebbles become the dark
+  ones) and wanders into hues the scan hasn't got (green and pink pebbles), matching the
+  statistics with a picture that looks nothing like the scan. A colour's lightness is now held
+  near its author's and its tint close to theirs: a fit refines a preset's colours, it doesn't
+  choose them.
+- A search's cost grows with its dimensions (CMA-ES wants of the order of a hundred
+  evaluations per dimension), so a preset's colours are best fitted as a group: four numbers,
+  red, green and blue gains and a contrast, for all of them, keeping their relations.
+- The eye judges a surface's hue by its mean first; the patch distributions barely see a mean
+  shifted from tan to pink. The mean colour is now compared besides, along the opponent axes.
+- Size is held near the author's (0.7 to 1.4 of it): left free, it ran to its bound.
 
 The comparison sees albedo only, so it fits colour and pattern, not relief or gloss (the scans'
 normal and roughness maps could be compared the same way), and the plastic presets' coats add a

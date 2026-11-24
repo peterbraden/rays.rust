@@ -936,6 +936,46 @@ pub fn boulders(o: &Value, landscape: &SceneObject) -> Option<(Value, Value)> {
     Some((scatter, material))
 }
 
+/// The populations and materials of an ecosystem's `"flora"` on the landscape `landscape`
+/// (`terrain::flora`): `true`, or `{"strata": ["trees", "shrubs", "ground"], "reach": 300,
+/// "samples": 12}`. The biomes it finds at `samples` x `samples` points over `reach` metres
+/// about the camera (`o`'s `"camera"`) choose the plants; each plant is a population of its
+/// own, its rule its abundance in each biome. None without a flora, or where the landscape has
+/// no climate (no biomes).
+pub fn flora(o: &Value, landscape: &SceneObject) -> Option<(Vec<Value>, serde_json::Map<String, Value>)> {
+    let spec = match o.get("flora") {
+        None | Some(Value::Bool(false)) => return None,
+        Some(Value::Bool(true)) => serde_json::json!({}),
+        Some(v) => v.clone(),
+    };
+    let strata: Vec<String> = spec["strata"].as_array().map_or(vec!["trees".into(), "shrubs".into(), "ground".into()],
+        |a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect());
+    let strata: Vec<&str> = strata.iter().map(|s| s.as_str()).collect();
+    let reach = number(&spec, "reach", 300.);
+    let n = SceneFile::parse_int(&spec["samples"], 12).max(2);
+    let camera = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.));
+    let fields = landscape.medium.fields()?;
+    let mut samples = vec![];
+    for j in 0..n {
+        for i in 0..n {
+            let (x, z) = (camera.x + (i as f64 / (n - 1) as f64 - 0.5) * 2. * reach, camera.z + (j as f64 / (n - 1) as f64 - 0.5) * 2. * reach);
+            let down = Ray { ro: Vector3::new(x, camera.y + 1e4, z), rd: -Vector3::y() };
+            if let Some(hit) = landscape.geometry.intersects(&down) && let Some(b) = fields.biome(&hit.point) {
+                samples.push(b);
+            }
+        }
+    }
+    let present = crate::terrain::flora::shares(&samples);
+    if present.is_empty() { return None; }
+    let (populations, materials) = crate::terrain::flora::populations(&present, &strata, SceneFile::parse_int(&o["seed"], 0) as u64);
+    say(format!("Flora: {} about the camera; {} populations: {}",
+        present.iter().map(|(b, s)| format!("{} {:.0}%", b.name(), 100. * s)).collect::<Vec<_>>().join(", "),
+        populations.len(),
+        populations.iter().map(|p| p["forest"]["species"][0]["species"].as_str().map(String::from)
+            .unwrap_or_else(|| format!("{} ground", p["grass"]["species"].as_array().map_or(0, |a| a.len())))).collect::<Vec<_>>().join(", ")));
+    Some((populations, materials))
+}
+
 /// Write the ground cover's albedo (`Ground::albedo`), seen from straight above, over `half`
 /// metres either side of the site, north up, `width` pixels square, display-encoded, to `path`:
 /// for checking what the ground cover makes of the simulations without rendering.

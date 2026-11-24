@@ -421,6 +421,12 @@ pub struct Conditions {
     pub litter: f64,
 }
 
+/// The names of the species presets (`species_preset`).
+pub const SPECIES_PRESETS: [&str; 20] = ["lawn", "meadow", "fescue", "tall", "tussock", "savanna", "reed", "rough", "timothy", "wild_oat", "bent", "daisy", "oxeye", "dandelion", "buttercup", "clover", "red_clover", "heather", "bracken", "litter"];
+
+/// The names of the conditions presets (`conditions_preset`).
+pub const CONDITIONS_PRESETS: [&str; 10] = ["summer", "lush", "drought", "autumn", "after_rain", "frost", "windy", "manicured", "trampled", "wild"];
+
 fn species_preset(name: &str) -> Value {
     let lawn = json!({
         "weight": 1, "height": 0.07, "height_variation": 0.25, "width": 0.004, "tip": 4,
@@ -1943,6 +1949,13 @@ pub fn create_grass_on(o: &Value, grid: HeightGrid, rule: Option<&Rule>) -> (Gra
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The lists of presets name every preset there is, and each resolves.
+    #[test]
+    fn test_preset_lists_resolve() {
+        for name in SPECIES_PRESETS { species_preset(name); }
+        for name in CONDITIONS_PRESETS { conditions_preset(name); }
+    }
     use crate::procedural::heightmap::{Flat, HeightSource};
 
     struct Hill;

@@ -85,7 +85,15 @@ impl Raycaster {
     /// `cast`, within `seen_roughly`.
     fn shade(&self, r: &Ray, scene: &Scene) -> Color {
         match self.shading {
-            Shading::Headlight => headlight(r, scene),
+            Shading::Headlight => headlight(r, scene, None),
+        }
+    }
+
+    /// The colour of pixel (x, y), whose ray is `r`, within `seen_roughly`; `sky` the frame's
+    /// lattice of the sky.
+    fn pixel(&self, r: &Ray, x: usize, y: usize, sky: &mut SkyLattice, scene: &Scene) -> Color {
+        match self.shading {
+            Shading::Headlight => headlight(r, scene, Some((x, y, sky))),
         }
     }
 
@@ -93,10 +101,11 @@ impl Raycaster {
     /// `out`, which holds `(y1 - y0) * cols * 3` values.
     pub fn render_rows(&self, scene: &Scene, cols: usize, rows: usize, y0: usize, y1: usize, out: &mut [f32]) {
         seen_roughly(|| {
+            let mut sky = SkyLattice::new(scene, cols, rows);
             for (row, y) in (y0 .. y1.min(rows)).enumerate() {
                 for x in 0 .. cols {
                     let r = Self::primary_ray(scene, cols, rows, x, y);
-                    let c = self.shade(&r, scene).ignore_nan();
+                    let c = self.pixel(&r, x, y, &mut sky, scene).ignore_nan();
                     let i = (row * cols + x) * 3;
                     out[i] = c.rgb.x as f32;
                     out[i + 1] = c.rgb.y as f32;
@@ -125,14 +134,73 @@ fn seen_roughly<T>(f: impl FnOnce() -> T) -> T {
     crate::shapes::displaced::roughly(f)
 }
 
-/// `Shading::Headlight`.
-fn headlight(r: &Ray, s: &Scene) -> Color {
+/// Pixels apart, across and down, of the points the sky is evaluated at (`SkyLattice`).
+const SKY_STEP: usize = 4;
+
+/// The sky of one frame, evaluated only every `SKY_STEP` pixels across and down and
+/// interpolated between: it changes slowly across the image, and each evaluation integrates
+/// the atmosphere along the ray, which was as costly as shading the ground. The lattice's
+/// points are the frame's, whatever rows are being rendered, so bands of rows rendered apart
+/// meet without seams. A sun's disc is softened to a few pixels.
+struct SkyLattice<'s> {
+    scene: &'s Scene,
+    cols: usize,
+    rows: usize,
+    /// By lattice point and the sky object's address: its colour, or None where it can't be
+    /// found (then the pixel is evaluated itself).
+    seen: std::collections::HashMap<(usize, usize, usize), Option<Color>>,
+}
+
+impl<'s> SkyLattice<'s> {
+    fn new(scene: &'s Scene, cols: usize, rows: usize) -> SkyLattice<'s> {
+        SkyLattice { scene, cols, rows, seen: Default::default() }
+    }
+
+    /// The sky `object` at pixel (x, y), interpolated from the lattice's points around it.
+    fn at(&mut self, x: usize, y: usize, object: &crate::sceneobject::SceneObject) -> Option<Color> {
+        let span = |v: usize, n: usize| {
+            let v0 = v - v % SKY_STEP;
+            let v1 = (v0 + SKY_STEP).min(n - 1);
+            (v0, v1, if v1 > v0 { (v - v0) as f64 / (v1 - v0) as f64 } else { 0. })
+        };
+        let (x0, x1, fx) = span(x, self.cols);
+        let (y0, y1, fy) = span(y, self.rows);
+        let mut corner = |cx: usize, cy: usize| -> Option<Color> {
+            let key = (cx, cy, object as *const _ as usize);
+            if let Some(c) = self.seen.get(&key) { return *c; }
+            let c = Self::evaluate(self.scene, self.cols, self.rows, cx, cy, object);
+            self.seen.insert(key, c);
+            c
+        };
+        let top = corner(x0, y0)? * (1. - fx) + corner(x1, y0)? * fx;
+        let bottom = corner(x0, y1)? * (1. - fx) + corner(x1, y1)? * fx;
+        Some(top * (1. - fy) + bottom * fy)
+    }
+
+    /// The sky `object` along the ray through pixel (x, y), whatever is in front of it there.
+    fn evaluate(scene: &Scene, cols: usize, rows: usize, x: usize, y: usize, object: &crate::sceneobject::SceneObject) -> Option<Color> {
+        use crate::shapes::geometry::Geometry as _;
+        let r = Raycaster::primary_ray(scene, cols, rows, x, y);
+        let raw = object.intersects_beyond(&r, 0.)?;
+        let hit = crate::intersection::Intersection { dist: raw.dist, point: raw.point, normal: raw.normal, face: raw.face, object, part: raw.part };
+        let i = object.medium.material_at(hit.point).scatter(&r, &hit, scene);
+        i.ray.is_none().then(|| i.emit + i.attenuate)
+    }
+}
+
+/// `Shading::Headlight`. `lattice`, the pixel and the frame's sky, to take the sky from.
+fn headlight(r: &Ray, s: &Scene, lattice: Option<(usize, usize, &mut SkyLattice)>) -> Color {
     // As `trace` begins a path: nothing carried over from the last one.
     crate::volume::begin_path();
     crate::material::ggx::begin_path();
     let Some(hit) = s.objects.nearest_intersection(r, f64::INFINITY, 0f64) else {
         return s.render.background.radiance(&r.rd);
     };
+    if let Some((x, y, sky)) = lattice
+        && hit.object.medium.material_at(hit.point).is_sky()
+        && let Some(c) = sky.at(x, y, hit.object) {
+        return c;
+    }
     let facing = hit.facing_normal(r);
     let mut biased = hit;
     biased.point = hit.point + facing * s.render.shadow_bias;

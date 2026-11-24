@@ -64,12 +64,19 @@ materials = {
     "SNOWY_BARK": {"type": "snow_cover", "material": "BARK", "cover": 0.4, "drift": 0.2, "snow": {"preset": "settled"}, "seed": 6},
     "GRANITE": {"type": "rock", "preset": "granite", "lichen": 0.3, "seed": 1},
     "SNOWY_GRANITE": {"type": "snow_cover", "material": "GRANITE", "cover": 0.55, "drift": 0.15, "snow": {"preset": "fresh"}, "seed": 7},
-    # Fairy lights: warm white bulbs with a few coloured ones, on a dark green wire.
-    "BULB_WARM": {"type": "diffuse-light", "temperature": 2400, "intensity": 55},
-    "BULB_RED": {"type": "diffuse-light", "color": [1, 0.12, 0.08], "intensity": 55},
-    "BULB_GREEN": {"type": "diffuse-light", "color": [0.15, 1, 0.25], "intensity": 40},
-    "BULB_BLUE": {"type": "diffuse-light", "color": [0.2, 0.35, 1], "intensity": 65},
-    "BULB_AMBER": {"type": "diffuse-light", "color": [1, 0.55, 0.12], "intensity": 55},
+    # Fairy lights: warm white, most of them dim, some brighter, a few coloured, on a dark green
+    # wire; and a sparser string of big old-fashioned bulbs in colours, brighter still, so the
+    # lights have a hierarchy rather than an even sparkle.
+    "FAIRY_DIM": {"type": "diffuse-light", "temperature": 2300, "intensity": 15},
+    "FAIRY": {"type": "diffuse-light", "temperature": 2400, "intensity": 35},
+    "FAIRY_BRIGHT": {"type": "diffuse-light", "temperature": 2600, "intensity": 80},
+    "FAIRY_RED": {"type": "diffuse-light", "color": [1, 0.12, 0.08], "intensity": 30},
+    "FAIRY_BLUE": {"type": "diffuse-light", "color": [0.2, 0.35, 1], "intensity": 35},
+    "BIG_WARM": {"type": "diffuse-light", "temperature": 2200, "intensity": 60},
+    "BIG_RED": {"type": "diffuse-light", "color": [1, 0.1, 0.06], "intensity": 60},
+    "BIG_GREEN": {"type": "diffuse-light", "color": [0.15, 1, 0.25], "intensity": 45},
+    "BIG_BLUE": {"type": "diffuse-light", "color": [0.2, 0.35, 1], "intensity": 75},
+    "BIG_AMBER": {"type": "diffuse-light", "color": [1, 0.5, 0.1], "intensity": 60},
     "WIRE": {"type": "plastic", "albedo": [0.02, 0.06, 0.03], "roughness": 0.2},
     "TINSEL_GOLD": {"type": "conductor", "metal": "Au", "roughness": 0.08},
     "TINSEL_SILVER": {"type": "conductor", "metal": "Ag", "roughness": 0.06},
@@ -135,13 +142,17 @@ add({"type": "tree", "species": "norway-spruce", "seed": 7, "location": [0, 0, 0
 # short socket, the wire between them sagging.
 turns = 14
 bulbs = 650
-bulb_kinds = ["BULB_WARM"] * 6 + ["BULB_RED", "BULB_GREEN", "BULB_BLUE", "BULB_AMBER"]
+bulb_kinds = ["FAIRY_DIM"] * 9 + ["FAIRY"] * 7 + ["FAIRY_BRIGHT"] * 2 + ["FAIRY_RED", "FAIRY_BLUE"]
 string = []
 for i in range(bulbs):
     t = i / (bulbs - 1)
-    h = CROWN_BASE + 0.08 + t * (TREE_H - CROWN_BASE - 0.3)
-    angle = t * turns * 2 * math.pi + rng.uniform(-0.04, 0.04)
-    string.append(on_crown(h, angle, rng.uniform(0.0, 0.1)))
+    # Strung by hand: the pace round the tree varies, and each loop dips and rises rather than
+    # running level, so the string doesn't read as even rings.
+    angle = t * turns * 2 * math.pi + 0.8 * math.sin(t * 23) + rng.uniform(-0.04, 0.04)
+    h = CROWN_BASE + 0.08 + t * (TREE_H - CROWN_BASE - 0.3) + 0.07 * math.sin(angle * 1.5 + 2 * math.sin(t * 9))
+    h = min(max(h, CROWN_BASE + 0.05), TREE_H - 0.15)
+    # Some on the tips, some deep in the branches, glowing through them.
+    string.append(on_crown(h, angle, rng.uniform(0.0, 0.1) if rng.random() < 0.7 else rng.uniform(0.1, 0.3)))
 wire = []
 for a, b in zip(string, string[1:]):
     sag = 0.25 * math.dist(a, b)
@@ -150,8 +161,28 @@ for a, b in zip(string, string[1:]):
     wire.append({"points": [r3(a), r3(p1), r3(p2), r3(b)], "width": 0.004})
 add({"type": "curves", "kind": "cylinder", "curves": wire, "material": "WIRE"})
 for p in string:
+    r = rng.uniform(0.007, 0.012)
     add(sphere([p[0], p[1] - 0.012, p[2]], 0.009, "WIRE"))
-    add(sphere([p[0], p[1] - 0.026, p[2]], 0.011, rng.choice(bulb_kinds)))
+    add(sphere([p[0], p[1] - 0.014 - r, p[2]], r, rng.choice(bulb_kinds)))
+
+# The big bulbs: a few turns, on the branch tips, each on a socket, colours in turn.
+big_kinds = ["BIG_WARM", "BIG_RED", "BIG_GREEN", "BIG_AMBER", "BIG_BLUE"]
+big = []
+for i in range(60):
+    t = i / 59
+    h = CROWN_BASE + 0.15 + t * (TREE_H - CROWN_BASE - 0.6)
+    big.append(on_crown(h, t * 5 * 2 * math.pi + 0.9 + rng.uniform(-0.1, 0.1), rng.uniform(-0.02, 0.04)))
+big_wire = []
+for a, b in zip(big, big[1:]):
+    sag = 0.2 * math.dist(a, b)
+    p1 = [a[0] + (b[0] - a[0]) / 3, a[1] + (b[1] - a[1]) / 3 - sag, a[2] + (b[2] - a[2]) / 3]
+    p2 = [a[0] + 2 * (b[0] - a[0]) / 3, a[1] + 2 * (b[1] - a[1]) / 3 - sag, a[2] + 2 * (b[2] - a[2]) / 3]
+    big_wire.append({"points": [r3(a), r3(p1), r3(p2), r3(b)], "width": 0.006})
+add({"type": "curves", "kind": "cylinder", "curves": big_wire, "material": "WIRE"})
+for k, p in enumerate(big):
+    add(cylinder([p[0], p[1] - 0.025, p[2]], [p[0], p[1], p[2]], 0.009, "WIRE"))
+    add({"type": "transform", "item": {"type": "sphere", "location": [0, 0, 0], "radius": 1},
+         "scale": [0.016, 0.026, 0.016], "translate": r3([p[0], p[1] - 0.045, p[2]]), "material": big_kinds[k % len(big_kinds)]})
 
 # Tinsel: garlands of fur draped in swags from one branch tip to the next, round the tree.
 for g, (mat, phase, low, high) in enumerate([("TINSEL_GOLD", 0.0, 0.55, 2.6), ("TINSEL_SILVER", 2.1, 0.75, 2.85), ("TINSEL_RED", 4.2, 0.95, 3.0)]):
@@ -266,9 +297,10 @@ add({"type": "volume", "min": [-80, -0.5, -80], "max": [80, 25, 100],
      # The bulbs' glow sampled along each camera ray too: far less speckle about them.
      "equiangular": True})
 
-camera = {"location": [-0.6, 1.35, -6.4], "lookat": [0.55, 1.75, 0], "up": [0, 1, 0], "angle": 0.62,
-          "aperture": 0.035}
-WIDTH, HEIGHT = 960, 600
+# A portrait of the tree, close, the forest behind it softened by the lens.
+camera = {"location": [0.15, 1.15, -6.2], "lookat": [0, 1.85, 0], "up": [0, 1, 0], "angle": 0.7,
+          "aperture": 0.06}
+WIDTH, HEIGHT = 640, 960
 
 scene = {
     "width": WIDTH,
@@ -290,22 +322,15 @@ scene = {
     "lights": [{"location": [0, star_y - 0.35, -0.3], "intensity": 1.2, "temperature": 2600}],
 }
 
-# A preview for working on the composition: the same objects, cheaply lit. The bulbs and the
-# star are plain bright paint, lit by one point light high over the clearing and a grey sky; no
-# fog, RGB, shallow paths.
+# A preview for working on the composition and the lights: the same objects, without the fog,
+# in RGB, with shallow paths and a few samples; the bulbs still glow, and a faint key light
+# high over the clearing shows the forest's silhouettes.
 args = [a for a in sys.argv[1:] if a != "--preview"]
 if "--preview" in sys.argv[1:]:
-    for name, m in materials.items():
-        if m["type"] == "diffuse-light":
-            colour = m.get("color", [1, 0.75, 0.4])
-            materials[name] = {"type": "lambertian", "albedo": [0.9 * c for c in colour]}
     objects = [o for o in objects if o["type"] != "volume"]
-    scene.update({"objects": objects, "spectral": False, "light_sampler": "uniform", "max_depth": 3,
-                  "supersamples": 16, "adaptive": {"threshold": 0},
-                  "background": [0.25, 0.27, 0.32], "output": {"exposure": 1.0, "tonemap": "filmic"},
-                  # A key light high over the clearing, cheap to sample.
-                  "lights": [{"location": [2, 30, -4], "intensity": 3000}]})
-    scene.pop("light_sampler")
+    scene.update({"objects": objects, "spectral": False, "max_depth": 2,
+                  "supersamples": 8, "adaptive": {"threshold": 0},
+                  "lights": scene["lights"] + [{"location": [2, 30, -4], "intensity": 120}]})
 out = args[0] if args else "demo/scenes/christmas-tree.json"
 with open(out, "w") as f:
     # One object a line, so the file stays readable and diffs stay small.

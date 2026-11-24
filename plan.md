@@ -2308,8 +2308,8 @@ transport amplitudes in position and wavevector, though for deep water).
    contours, shoaling against linear theory, the breaking index, setup against Longuet-Higgins
    and Stewart. A coast demo from `terrain-coast.json`'s world.
 8. Lakes: still water with fetch-limited waves (the ocean's JONSWAP by the lake's fetch along
-   the wind), level at the spill height the flow routing finds. Rivers already find the
-   stretches that are lakes (`rivers::lakes`).
+   the wind). Their extent and level are found in the drawn ground (`terrain::basins`, see
+   Done).
 9. Later: GPU kernels for the new water (until then, host materials and shapes, as the sea was
    before its kernel); waterfalls retreating and plunge pools deepening in the terrain
    simulation (Scheingross and Lamb); a local 3D simulation for close-up breakers.
@@ -2376,6 +2376,17 @@ transport amplitudes in position and wavevector, though for deep water).
   fractured rock (Lamb and Dietrich 2009) and hanging valleys' sharp lips; that is the next
   thing, so that falls appear where the rock makes them. Rendered with the threshold lowered
   by hand, a fall drops cleanly from its lip into the head of its gorge.
+- Lakes in the drawn ground (`terrain::basins`): lakes found only along each river's course
+  were drawn as slabs at the course's spill level, and the drawn surface (spline, detail,
+  carving) didn't agree with them: water hung over gorges and rays passed under its edges.
+  Now each patch's drawn ground is sampled on a grid an eighth of its cells, lowered along the
+  rivers' cut channels and the simulation's flow paths (breaching before filling, after
+  Lindsay 2016; unverified), and filled by Priority-Flood (Barnes et al. 2014), the patch's
+  edge (where it blends into the next) and the sea its outlets; lakes are what stands over a
+  metre deep in at least 16 samples, drawn flat over their samples and a ring about them, only
+  where the patch is the finest drawn (a coarse patch's samples see a gorge as a basin). Rivers
+  through lakes take the lake's level. First versions flooded a third of the patch: the wall
+  where a patch blends into the next held water, hence the outlets along its edge.
 - Open: the simulation's width (c√A) is wide for the discharge on these mountain patches
   (42 m wide and 25 cm deep at the mean flow), so from above a river reads as pale sand under
   clear water. Width from discharge (w ∝ Q^0.5 with a sourced coefficient) and the water's
@@ -2395,6 +2406,10 @@ Bibliographic details checked by search, from abstracts or secondary sources unl
 - Meanders: Leopold and Wolman, "River meanders", GSA Bulletin 71, 1960 (λ ≈ 10.9 w^1.01;
   unverified); Langbein and Leopold, USGS PP 422-H, 1966 (sine-generated curves; unverified);
   Schumm, GSA Bulletin 74, 1963 (sinuosity and bank silt-clay; unverified).
+- Depressions: Barnes, Lehman and Mulla, "Priority-Flood", Computers & Geosciences 62, 2014,
+  doi:10.1016/j.cageo.2013.04.024; Lindsay, "Efficient hybrid breaching-filling sink removal
+  methods for flow path enforcement in digital elevation models", Hydrological Processes 30,
+  2016 (unverified).
 - Rivers and runoff: Budyko, "Climate and Life", Academic Press, 1974; Fu, Scientia
   Atmospherica Sinica 5(1), 1981 (in Chinese); Zhang et al., WRR 40, W02502, 2004,
   doi:10.1029/2003WR002710 (w = 2.6 reproduces Budyko's curve: a default, not a fit);

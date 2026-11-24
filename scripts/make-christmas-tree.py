@@ -165,12 +165,33 @@ for p in string:
     add(sphere([p[0], p[1] - 0.012, p[2]], 0.009, "WIRE"))
     add(sphere([p[0], p[1] - 0.014 - r, p[2]], r, rng.choice(bulb_kinds)))
 
+# More about the top, where the crown narrows and the main string thins out under the star: a
+# short string wound tightly over the top metre, brighter on the whole.
+top_kinds = ["FAIRY_DIM"] * 3 + ["FAIRY"] * 4 + ["FAIRY_BRIGHT"] * 3 + ["FAIRY_RED", "FAIRY_BLUE"]
+top = []
+for i in range(90):
+    t = i / 89
+    angle = t * 7 * 2 * math.pi + 0.5 * math.sin(t * 17) + 2.1
+    h = TREE_H - 1.0 + t * 0.88 + 0.04 * math.sin(angle * 1.3)
+    # Out on the tips: up here the branches reach well past the cone the rest are placed on.
+    h = min(h, TREE_H - 0.1)
+    r = crown(h) + rng.uniform(0.08, 0.18)
+    top.append([r * math.sin(angle), h, -r * math.cos(angle)])
+add({"type": "curves", "kind": "cylinder", "material": "WIRE", "curves": [
+    {"points": [r3(a), r3([a[i] + (b[i] - a[i]) / 3 - (0.2 * math.dist(a, b) if i == 1 else 0) for i in range(3)]),
+                r3([a[i] + 2 * (b[i] - a[i]) / 3 - (0.2 * math.dist(a, b) if i == 1 else 0) for i in range(3)]), r3(b)], "width": 0.004}
+    for a, b in zip(top, top[1:])]})
+for p in top:
+    r = rng.uniform(0.007, 0.012)
+    add(sphere([p[0], p[1] - 0.012, p[2]], 0.009, "WIRE"))
+    add(sphere([p[0], p[1] - 0.014 - r, p[2]], r, rng.choice(top_kinds)))
+
 # The big bulbs: a few turns, on the branch tips, each on a socket, colours in turn.
 big_kinds = ["BIG_WARM", "BIG_RED", "BIG_GREEN", "BIG_AMBER", "BIG_BLUE"]
 big = []
 for i in range(60):
     t = i / 59
-    h = CROWN_BASE + 0.15 + t * (TREE_H - CROWN_BASE - 0.6)
+    h = CROWN_BASE + 0.15 + t * (TREE_H - CROWN_BASE - 0.45)
     big.append(on_crown(h, t * 5 * 2 * math.pi + 0.9 + rng.uniform(-0.1, 0.1), rng.uniform(-0.02, 0.04)))
 big_wire = []
 for a, b in zip(big, big[1:]):

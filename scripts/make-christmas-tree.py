@@ -4,8 +4,8 @@
 A stress test of many things at once: a spruce dressed with a few hundred fairy lights (small
 emitters chosen by the light BVH) on a wire of curves, tinsel garlands of fur, baubles of
 glass, metal and lacquer, glass icicles and a gold star; presents in checked paper under it;
-a forest of snow-laden conifers; fog thickening towards the ground and snowfall, both as a
-medium and as flakes falling through the shutter (motion blur) and out of focus (thin lens).
+a forest of snow-laden conifers, thinning in round a wide clearing; and fog thickening towards
+the ground, seen through a thin lens.
 
 The placements are random but seeded, so rerunning writes the same file:
 
@@ -50,7 +50,6 @@ def on_crown(h, angle, inset):
 
 materials = {
     "SNOW": {"type": "snow", "preset": "fresh", "sparkle": 0.08, "seed": 1},
-    "FLAKE": {"type": "snow", "preset": "fresh", "sparkle": 0.0},
     "SPRUCE_NEEDLE_1": {"type": "leaf", "reflectance": [0.03, 0.08, 0.04], "transmittance": [0.01, 0.04, 0.015], "roughness": 0.2},
     "SPRUCE_NEEDLE_2": {"type": "leaf", "reflectance": [0.04, 0.1, 0.05], "transmittance": [0.015, 0.05, 0.02], "roughness": 0.2},
     "PINE_NEEDLE": {"type": "leaf", "reflectance": [0.06, 0.11, 0.05], "transmittance": [0.02, 0.06, 0.015], "roughness": 0.2},
@@ -261,44 +260,14 @@ add({"type": "forest", "seed": 12, "lod": {"pixels": 1},
          {"species": "scots-pine", "weight": 1, "bark": "SNOWY_BARK", "leaves": "LADEN_PINE_NEEDLE"},
      ]})
 
-# Fog, thicker near the ground and in drifting banks, and the falling snow's haze.
+# Fog, thicker near the ground and in drifting banks.
 add({"type": "volume", "min": [-80, -0.5, -80], "max": [80, 25, 100],
      "density": {"node": "expr", "expr": "0.025 * exp(-max(y, 0) / 5) * (0.7 + 0.3 * noise3d(x / 9, y / 4, z / 9))", "range": [0, 0.025]},
      "albedo": [0.98, 0.98, 0.98], "g": 0.75})
-add({"type": "precipitation", "kind": "snow", "base": 40, "ground": 0, "rain_rate": 3, "coverage": 1,
-     "cell_size": 60, "center": [0, 10], "radius": 70, "streakiness": 0.2, "seed": 3,
-     "albedo": [0.995, 0.995, 0.995], "g": 0.75})
 
-# Snowflakes falling while the shutter is open, near the camera, many out of focus.
 camera = {"location": [-0.6, 1.35, -6.4], "lookat": [0.55, 1.75, 0], "up": [0, 1, 0], "angle": 0.62,
           "aperture": 0.035}
-loc = camera["location"]
-look = camera["lookat"]
-fwd = [b - a for a, b in zip(loc, look)]
-n = math.sqrt(sum(x * x for x in fwd))
-fwd = [x / n for x in fwd]
-right = [fwd[2], 0, -fwd[0]]
-n = math.hypot(right[0], right[2])
-right = [x / n for x in right]
-up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]]
-if up[1] < 0:
-    up = [-x for x in up]
 WIDTH, HEIGHT = 960, 600
-half = math.tan(camera["angle"] / 2) * 1.15
-for _ in range(500):
-    # Most near the lens, out of focus; a few further off, small, so as not to veil the tree.
-    depth = 0.5 + 3 * rng.random() if rng.random() < 0.6 else 3.5 + 12 * rng.random()
-    sx = rng.uniform(-half, half)
-    sy = rng.uniform(-half, half) * HEIGHT / WIDTH
-    p = [loc[i] + depth * (fwd[i] + sx * right[i] + sy * up[i]) for i in range(3)]
-    if p[1] < 0.05:
-        continue
-    radius = rng.uniform(0.004, 0.009) if depth < 3.5 else rng.uniform(0.003, 0.006)
-    fall = rng.uniform(0.04, 0.08)
-    drift = [rng.uniform(-0.02, 0.03), -fall, rng.uniform(-0.01, 0.01)]
-    end = [p[i] + drift[i] for i in range(3)]
-    add({"type": "transform", "item": {"type": "sphere", "location": [0, 0, 0], "radius": round(radius, 4)},
-         "translate": r3(p), "motion": {"translate": r3(end)}, "material": "FLAKE"})
 
 scene = {
     "width": WIDTH,
@@ -310,7 +279,6 @@ scene = {
     "path_termination": "russian_roulette",
     "spectral": True,
     "light_sampler": "bvh",
-    "shutter": [0, 1],
     "filter": "mitchell",
     "adaptive": {"threshold": 0.012, "min_samples": 32},
     "output": {"exposure": 6.0, "tonemap": "filmic"},
@@ -321,24 +289,21 @@ scene = {
 }
 
 # A preview for working on the composition: the same objects, cheaply lit. The bulbs and the
-# star are plain bright paint, lit by one point light high behind the camera and a grey sky; no fog, no falling
-# snow as a medium, no motion blur, RGB, shallow paths.
+# star are plain bright paint, lit by one point light high over the clearing and a grey sky; no
+# fog, RGB, shallow paths.
 args = [a for a in sys.argv[1:] if a != "--preview"]
 if "--preview" in sys.argv[1:]:
     for name, m in materials.items():
         if m["type"] == "diffuse-light":
             colour = m.get("color", [1, 0.75, 0.4])
             materials[name] = {"type": "lambertian", "albedo": [0.9 * c for c in colour]}
-    objects = [o for o in objects if o["type"] not in ("volume", "precipitation")]
-    for o in objects:
-        o.pop("motion", None)
+    objects = [o for o in objects if o["type"] != "volume"]
     scene.update({"objects": objects, "spectral": False, "light_sampler": "uniform", "max_depth": 3,
-                  "supersamples": 16, "adaptive": {"threshold": 0}, "shutter": [0, 0],
+                  "supersamples": 16, "adaptive": {"threshold": 0},
                   "background": [0.25, 0.27, 0.32], "output": {"exposure": 1.0, "tonemap": "filmic"},
                   # A key light high over the clearing, cheap to sample.
                   "lights": [{"location": [2, 30, -4], "intensity": 3000}]})
-    for k in ("light_sampler", "shutter"):
-        scene.pop(k)
+    scene.pop("light_sampler")
 out = args[0] if args else "demo/scenes/christmas-tree.json"
 with open(out, "w") as f:
     # One object a line, so the file stays readable and diffs stay small.

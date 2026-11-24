@@ -404,14 +404,20 @@ impl FlatScene {
 
     /// The material of a hit's primitive (bounded or plane).
     /// The hit of `r` on primitive `prim` again (a hit some other arithmetic found: the GPU's,
-    /// in f32), or on the shape that index is of.
-    pub fn refine(&self, prim: u32, r: &Ray) -> Option<Hit> {
+    /// in f32), or on the shape that index is of, found at about `near` along it. A shape is
+    /// searched only about there first: for grass or a forest, searched whole, the search was
+    /// a quarter of the render, repeating what the hit's own search had just done.
+    pub fn refine(&self, prim: u32, r: &Ray, near: f64) -> Option<Hit> {
         let listed = self.prims.len() + self.planes.len();
         if (prim as usize) < listed {
             let (dist, geometric, shading) = self.prim(prim).intersect(r, 0., f64::INFINITY)?;
             return Some(Hit { dist, point: r.ro + r.rd * dist, geometric, shading, prim, face: self.face(prim), part: 0 });
         }
-        let x = self.shapes[prim as usize - listed].0.geometry.intersects_range(r, MIN_SHAPE, f64::INFINITY)?;
+        let geometry = &self.shapes[prim as usize - listed].0.geometry;
+        // (Well beyond what f32 rounded the distance by, and where it rounded the ray's start.)
+        let slack = 1e-4 * near.abs() + 1e-3;
+        let x = geometry.intersects_range(r, (near - slack).max(MIN_SHAPE), near + slack)
+            .or_else(|| geometry.intersects_range(r, MIN_SHAPE, f64::INFINITY))?;
         Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading: x.normal, prim, face: x.face, part: x.part })
     }
 

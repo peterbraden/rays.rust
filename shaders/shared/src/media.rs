@@ -11,6 +11,14 @@ pub trait Medium<F: Real> {
     /// A bound on the density everywhere.
     fn bound(&self) -> F;
     fn majorant_from(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F);
+    /// The local bound, or, if not `sampled`, one that is proven: a medium whose local bounds
+    /// are partly sampled (a majorant grid's cells, which can miss a wisp between the points
+    /// they were sampled at) gives the bounds it can prove. The walks change to these where a
+    /// density was found over its bound, so that an overshoot weights a walk once.
+    fn majorant_along(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F, sampled: bool) -> (F, F) {
+        let _ = sampled;
+        self.majorant_from(x, y, z, dx, dy, dz)
+    }
 }
 
 /// Below this estimated transmittance, ratio tracking plays Russian roulette; survivors carry
@@ -30,10 +38,28 @@ pub fn slack<F: Real>() -> F {
 /// `exit` (one stretch of the ray inside the medium), by delta tracking against the medium's
 /// local bounds, with every density scaled by `scale`; None if the light gets through.
 pub fn delta_track<F: Real, M: Medium<F>, R: Random<F>>(medium: &M, o: (F, F, F), d: (F, F, F), from: F, exit: F, scale: F, random: &mut R) -> Option<F> {
+    let (mut weight, mut sampled) = (F::of(1), true);
+    delta_track_weighted(medium, o, d, from, exit, scale, random, &mut weight, &mut sampled)
+}
+
+/// `delta_track`, correct where a bound isn't one: where the density at a tentative
+/// collision exceeds the bound it was drawn against (a bound found by sampling the density,
+/// which can miss a wisp: the kernels' majorant grids), the collision is chosen with
+/// probability σ / (σ + |μ - σ|) and `weight` multiplied by the event's weight, the null
+/// event's negative: weighted delta tracking (Kutz, Habel, Li and Novák, "Spectral and
+/// Decomposition Tracking for Rendering Heterogeneous Volumes", SIGGRAPH 2017, section 4),
+/// whose estimates are unbiased whatever the bound. Where the density is within its bound,
+/// as with every bound the renderer's own fields give, it draws the same numbers as plain
+/// delta tracking and the weight stays 1. Bounds are the medium's sampled ones while
+/// `sampled`, which an overshoot clears: a path then walks by proven bounds from there on
+/// (any bound may be chosen at each event, given what came before), so that a cloud the
+/// sampled bounds missed weights the path once, not at every event and bounce inside it.
+#[allow(clippy::too_many_arguments)]
+pub fn delta_track_weighted<F: Real, M: Medium<F>, R: Random<F>>(medium: &M, o: (F, F, F), d: (F, F, F), from: F, exit: F, scale: F, random: &mut R, weight: &mut F, sampled: &mut bool) -> Option<F> {
     let mut t = from;
     while t < exit {
         let (x, y, z) = (o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t);
-        let (majorant, length) = medium.majorant_from(x, y, z, d.0, d.1, d.2);
+        let (majorant, length) = medium.majorant_along(x, y, z, d.0, d.1, d.2, *sampled);
         // Always advance, if only by a hair.
         let end = (t + length.max(F::scale_at(t, x, y, z) * F::hair())).min(exit);
         if majorant > F::of(0) {
@@ -42,8 +68,24 @@ pub fn delta_track<F: Real, M: Medium<F>, R: Random<F>>(medium: &M, o: (F, F, F)
             let step = -(F::of(1) - random.next()).ln() / (majorant * scale);
             if t + step < end {
                 t = t + step;
-                if random.next() * majorant < medium.density(o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t) {
-                    return Some(t);
+                let density = medium.density(o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t);
+                if density <= majorant {
+                    if random.next() * majorant < density {
+                        return Some(t);
+                    }
+                } else {
+                    // Over the bound: the real and null events in proportion to σ and
+                    // |μ - σ|, each weighted by its coefficient over μ times its probability;
+                    // and from here on proven bounds (a walk may change its majorant at any
+                    // event), lest a feature a sampled bound missed weight the walk again at
+                    // every event in it.
+                    *sampled = false;
+                    let both = density + (density - majorant);
+                    if random.next() * both < density {
+                        *weight = *weight * (both / majorant);
+                        return Some(t);
+                    }
+                    *weight = *weight * -(both / majorant);
                 }
                 continue;
             }
@@ -57,24 +99,39 @@ pub fn delta_track<F: Real, M: Medium<F>, R: Random<F>>(medium: &M, o: (F, F, F)
 /// residual ratio tracking: the medium's lower bound `control` attenuated exactly, the rest
 /// tracked. None if Russian roulette ends the walk (nothing gets through).
 pub fn ratio_track<F: Real, M: Medium<F>, R: Random<F>>(medium: &M, o: (F, F, F), d: (F, F, F), from: F, stop: F, control: F, scale: F, transmitted: F, random: &mut R) -> Option<F> {
+    ratio_track_from(medium, o, d, from, stop, control, scale, transmitted, random, true)
+}
+
+/// `ratio_track`, by sampled bounds where `sampled` (until a density exceeds one), else by
+/// proven ones (`Medium::majorant_along`).
+#[allow(clippy::too_many_arguments)]
+pub fn ratio_track_from<F: Real, M: Medium<F>, R: Random<F>>(medium: &M, o: (F, F, F), d: (F, F, F), from: F, stop: F, control: F, scale: F, transmitted: F, random: &mut R, sampled: bool) -> Option<F> {
     let mut t = from;
     let mut transmitted = transmitted * (-control * scale * (stop - t)).exp();
+    let mut sampled = sampled;
     while t < stop {
         let (x, y, z) = (o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t);
-        let (majorant, length) = medium.majorant_from(x, y, z, d.0, d.1, d.2);
+        let (majorant, length) = medium.majorant_along(x, y, z, d.0, d.1, d.2, sampled);
         let end = (t + length.max(F::scale_at(t, x, y, z) * F::hair())).min(stop);
         let residual = (majorant - control) * slack();
         if residual > F::of(0) {
             let step = -(F::of(1) - random.next()).ln() / (residual * scale);
             if t + step < end {
                 t = t + step;
-                transmitted = transmitted * (F::of(1) - (medium.density(o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t) - control) / residual);
-                if transmitted < roulette() {
-                    // Survive with probability T / threshold, carrying the threshold.
-                    if random.next() * roulette() >= transmitted {
+                let density = medium.density(o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t);
+                // (Proven bounds from here on, as in `delta_track_weighted`.)
+                sampled = sampled && density <= majorant;
+                transmitted = transmitted * (F::of(1) - (density - control) / residual);
+                // (Negative where a density exceeded its bound by more than the residual's
+                // slack: still an unbiased estimate, so roulette goes by its size and keeps
+                // its sign.)
+                let size = transmitted.abs();
+                if size < roulette() {
+                    // Survive with probability |T| / threshold, carrying the threshold.
+                    if random.next() * roulette() >= size {
                         return None;
                     }
-                    transmitted = roulette();
+                    transmitted = roulette::<F>() * transmitted.sign();
                 }
                 continue;
             }

@@ -133,7 +133,7 @@ pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatM
         },
     }).collect();
     let first = tables.len() as u32;
-    for (m, (kind, density, radius)) in media.iter().zip(fields) {
+    for (k, (m, (kind, density, radius))) in media.iter().zip(fields).enumerate() {
         // (Its box in the render's frame; its density stays where it is in the world.)
         let (lo, hi) = (m.bounds.min.coords - origin, m.bounds.max.coords - origin);
         let phase = match m.phase {
@@ -151,12 +151,166 @@ pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatM
         let oz = m.oz.map_or([0.; 4], |o| [o.octaves as f32, o.a as f32, o.b as f32, o.c as f32]);
         tables.extend(oz);
         tables.push(m.sun_probes as u32 as f32);
+        // Its majorant grid's place, filled in below once the grids are laid out.
+        tables.push(0.);
+        debug_assert_eq!(tables.len() as u32, first + (k as u32 + 1) * pathtrace::MEDIUM_SIZE);
     }
     // (Every kind's loader reads from each record: `pathtrace::LAYER_HEADER_MOST`.)
     if !media.is_empty() {
         tables.extend(std::iter::repeat_n(0., pathtrace::LAYER_HEADER_MOST as usize));
     }
+    // Each cloud's majorant grid, after them all (sampled from the records just laid out).
+    if std::env::var("RAYS_NO_MAJORANT_GRID").is_err() {
+        for (k, m) in media.iter().enumerate() {
+            let base = first + k as u32 * pathtrace::MEDIUM_SIZE;
+            // (Not for cirrus: its own bounds are close, and its grid, saving a tenth of the
+            // densities a camera ray asked for and taking six times the steps, rendered a
+            // third slower. Nor altocumulus, whose cells and turrets are finer than a grid's
+            // lattice: its grids fail `majorant_grid`'s check; `Benard::tops` serves it.)
+            if matches!(m.field, FieldExport::Constant(_) | FieldExport::Cirrus { .. } | FieldExport::Benard { .. }) {
+                continue;
+            }
+            if let Some(grid) = majorant_grid(tables, base, &m.bounds) {
+                let at = tables.len() as u32;
+                tables.extend(grid);
+                tables[(base + pathtrace::MEDIUM_GRID) as usize] = f32::from_bits(at);
+            }
+        }
+    }
     first
+}
+
+/// Cells along a cloud's box's longest horizontal side, at most; cells are this many times
+/// as wide as they are high, since clouds are layers; and the most cells a grid has.
+const GRID_ACROSS: f64 = 256.;
+const GRID_FLATNESS: f64 = 8.;
+const GRID_MOST: f64 = 2e6;
+/// Points a cell is sampled at along each axis (its corners and faces included); how many
+/// cells each way a cell takes the most of; what the most found is multiplied by; and the
+/// least a cell with any cloud in reach is given, as a share of the medium's bound.
+const GRID_LATTICE: usize = 3;
+const GRID_SPREAD: usize = 2;
+const GRID_MARGIN: f32 = 1.5;
+const GRID_FLOOR: f32 = 0.25;
+/// And a cell with none, so that a cloud every sample missed is still found, if rarely, and
+/// weighted (never skipped, which would bias the picture).
+const GRID_EMPTY: f32 = 1. / 64.;
+/// Random points a grid is checked at.
+const GRID_CHECKS: usize = 1_000_000;
+
+/// A majorant grid for the medium whose record is at `base` in `tables`, over its box `bounds`
+/// (in the world, as the walks evaluate its density): a record as `pathtrace::GRID_*` lays it
+/// out. On the clouds of the demo's scenes, 95-100% of the densities a walk asked for were in
+/// clear air, the walks bounded by the whole layer's densest (`measure_cloud_walks`); a cell's
+/// bound lets a walk step over the clear cells.
+///
+/// Each cell's is the most of the kernels' own density (f32, as they will walk it) at two
+/// lattices, one through its corners and one between those points, over the cells within
+/// `GRID_SPREAD` of it, times a margin. That is sampled, not proven: where the density exceeds
+/// it, the walks reweight rather than err (`shared::media::delta_track_weighted`), and the
+/// path walks by the medium's proven bounds from there on (`pathtrace::PATH_PROVEN`), so what
+/// a miss costs is one weight on one path, at most about 2 / `GRID_FLOOR`, which the floor
+/// keeps from being a firefly. A cell with nothing in reach has a small bound,
+/// `GRID_EMPTY`, not none, so that a cloud every sample missed is found and weighted rather
+/// than lost; but that weight is up to 2 / `GRID_EMPTY`, so a grid that misses clouds at
+/// `GRID_CHECKS` random points is not kept (the altocumulus's cells and turrets are finer
+/// than the lattice: of two million points in the castellanus's box, 37 had cloud where every
+/// sample within two cells had none, `measure_majorant_grids`, and its pictures were the
+/// noisier for its grid; its own bounds, `Benard::tops`, serve it). Before the grid was
+/// spread two cells and floored, and before a path kept to proven bounds after a miss, the
+/// castellanus's pictures had pixels of thousands. None where the box is no box, or the
+/// grid isn't kept.
+pub(crate) fn majorant_grid(tables: &[f32], base: u32, bounds: &crate::shapes::bbox::BBox) -> Option<Vec<f32>> {
+    use shared::media::Medium;
+    let (lo, ext, n, size, cells) = majorant_cells(tables, base, bounds)?;
+    // Checked at random points: a cloud found where the grid saw none is finer than its
+    // lattice (as the altocumulus's cells and turrets are), and the grid isn't kept.
+    let medium = pathtrace::load_medium(tables, base);
+    let empty = medium.bound() * GRID_EMPTY;
+    let missed = (0..GRID_CHECKS).into_par_iter().any(|i| {
+        let mut rng = crate::geometry::Pcg32::new(base as u64, i as u64);
+        let p = lo + ext.component_mul(&Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()));
+        let c = |a: usize| (((p[a] - lo[a]) / size[a]) as usize).min(n[a] - 1);
+        let bound = cells[c(0) + n[0] * (c(1) + n[1] * c(2))];
+        bound <= empty && medium.density(p.x as f32, p.y as f32, p.z as f32) > bound
+    });
+    if missed {
+        return None;
+    }
+    let mut out = Vec::with_capacity(pathtrace::GRID_CELLS as usize + cells.len());
+    out.extend([lo.x as f32, lo.y as f32, lo.z as f32, size.x as f32, size.y as f32, size.z as f32]);
+    out.extend(n.iter().map(|&v| f32::from_bits(v as u32)));
+    out.extend(cells);
+    Some(out)
+}
+
+type GridCells = (Vector3<f64>, Vector3<f64>, [usize; 3], Vector3<f64>, Vec<f32>);
+
+/// `majorant_grid`'s cells: the box's corner and size, the cells along each axis, a cell's
+/// size, and the cells' bounds (x fastest, then y).
+fn majorant_cells(tables: &[f32], base: u32, bounds: &crate::shapes::bbox::BBox) -> Option<GridCells> {
+    use rayon::prelude::*;
+    use shared::media::Medium;
+    let medium = pathtrace::load_medium(tables, base);
+    let (lo, hi) = (bounds.min.coords, bounds.max.coords);
+    let ext = hi - lo;
+    // (Not a box where a side is nothing, NaN or infinite.)
+    if ext.min().partial_cmp(&0.) != Some(std::cmp::Ordering::Greater) || !ext.max().is_finite() {
+        return None;
+    }
+    let mut across = ext.x.max(ext.z) / GRID_ACROSS;
+    let mut up = across / GRID_FLATNESS;
+    let count = |a: f64, u: f64| ((ext.x / a).ceil().max(1.), (ext.y / u).ceil().clamp(1., 96.), (ext.z / a).ceil().max(1.));
+    let (mut nx, mut ny, mut nz) = count(across, up);
+    if nx * ny * nz > GRID_MOST {
+        let grow = (nx * ny * nz / GRID_MOST).cbrt();
+        across *= grow;
+        up *= grow;
+        (nx, ny, nz) = count(across, up);
+    }
+    let n = [nx as usize, ny as usize, nz as usize];
+    let size = Vector3::new(ext.x / nx, ext.y / ny, ext.z / nz);
+    let bound = medium.bound();
+    let cell = |c: usize| (c % n[0], (c / n[0]) % n[1], c / (n[0] * n[1]));
+    // The density on a lattice `GRID_LATTICE - 1` points a cell across, the points on a cell's
+    // faces shared with its neighbours (eight times fewer evaluations than each cell's own).
+    let k = GRID_LATTICE - 1;
+    let m = [n[0] * k + 1, n[1] * k + 1, n[2] * k + 1];
+    let step = Vector3::new(size.x / k as f64, size.y / k as f64, size.z / k as f64);
+    let density = |i: f64, j: f64, l: f64| {
+        let p = lo + Vector3::new(i * step.x, j * step.y, l * step.z);
+        medium.density(p.x as f32, p.y as f32, p.z as f32)
+    };
+    let samples: Vec<f32> = (0..m[0] * m[1] * m[2]).into_par_iter().map(|c| {
+        let (i, j, l) = (c % m[0], (c / m[0]) % m[1], c / (m[0] * m[1]));
+        density(i as f64, j as f64, l as f64)
+    }).collect();
+    // Each cell's most, of those and of the lattice between them.
+    let most: Vec<f32> = (0..n[0] * n[1] * n[2]).into_par_iter().map(|c| {
+        let (i, j, l) = cell(c);
+        let mut most = 0f32;
+        for a in 0..=k { for b in 0..=k { for e in 0..=k {
+            most = most.max(samples[(i * k + a) + m[0] * ((j * k + b) + m[1] * (l * k + e))]);
+            if a < k && b < k && e < k {
+                most = most.max(density((i * k + a) as f64 + 0.5, (j * k + b) as f64 + 0.5, (l * k + e) as f64 + 0.5));
+            }
+        }}}
+        most
+    }).collect();
+    // The most within reach of each cell, as its bound.
+    let cells = (0..most.len()).into_par_iter().map(|c| {
+        let (i, j, l) = cell(c);
+        let mut near = 0f32;
+        for a in i.saturating_sub(GRID_SPREAD)..(i + GRID_SPREAD + 1).min(n[0]) {
+            for b in j.saturating_sub(GRID_SPREAD)..(j + GRID_SPREAD + 1).min(n[1]) {
+                for e in l.saturating_sub(GRID_SPREAD)..(l + GRID_SPREAD + 1).min(n[2]) {
+                    near = near.max(most[a + n[0] * (b + n[1] * e)]);
+                }
+            }
+        }
+        if near > 0. { (near * GRID_MARGIN).max(bound * GRID_FLOOR).min(bound) } else { bound * GRID_EMPTY }
+    }).collect();
+    Some((lo, ext, n, size, cells))
 }
 
 pub(crate) fn air_record(tables: &mut Vec<f32>, air: &crate::skysphere::AirExport, origin: &Vector3<f64>) -> u32 {
@@ -485,6 +639,9 @@ impl Buffers {
 
         // Tables: emitters' primitives and their cumulative distribution, then the sky.
         let mut tables: Vec<f32> = Vec::new();
+        // The Sobol' points' direction numbers (`pathtrace::decide`), as bits.
+        let sobol_off = tables.len() as u32;
+        tables.extend(pathtrace::sobol_directions().iter().flatten().map(|&v| f32::from_bits(v)));
         let emitter_off = tables.len() as u32;
         tables.extend(flat.emitters.iter().map(|&p| f32::from_bits(p)));
         let cdf_off = tables.len() as u32;
@@ -600,7 +757,7 @@ impl Buffers {
             media: UVec4::new(media, flat.media.len() as u32, match (&s.sea, sea, kernels.iter().any(|k| k.is_some())) {
                 (Some(glitter), Some(_), true) => (glitter.roughness as f32).to_bits(),
                 _ => 0,
-            }, 0),
+            }, sobol_off),
             origin: v4(origin, 0.),
         };
         Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0, host_shapes, unported, origin: *origin })
@@ -671,6 +828,247 @@ mod measure {
     struct Rng(crate::geometry::Pcg32);
     impl shared::Random<f32> for Rng { fn next(&mut self) -> f32 { (self.0.next_f64() as f32).min(0.999_999_9) } }
     impl shared::Random<f64> for Rng { fn next(&mut self) -> f64 { self.0.next_f64() } }
+
+    /// A medium that records, for each density asked of it, the bound it was asked under.
+    struct Efficiency<'a, M: shared::media::Medium<f32>> {
+        medium: &'a M,
+        bound: Cell<f32>,
+        densities: Cell<u64>,
+        clear: Cell<u64>,
+        ratio: Cell<f64>,
+        bounds: Cell<u64>,
+    }
+
+    impl<M: shared::media::Medium<f32>> shared::media::Medium<f32> for Efficiency<'_, M> {
+        fn density(&self, x: f32, y: f32, z: f32) -> f32 {
+            let d = self.medium.density(x, y, z);
+            self.densities.set(self.densities.get() + 1);
+            if d <= 0. { self.clear.set(self.clear.get() + 1); }
+            if self.bound.get() > 0. { self.ratio.set(self.ratio.get() + (d / self.bound.get()) as f64); }
+            d
+        }
+        fn bound(&self) -> f32 { self.medium.bound() }
+        fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
+            self.majorant_along(x, y, z, dx, dy, dz, true)
+        }
+        fn majorant_along(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32, sampled: bool) -> (f32, f32) {
+            self.bounds.set(self.bounds.get() + 1);
+            let (m, l) = self.medium.majorant_along(x, y, z, dx, dy, dz, sampled);
+            self.bound.set(m);
+            (m, l)
+        }
+    }
+
+    /// A trial majorant grid over a medium's box: each cell the most density found at a
+    /// lattice of points in it and about it, spread to its neighbours and times a margin (not
+    /// a proof of a bound: `violations` counts where it isn't one).
+    struct Gridded<'a, M: shared::media::Medium<f32>> {
+        medium: &'a M,
+        lo: pathtrace::glam::Vec3,
+        cell: pathtrace::glam::Vec3,
+        n: [usize; 3],
+        cells: Vec<f32>,
+        violations: Cell<u64>,
+        last: Cell<f32>,
+    }
+
+    impl<'a, M: shared::media::Medium<f32> + Sync> Gridded<'a, M> {
+        fn new(medium: &'a M, lo: pathtrace::glam::Vec3, hi: pathtrace::glam::Vec3, n: [usize; 3], lattice: usize, margin: f32) -> Gridded<'a, M> {
+            let cell = (hi - lo) / pathtrace::glam::Vec3::new(n[0] as f32, n[1] as f32, n[2] as f32);
+            use rayon::prelude::*;
+            let sampled: Vec<f32> = (0..n[0] * n[1] * n[2]).into_par_iter().map(|c| {
+                let (i, j, k) = (c % n[0], (c / n[0]) % n[1], c / (n[0] * n[1]));
+                let mut m = 0f32;
+                for a in 0..=lattice { for b in 0..=lattice { for e in 0..=lattice {
+                    let f = pathtrace::glam::Vec3::new((i as f32 + a as f32 / lattice as f32), (j as f32 + b as f32 / lattice as f32), (k as f32 + e as f32 / lattice as f32));
+                    let p = lo + f * cell;
+                    m = m.max(medium.density(p.x, p.y, p.z));
+                }}}
+                m
+            }).collect();
+            let mut cells = vec![0f32; sampled.len()];
+            for k in 0..n[2] { for j in 0..n[1] { for i in 0..n[0] {
+                let mut m = 0f32;
+                let spread = std::env::var("RAYS_GRID_SPREAD").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(1);
+                for dk in -spread..=spread { for dj in -spread..=spread { for di in -spread..=spread {
+                    let (a, b, c) = (i as i64 + di, j as i64 + dj, k as i64 + dk);
+                    if a >= 0 && b >= 0 && c >= 0 && (a as usize) < n[0] && (b as usize) < n[1] && (c as usize) < n[2] {
+                        m = m.max(sampled[(c as usize * n[1] + b as usize) * n[0] + a as usize]);
+                    }
+                }}}
+                cells[(k * n[1] + j) * n[0] + i] = (m * margin).min(medium.bound());
+            }}}
+            Gridded { medium, lo, cell, n, cells, violations: Cell::new(0), last: Cell::new(0.) }
+        }
+    }
+
+    impl<M: shared::media::Medium<f32>> shared::media::Medium<f32> for Gridded<'_, M> {
+        fn density(&self, x: f32, y: f32, z: f32) -> f32 {
+            let d = self.medium.density(x, y, z);
+            if d > self.last.get() * 1.0001 { self.violations.set(self.violations.get() + 1); }
+            d
+        }
+        fn bound(&self) -> f32 { self.medium.bound() }
+        fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
+            let (m0, l0) = self.medium.majorant_from(x, y, z, dx, dy, dz);
+            let p = (pathtrace::glam::Vec3::new(x, y, z) - self.lo) / self.cell;
+            let (i, j, k) = (p.x.floor() as i64, p.y.floor() as i64, p.z.floor() as i64);
+            if i < 0 || j < 0 || k < 0 || i as usize >= self.n[0] || j as usize >= self.n[1] || k as usize >= self.n[2] {
+                self.last.set(m0);
+                return (m0, l0);
+            }
+            let m = self.cells[(k as usize * self.n[1] + j as usize) * self.n[0] + i as usize].min(m0);
+            // To the cell's exit along the ray.
+            let exit = |f: f32, d: f32, size: f32| if d > 0. { (f.floor() + 1. - f) * size / d } else if d < 0. { (f - f.floor()) * size / -d } else { f32::INFINITY };
+            let l = exit(p.x, dx, self.cell.x).min(exit(p.y, dy, self.cell.y)).min(exit(p.z, dz, self.cell.z)).max(1e-3);
+            self.last.set(m);
+            (m, l.min(l0))
+        }
+    }
+
+    /// Where the cloud scenes' walks spend their densities (`RAYS_SCENES`, comma-separated, or
+    /// the cloud scenes in demo/scenes): each scene's media, laid out as the kernels have them,
+    /// walked by the kernels' own walks along the scene's camera rays to a collision (delta
+    /// tracking, as `intersect` does), and from each collision a ray to the sun (ratio tracking,
+    /// as `shade`'s shadow rays): densities a ray, the share asked in clear air (density 0, a
+    /// lookup that bought nothing), and the mean of density / bound where asked (delta
+    /// tracking's efficiency: 1 if the bound were the density). Run with `--ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore]
+    fn measure_cloud_walks() {
+        use crate::scenefile::{Overrides, SceneFile};
+        let names = std::env::var("RAYS_SCENES").unwrap_or("benard-altocumulus,altocumulus-castellanus,altocumulus-undulatus,cirrocumulus,mammatus,cumulonimbus,hogan-kew-cirrus,stratocumulus,snow-showers".into());
+        println!("{:<26} {:>8} {:>10} {:>8} {:>8} {:>10} {:>8} {:>8}  {}", "scene: medium", "rays", "dens/ray", "clear", "d/bound", "shadow d/r", "clear", "d/bound", "kind");
+        for name in names.split(',') {
+            let s = SceneFile::from_file(&format!("demo/scenes/{}.json", name), &Overrides { width: Some(48), height: Some(30), seed: None });
+            let Ok(flat) = crate::wavefront::flat::FlatScene::build(&s) else { println!("{}: not the kernels'", name); continue };
+            let b = super::Buffers::build(&s, &flat).unwrap();
+            let tables = &b.tables;
+            let origin = pathtrace::glam::Vec3::new(b.params.origin.x, b.params.origin.y, b.params.origin.z);
+            let sun = pathtrace::glam::Vec3::new(b.params.sun_dir.x, b.params.sun_dir.y, b.params.sun_dir.z);
+            for m in 0..b.params.media.y {
+                let base = b.params.media.x + m * pathtrace::MEDIUM_SIZE;
+                let medium = pathtrace::load_medium(tables, base);
+                let kind = ["constant", "nubis", "altocumulus", "cirrus", "rain", "mammatus", "cumulonimbus"].get(medium.kind as usize).copied().unwrap_or("?");
+                let lo = pathtrace::glam::Vec3::new(tables[(base + 1) as usize], tables[(base + 2) as usize], tables[(base + 3) as usize]);
+                let hi = pathtrace::glam::Vec3::new(tables[(base + 4) as usize], tables[(base + 5) as usize], tables[(base + 6) as usize]);
+                let span = |o: pathtrace::glam::Vec3, d: pathtrace::glam::Vec3| {
+                    let inv = pathtrace::glam::Vec3::ONE / d;
+                    let (p, q) = ((lo - o) * inv, (hi - o) * inv);
+                    let (near, far) = (p.min(q).max_element().max(0.), p.max(q).min_element());
+                    (near, far.min(1e7))
+                };
+                let primary = Efficiency { medium: &medium, bound: Cell::new(0.), densities: Cell::new(0), clear: Cell::new(0), ratio: Cell::new(0.), bounds: Cell::new(0) };
+                let shadow = Efficiency { medium: &medium, bound: Cell::new(0.), densities: Cell::new(0), clear: Cell::new(0), ratio: Cell::new(0.), bounds: Cell::new(0) };
+                let (mut rays, mut shadows) = (0u64, 0u64);
+                let (w, h) = (s.image.width, s.image.height);
+                let start = std::time::Instant::now();
+                for index in 0..w * h {
+                    for k in 0..4 {
+                        let ray = super::camera_ray(&s, index, k, &b.origin);
+                        if ray.d.w < 0.5 { continue }
+                        let (o, d) = (ray.o.truncate(), ray.d.truncate());
+                        let (near, far) = span(o, d);
+                        if near >= far { continue }
+                        rays += 1;
+                        let mut rng = Rng(crate::geometry::Pcg32::new(5, (index * 4 + k) as u64));
+                        let wo = o + origin;
+                        let Some(t) = shared::media::delta_track(&primary, (wo.x, wo.y, wo.z), (d.x, d.y, d.z), near, far, 1., &mut rng) else { continue };
+                        // From the collision towards the sun, through the rest of the box.
+                        let x = o + d * t;
+                        let (_, out) = span(x, sun);
+                        if out > 0. && b.params.offs2.w & pathtrace::FLAG_SUN != 0 {
+                            shadows += 1;
+                            let wx = x + origin;
+                            shared::media::ratio_track(&shadow, (wx.x, wx.y, wx.z), (sun.x, sun.y, sun.z), 0., out, 0., 1., 1., &mut rng);
+                        }
+                    }
+                }
+                // The same rays through a trial majorant grid (`RAYS_GRID`: cells along the box's
+                // longest side; 0 for none).
+                let cells_long: usize = std::env::var("RAYS_GRID").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+                if cells_long > 0 {
+                    let wlo = lo + origin;
+                    let ext = hi - lo;
+                    let unit = ext.max_element() / cells_long as f32;
+                    let flat: f32 = std::env::var("RAYS_GRID_FLAT").ok().and_then(|v| v.parse().ok()).unwrap_or(1.);
+                    let n = [((ext.x / unit).ceil() as usize).max(1), ((ext.y * flat / unit).ceil() as usize).clamp(1, 96), ((ext.z / unit).ceil() as usize).max(1)];
+                    let built = std::time::Instant::now();
+                    let margin: f32 = std::env::var("RAYS_GRID_MARGIN").ok().and_then(|v| v.parse().ok()).unwrap_or(2.);
+                    let grid = Gridded::new(&medium, wlo, wlo + ext, n, 3, margin);
+                    let build = built.elapsed().as_secs_f64();
+                    let g = Efficiency { medium: &grid, bound: Cell::new(0.), densities: Cell::new(0), clear: Cell::new(0), ratio: Cell::new(0.), bounds: Cell::new(0) };
+                    let mut grays = 0u64;
+                    for index in 0..w * h {
+                        for k in 0..4 {
+                            let ray = super::camera_ray(&s, index, k, &b.origin);
+                            if ray.d.w < 0.5 { continue }
+                            let (o, d) = (ray.o.truncate(), ray.d.truncate());
+                            let (near, far) = span(o, d);
+                            if near >= far { continue }
+                            grays += 1;
+                            let mut rng = Rng(crate::geometry::Pcg32::new(5, (index * 4 + k) as u64));
+                            let wo = o + origin;
+                            shared::media::delta_track(&g, (wo.x, wo.y, wo.z), (d.x, d.y, d.z), near, far, 1., &mut rng);
+                        }
+                    }
+                    println!("    grid {:?}: build {:.1} s, {:.1} densities a ray, {:.0}% clear, d/bound {:.3}; {} of {} densities above the grid's bound",
+                        n, build, g.densities.get() as f64 / grays.max(1) as f64, 100. * g.clear.get() as f64 / g.densities.get().max(1) as f64,
+                        if g.densities.get() > 0 { g.ratio.get() / g.densities.get() as f64 } else { 0. }, grid.violations.get(), g.densities.get());
+                }
+                let per = |v: u64, n: u64| if n > 0 { v as f64 / n as f64 } else { 0. };
+                let share = |e: &Efficiency<_>| per(e.clear.get(), e.densities.get()) * 100.;
+                let eff = |e: &Efficiency<_>| if e.densities.get() > 0 { e.ratio.get() / e.densities.get() as f64 } else { 0. };
+                println!("{:<26} {:>8} {:>10.1} {:>7.0}% {:>8.3} {:>10.1} {:>7.0}% {:>8.3}  {} ({:.1} s; bounds a ray {:.1}, a shadow ray {:.1})", format!("{}: {}", name, m), rays,
+                    per(primary.densities.get(), rays), share(&primary), eff(&primary),
+                    per(shadow.densities.get(), shadows), share(&shadow), eff(&shadow), kind, start.elapsed().as_secs_f64(),
+                    per(primary.bounds.get(), rays), per(shadow.bounds.get(), shadows));
+            }
+        }
+    }
+
+    /// How well each of the demo's clouds' majorant grids bounds its density
+    /// (`super::majorant_grid`): at two million random points of its box, how many exceed
+    /// their cell's bound, by how much at most, and how many are in a cell the grid holds
+    /// empty (`GRID_EMPTY`; `RAYS_SCENES` names the scenes).
+    #[test]
+    #[ignore]
+    fn measure_majorant_grids() {
+        use crate::scenefile::{Overrides, SceneFile};
+        use shared::media::Medium;
+        let names = std::env::var("RAYS_SCENES").unwrap_or("benard-altocumulus,altocumulus-castellanus,altocumulus-undulatus,cirrocumulus,mammatus,cumulonimbus,hogan-kew-cirrus,stratocumulus,snow-showers".into());
+        for name in names.split(',') {
+            let s = SceneFile::from_file(&format!("demo/scenes/{}.json", name), &Overrides { width: Some(16), height: Some(10), seed: None });
+            let Ok(flat) = crate::wavefront::flat::FlatScene::build(&s) else { println!("{}: not the kernels'", name); continue };
+            let b = super::Buffers::build(&s, &flat).unwrap();
+            for (k, m) in flat.media.iter().enumerate() {
+                let base = b.params.media.x + k as u32 * pathtrace::MEDIUM_SIZE;
+                let started = std::time::Instant::now();
+                let Some((lo, ext, n, size, cells)) = super::majorant_cells(&b.tables, base, &m.bounds) else { continue };
+                let built = started.elapsed().as_secs_f64();
+                let medium = pathtrace::load_medium(&b.tables, base);
+                let (mut over, mut worst, mut empty) = (0usize, 0f32, 0usize);
+                let mut rng = crate::geometry::Pcg32::new(7, k as u64);
+                let tries = 2_000_000;
+                for _ in 0..tries {
+                    let u = crate::na::Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64());
+                    let p = lo + ext.component_mul(&u);
+                    let d = medium.density(p.x as f32, p.y as f32, p.z as f32);
+                    let c = |a: usize| (((p[a] - lo[a]) / size[a]) as usize).min(n[a] - 1);
+                    let bound = cells[c(0) + n[0] * (c(1) + n[1] * c(2))];
+                    if d > bound {
+                        over += 1;
+                        worst = worst.max(d / bound);
+                        if bound <= medium.bound() * super::GRID_EMPTY { empty += 1 }
+                    }
+                }
+                let occupied = cells.iter().filter(|&&c| c > 0.).count();
+                println!("{}: {}: {:?} cells of {:.0} x {:.0} x {:.0} m, {:.1}% occupied, built in {:.1} s: {} of {} points over their bound (by {:.2} at most), {} in empty cells",
+                    name, k, n, size.x, size.y, size.z, 100. * occupied as f64 / cells.len() as f64, built, over, tries, worst, empty);
+            }
+        }
+    }
 
     /// The walk to a first collision along a cloud scene's own camera rays (`RAYS_SCENE`), as
     /// the kernels walk it and as f64 would the same layer: what each asks of the medium.

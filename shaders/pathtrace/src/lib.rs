@@ -44,7 +44,8 @@ pub struct Params {
     pub air: UVec4,
     /// The media (`MEDIUM_*`): where their records begin in `tables`, and how many; and the
     /// bits of the mean square slope of the sea's glitter as media see it (the renderer's
-    /// `ocean::Sea`), 0 for no sea a glitter probe could find (`send_glitter_probe`).
+    /// `ocean::Sea`), 0 for no sea a glitter probe could find (`send_glitter_probe`); and
+    /// where the Sobol' points' direction numbers are (`sobol_directions`).
     pub media: UVec4,
     /// The render's origin in the world (the renderer's `kernels::origin`: at the camera).
     /// Every position here is relative to it: rays, primitives, boxes, lights, centres. So
@@ -392,14 +393,15 @@ fn rand(state: &mut u32) -> f32 {
 // documentation has the sources). A path's other numbers stay the hash's. ----
 
 /// The bits of an index.
-const SOBOL_BITS: usize = 32;
+pub const SOBOL_BITS: usize = 32;
 
 /// Direction numbers v_1 to v_32 of the first four dimensions, a dimension a component: the
 /// first's 2^-k; then, by Joe and Kuo's degree s, polynomial a and initial values m,
-/// (1, 0, [1]), (2, 1, [1, 3]) and (3, 1, [1, 3, 1]).
-const SOBOL_DIRECTIONS: [[u32; 4]; SOBOL_BITS] = sobol_directions();
-
-const fn sobol_directions() -> [[u32; 4]; SOBOL_BITS] {
+/// (1, 0, [1]), (2, 1, [1, 3]) and (3, 1, [1, 3, 1]). Laid out in `tables` by the host
+/// (`Params::media.w`, four a bit, as bits): a constant array indexed in a loop is copied
+/// into each call's local memory by the WGSL's translators, 512 bytes a decision, which made
+/// a path's shading half as slow again on the GPU.
+pub const fn sobol_directions() -> [[u32; 4]; SOBOL_BITS] {
     let mut v = [[0u32; 4]; SOBOL_BITS];
     v[0] = [0x8000_0000, 0x8000_0000, 0x8000_0000, 0x8000_0000];
     v[1] = [0x4000_0000, 0xc000_0000, 0xc000_0000, 0xc000_0000];
@@ -420,13 +422,13 @@ const fn sobol_directions() -> [[u32; 4]; SOBOL_BITS] {
 /// The `index`-th Sobol' point's first four coordinates, unscrambled: the XOR of each
 /// dimension's direction numbers for the set bits of `index`, as the renderer's
 /// `sobol::sobol` (whose tables are these by the byte).
-pub fn sobol4(index: u32) -> UVec4 {
+pub fn sobol4(tables: &[f32], directions: u32, index: u32) -> UVec4 {
     let mut x = UVec4::ZERO;
     let mut k = 0;
-    while k < SOBOL_BITS {
+    while k < SOBOL_BITS as u32 {
         if (index >> k) & 1 != 0 {
-            let v = SOBOL_DIRECTIONS[k];
-            x ^= UVec4::new(v[0], v[1], v[2], v[3]);
+            let v = directions + 4 * k;
+            x ^= UVec4::new(at(tables, v).to_bits(), at(tables, v + 1).to_bits(), at(tables, v + 2).to_bits(), at(tables, v + 3).to_bits());
         }
         k += 1;
     }
@@ -463,7 +465,7 @@ pub fn decide(s: &Scene, pixel: u32, sample: u32, depth: u32, which: u32, rng: &
         return Vec4::new(rand(rng), rand(rng), rand(rng), rand(rng));
     }
     let h = pcg(pcg(pixel ^ s.params.seed.x.wrapping_mul(0x9e3779b9)) ^ (depth * 3 + which + 1).wrapping_mul(0x85eb_ca6b));
-    let x = sobol4(owen_scramble(sample, h));
+    let x = sobol4(s.tables, s.params.media.w, owen_scramble(sample, h));
     let scrambled = UVec4::new(owen_scramble(x.x, pcg(h ^ 1)), owen_scramble(x.y, pcg(h ^ 2)), owen_scramble(x.z, pcg(h ^ 3)), owen_scramble(x.w, pcg(h ^ 4)));
     Vec4::new((scrambled.x >> 8) as f32, (scrambled.y >> 8) as f32, (scrambled.z >> 8) as f32, (scrambled.w >> 8) as f32) * (1.0 / 16777216.0)
 }
@@ -2523,6 +2525,9 @@ pub const PATH_MEDIUM_SHIFT: u32 = 8;
 pub const PATH_SCATTERINGS_SHIFT: u32 = 16;
 /// Both.
 pub const PATH_MEDIA: u32 = 0xffff << PATH_MEDIUM_SHIFT;
+/// A walk of the path's found a density over its majorant grid's bound: its walks take the
+/// media's proven bounds from here on (`shared::media::delta_track_weighted`).
+pub const PATH_PROVEN: u32 = 1 << 24;
 /// `PathState::state.z` of a path whose ray collides in a medium before it hits anything: this
 /// plus the medium's number (and `hit.x` how far along).
 pub const MEDIUM_HIT: u32 = 0xffff_ff00;
@@ -2705,14 +2710,16 @@ pub fn shadow_ray(s: &Scene, found: &PathState, from: Vec4) -> PathState {
 
 /// The camera path after a crepuscular sample's ray has been traced to `hit`: without the
 /// sample's light if anything was in the sun's way, a surface or a medium's collision (one
-/// estimate of what the medium lets through), and with the random numbers the ray drew.
-pub fn shadowed(found: &PathState, hit: &PathState, light: Vec3) -> PathState {
+/// estimate of what the medium lets through, times the walk's `weight`), and with the
+/// random numbers the ray drew.
+pub fn shadowed(found: &PathState, hit: &PathState, light: Vec3, weight: f32) -> PathState {
     let mut after = *found;
     after.state.x = hit.state.x;
     after.l.w += 1.0;
-    if hit.state.z != NONE {
-        after.l -= light.extend(0.0);
-    }
+    // What gets through: none if anything collided, else the walk's weight (1 but where a
+    // density exceeded its bound).
+    let through = if hit.state.z != NONE { 0.0 } else { weight };
+    after.l -= (light * (1.0 - through)).extend(0.0);
     after
 }
 
@@ -2762,8 +2769,9 @@ pub trait Finder {
     const MEDIA: bool;
 
     /// The ray (a path's `o`, `d`, flags and random numbers) with what it meets: `hit`, and
-    /// the primitive or the medium in `state.z`.
-    fn find(&self, s: &Scene, ray: &PathState) -> PathState;
+    /// the primitive or the medium in `state.z`; and the media's walk's weight
+    /// (`intersect_media`).
+    fn find(&self, s: &Scene, ray: &PathState) -> (PathState, f32);
 }
 
 /// The kernels' own finder: their surfaces, then the media as far as those.
@@ -2773,7 +2781,7 @@ impl<M: Media> Finder for Kernel<M> {
     const MEDIA: bool = M::ON;
 
     #[inline]
-    fn find(&self, s: &Scene, ray: &PathState) -> PathState {
+    fn find(&self, s: &Scene, ray: &PathState) -> (PathState, f32) {
         intersect_media::<M>(s, &intersect_surface(s, ray))
     }
 }
@@ -2831,9 +2839,11 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
             ray = shadow_ray(s, &ray, probe_from.extend(1.0));
             ray.state.x = found.state.x;
         }
-        let hit = finder.find(s, &ray);
+        let (hit, weight) = finder.find(s, &ray);
         if job == 0 {
             found = hit;
+            // (The weight of the walk to what it meets, on all the path gathers from here.)
+            found.beta = (found.beta.xyz() * weight).extend(found.beta.w);
             let mut rng = found.state.x;
             let samples = crepuscular_samples(s, &found, &mut rng);
             found.state.x = rng;
@@ -2846,7 +2856,7 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
             found.l.w += 1.0;
             if hit.state.z != NONE && hit.state.z >= MEDIUM_HIT {
                 let (light, x, flags) = probe_sunlight(s, &own, probe, &hit);
-                probed = light;
+                probed = light * weight;
                 probe_from = x;
                 // (Its shadow ray crosses the media as that vertex's would.)
                 ray.state.y = flags;
@@ -2856,17 +2866,17 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
             found.l.w += 1.0;
             if hit.state.z != NONE && hit.state.z < MEDIUM_HIT {
                 let (light, x) = probe_glitter(s, &own, glitter, &hit);
-                probed = light;
+                probed = light * weight;
                 probe_from = x;
             }
         } else if F::MEDIA && (job == 4 || job == 6) {
             found.state.x = hit.state.x;
             found.l.w += 1.0;
             if hit.state.z == NONE {
-                found.l += probed.extend(0.0);
+                found.l += (probed * weight).extend(0.0);
             }
         } else {
-            found = shadowed(&found, &hit, if job == 1 { c0 } else { c1 });
+            found = shadowed(&found, &hit, if job == 1 { c0 } else { c1 }, weight);
         }
         job += 1;
     }
@@ -2884,19 +2894,23 @@ pub fn intersect_surface(s: &Scene, p: &PathState) -> PathState {
 
 /// The path's walk through the media as far as the surface `found` for it: a collision
 /// before the surface is the vertex instead.
-pub fn intersect_media<M: Media>(s: &Scene, found: &PathState) -> PathState {
+/// With the walk's weight: 1 unless a density exceeded its majorant grid's bound
+/// (`shared::media::delta_track_weighted`), the factor on what this ray brings back.
+pub fn intersect_media<M: Media>(s: &Scene, found: &PathState) -> (PathState, f32) {
     let mut found = *found;
+    let mut weight = 1.0;
     if M::ON {
         let mut rng = found.state.x;
         let reach = if found.state.z == NONE { INF } else { found.hit.x };
-        let (t, m) = media_collision(s, found.o.xyz(), found.d.xyz(), reach, found.state.y, &mut rng);
+        let (t, m, w) = media_collision(s, found.o.xyz(), found.d.xyz(), reach, &mut found.state.y, &mut rng);
         found.state.x = rng;
+        weight = w;
         if m != NONE {
             found.state.z = MEDIUM_HIT + m;
             found.hit = Vec4::new(t, 0.0, 0.0, 0.0);
         }
     }
-    found
+    (found, weight)
 }
 
 /// How a path with these flags scatters at a vertex in the medium at `medium`: how many times
@@ -3732,7 +3746,7 @@ pub fn probe_clouds(
 /// `ScatteringApproximation::similarity_after`), that factor on densities once a path has
 /// scattered as often as they begin at, that number, and the mean cosine of its scattering
 /// whole and truncated; and the Oz approximation's octaves and factors (`MEDIUM_OZ`).
-pub const MEDIUM_SIZE: u32 = 29;
+pub const MEDIUM_SIZE: u32 = 30;
 pub const MEDIUM_BOX: u32 = 1;
 pub const MEDIUM_DENSITY: u32 = 7;
 pub const MEDIUM_RADIUS: u32 = 8;
@@ -3749,6 +3763,17 @@ pub const MEDIUM_MEAN_COSINE: u32 = 22;
 pub const MEDIUM_OZ: u32 = 24;
 /// Whether its vertices send sun probes (the renderer's `VolumeMaterial::sun_probes`).
 pub const MEDIUM_PROBES: u32 = 28;
+/// The bits of where its majorant grid's record is (`GRID_*`), 0 for none.
+pub const MEDIUM_GRID: u32 = 29;
+/// A majorant grid's record (the renderer's `kernels::majorant_grid`): its least corner in
+/// the world, a cell's size, the cells along each axis, then the cells x fastest, z slowest,
+/// each the most density found at a lattice of points in it, times a margin. Sampled, so not
+/// a proof of a bound: the walks stay unbiased where the density exceeds it
+/// (`shared::media::delta_track_weighted`, and ratio tracking's signed estimates).
+pub const GRID_LO: u32 = 0;
+pub const GRID_CELL: u32 = 3;
+pub const GRID_N: u32 = 6;
+pub const GRID_CELLS: u32 = 9;
 pub const MEDIUM_CONSTANT: u32 = 0;
 pub const MEDIUM_NUBIS: u32 = 1;
 pub const MEDIUM_BENARD: u32 = 2;
@@ -3889,6 +3914,8 @@ const fn most(of: &[u32]) -> u32 {
 pub struct KernelMedium<'a> {
     pub tables: FloatTables<'a>,
     pub kind: u32,
+    /// Where its majorant grid is (`MEDIUM_GRID`), 0 for none.
+    pub grid: u32,
     pub sigma: f32,
     pub radius: f32,
     pub nubis: shared::clouds::NubisField<f32>,
@@ -3970,8 +3997,31 @@ impl shared::media::Medium<f32> for KernelMedium<'_> {
     }
 
     fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
+        self.majorant_along(x, y, z, dx, dy, dz, true)
+    }
+
+    /// Its majorant grid's bound, which is sampled, where the point is in the grid; else, or
+    /// if not `sampled`, the layer's own.
+    fn majorant_along(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32, sampled: bool) -> (f32, f32) {
         if self.kind == MEDIUM_CONSTANT {
             return (self.sigma, INF);
+        }
+        if self.grid != 0 && sampled {
+            // The cell, to its far side. (Not the least of it and the layer's bound: the
+            // layer's costs more to find than its grid saves where cells are small.)
+            let g = self.grid;
+            let tables = self.tables.0;
+            let lo = Vec3::new(at(tables, g + GRID_LO), at(tables, g + GRID_LO + 1), at(tables, g + GRID_LO + 2));
+            let size = Vec3::new(at(tables, g + GRID_CELL), at(tables, g + GRID_CELL + 1), at(tables, g + GRID_CELL + 2));
+            let n = UVec3::new(at(tables, g + GRID_N).to_bits(), at(tables, g + GRID_N + 1).to_bits(), at(tables, g + GRID_N + 2).to_bits());
+            let f = (Vec3::new(x, y, z) - lo) / size;
+            if f.x >= 0.0 && f.y >= 0.0 && f.z >= 0.0 && f.x < n.x as f32 && f.y < n.y as f32 && f.z < n.z as f32 {
+                let c = UVec3::new(f.x as u32, f.y as u32, f.z as u32).min(n - UVec3::ONE);
+                let cell = at(tables, g + GRID_CELLS + (c.z * n.y + c.y) * n.x + c.x);
+                let exit = |f: f32, d: f32, size: f32| if d > 0.0 { (f.floor() + 1.0 - f) * size / d } else if d < 0.0 { (f - f.floor()) * size / -d } else { INF };
+                // (Past the cell's face by a hair, so the next step starts in the next cell.)
+                return (cell, exit(f.x, dx, size.x).min(exit(f.y, dy, size.y)).min(exit(f.z, dz, size.z)) * (1.0 + 1e-5) + 1e-4);
+            }
         }
         let layer = self.layer();
         // (Round the planet by a change of coordinates, `OnPlanet`'s, and flat without one:
@@ -3998,7 +4048,7 @@ pub fn load_medium(tables: &[f32], base: u32) -> KernelMedium<'_> {
     // unread.
     let record = at(tables, base + MEDIUM_DENSITY).to_bits();
     KernelMedium {
-        tables: FloatTables(tables), kind, sigma: at(tables, base + MEDIUM_DENSITY), radius: at(tables, base + MEDIUM_RADIUS),
+        tables: FloatTables(tables), kind, grid: at(tables, base + MEDIUM_GRID).to_bits(), sigma: at(tables, base + MEDIUM_DENSITY), radius: at(tables, base + MEDIUM_RADIUS),
         nubis: load_nubis(tables, if kind == MEDIUM_NUBIS { record } else { base }),
         benard: load_benard(tables, if kind == MEDIUM_BENARD { record } else { base }),
         cirrus: load_cirrus(tables, if kind == MEDIUM_CIRRUS { record } else { base }),
@@ -4040,21 +4090,26 @@ fn segment_scale(s: &Scene, flags: u32, left: bool, base: u32) -> f32 {
 
 /// The first collision of the ray in any medium before `reach`: how far, and which medium
 /// (`NONE` if it gets through them all), by delta tracking.
-pub fn media_collision(s: &Scene, ro: Vec3, rd: Vec3, reach: f32, flags: u32, rng: &mut u32) -> (f32, u32) {
+pub fn media_collision(s: &Scene, ro: Vec3, rd: Vec3, reach: f32, flags: &mut u32, rng: &mut u32) -> (f32, u32, f32) {
     let mut best = reach;
     let mut which = NONE;
+    // (1 unless a density exceeded a majorant grid's bound: `delta_track_weighted`, after
+    // which the path's walks are by proven bounds, `PATH_PROVEN`.)
+    let mut weight = 1.0;
+    let mut sampled = *flags & PATH_PROVEN == 0;
+    let flags_in = *flags;
     let mut random = Hashed(*rng);
-    let left = flags & PATH_SCATTERED != 0;
+    let left = flags_in & PATH_SCATTERED != 0;
     let mut m = 0;
     while m < s.params.media.y {
         let base = s.params.media.x + m * MEDIUM_SIZE;
         let (near, far) = medium_span(s.tables, base, ro, rd, 0.0, best);
-        let scale = segment_scale(s, flags, left, base);
+        let scale = segment_scale(s, flags_in, left, base);
         if near < far && scale > 0.0 {
             let medium = load_medium(s.tables, base);
             // (The density is tabulated by where it is in the world.)
             let from = world(s, ro);
-            if let Some(t) = shared::media::delta_track(&medium, (from.x, from.y, from.z), (rd.x, rd.y, rd.z), near, far, scale, &mut random) {
+            if let Some(t) = shared::media::delta_track_weighted(&medium, (from.x, from.y, from.z), (rd.x, rd.y, rd.z), near, far, scale, &mut random, &mut weight, &mut sampled) {
                 best = t;
                 which = m;
             }
@@ -4062,7 +4117,10 @@ pub fn media_collision(s: &Scene, ro: Vec3, rd: Vec3, reach: f32, flags: u32, rn
         m += 1;
     }
     *rng = random.0;
-    (best, which)
+    if !sampled {
+        *flags |= PATH_PROVEN;
+    }
+    (best, which, weight)
 }
 
 /// How much light gets through the media along the ray as far as `tmax`: one estimate, by
@@ -4080,7 +4138,7 @@ pub fn media_transmittance(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32, flags: u32,
             let medium = load_medium(s.tables, base);
             let lower = at(s.tables, base + MEDIUM_LOWER);
             let from = world(s, ro);
-            through = match shared::media::ratio_track(&medium, (from.x, from.y, from.z), (rd.x, rd.y, rd.z), near, far, lower, scale, through, &mut random) {
+            through = match shared::media::ratio_track_from(&medium, (from.x, from.y, from.z), (rd.x, rd.y, rd.z), near, far, lower, scale, through, &mut random, flags & PATH_PROVEN == 0) {
                 Some(left) => left,
                 None => 0.0,
             };

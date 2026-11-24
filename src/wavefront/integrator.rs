@@ -143,7 +143,7 @@ struct WithHost<'a, M: pathtrace::Media> {
 impl<M: pathtrace::Media> pathtrace::Finder for WithHost<'_, M> {
     const MEDIA: bool = M::ON;
 
-    fn find(&self, scene: &pathtrace::Scene, p: &PathState) -> PathState {
+    fn find(&self, scene: &pathtrace::Scene, p: &PathState) -> (PathState, f32) {
         let mut found = pathtrace::intersect_surface(scene, p);
         if !self.host_shapes.is_empty() {
             let r = host_ray(p.o.truncate(), p.d.truncate(), &self.kernels.buffers.origin);
@@ -882,9 +882,10 @@ pub mod tests {
     #[test]
     fn test_the_kernels_sobol_points_are_the_renderers() {
         let mut rng = crate::geometry::Pcg32::new(3, 5);
+        let directions: Vec<f32> = pathtrace::sobol_directions().iter().flatten().map(|&v| f32::from_bits(v)).collect();
         for i in 0..20_000u32 {
             let index = if i < 4096 { i } else { rng.next_u32() };
-            let x = pathtrace::sobol4(index);
+            let x = pathtrace::sobol4(&directions, 0, index);
             for (d, x) in [x.x, x.y, x.z, x.w].into_iter().enumerate() {
                 assert_eq!(x, crate::sobol::sobol(index, d), "point {} dimension {}", index, d);
             }

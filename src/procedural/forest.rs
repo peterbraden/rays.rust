@@ -333,12 +333,13 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
     let side = reach.max(((hi.x - lo.x) * (hi.y - lo.y) / 4e6).sqrt());
     let (nx, nz) = (((hi.x - lo.x) / side).floor() as i64 + 3, ((hi.y - lo.y) / side).floor() as i64 + 3);
     let cell = |x: f64, z: f64| (((x - lo.x) / side).floor() as i64 + 1, ((z - lo.y) / side).floor() as i64 + 1);
-    let mut grid: Vec<Vec<usize>> = vec![vec![]; (nx * nz) as usize];
+    // Each cell holds its trees' (x, z, radius), so that a dart's test reads them where they
+    // lie rather than following an index into the trees placed.
+    let mut grid: Vec<Vec<(f64, f64, f64)>> = vec![vec![]; (nx * nz) as usize];
     let at = |(i, j): (i64, i64)| (0 .. nx).contains(&i).then_some(()).and((0 .. nz).contains(&j).then_some((j * nx + i) as usize));
     // The smallest radius any tree can have.
     let smallest = species.iter().map(|s| radius(s, (1. - s.scale_v.abs()).max(0.))).fold(f64::INFINITY, f64::min);
     let mut placed: Vec<Placement> = vec![];
-    let mut radii: Vec<f64> = vec![];
 
     // Enough darts to fill the area at the closest spacing many times over.
     let closest = species.iter().map(|s| layout.spacing * s.spacing).fold(f64::INFINITY, f64::min).max(1e-9);
@@ -359,12 +360,18 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
         // any tree can have. A rejected dart changes nothing, so the same trees are kept as by
         // testing at the species' own radius alone.
         let (cx, cz) = cell(x, z);
-        let near = |r: f64| (cx - 1 ..= cx + 1).any(|i| (cz - 1 ..= cz + 1).any(|j| {
-            at((i, j)).is_some_and(|k| grid[k].iter().any(|&n| {
-                let q = placed[n].position;
-                (q.x - x).hypot(q.z - z) < r + radii[n]
-            }))
-        }));
+        // Whether a tree already placed is within `r` plus its own radius: the dart's own
+        // cell first, where one most often is. (Most darts end here, tens of millions in a
+        // large forest, so the distance is compared squared first, and only by `hypot`, as it
+        // always was, where the two could disagree: the same trees are placed.)
+        let too_close = |dx: f64, dz: f64, reach: f64| {
+            let (d2, r2) = (dx * dx + dz * dz, reach * reach);
+            if d2 < r2 * (1. - 1e-9) { true } else if d2 > r2 * (1. + 1e-9) { false } else { dx.hypot(dz) < reach }
+        };
+        let near = |r: f64| (0 .. 9).any(|c| {
+            let (i, j) = (cx + [0, -1, 1, 0, 0, -1, -1, 1, 1][c], cz + [0, 0, 0, -1, 1, -1, 1, -1, 1][c]);
+            at((i, j)).is_some_and(|k| grid[k].iter().any(|&(qx, qz, qr)| too_close(qx - x, qz - z, r + qr)))
+        });
         if near(smallest) {
             continue;
         }
@@ -412,8 +419,7 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
             continue;
         }
 
-        grid[at((cx, cz)).expect("a tree within the area")].push(placed.len());
-        radii.push(r);
+        grid[at((cx, cz)).expect("a tree within the area")].push((x, z, r));
         placed.push(Placement {
             species: k,
             variant: ((which * layout.variants.max(1) as f64) as usize).min(layout.variants.max(1) - 1),
@@ -487,6 +493,30 @@ mod tests {
         let place_with = |seed| place(&layout(), &[one(1., 0.2)], seed, &[&ground]);
         assert_eq!(place_with(1), place_with(1));
         assert_ne!(place_with(1), place_with(2));
+    }
+
+    /// A fingerprint of the trees placed on several layouts: what changing how placement is
+    /// computed must leave the same (`place_favouring`'s neighbour test).
+    #[test]
+    #[ignore]
+    fn print_placement_fingerprints() {
+        let ground = Plane { y: 0. };
+        let mut layouts = vec![layout()];
+        layouts.push(ForestLayout { min: Vector2::new(-300., -200.), max: Vector2::new(300., 400.), spacing: 3., clearings: 0.1, patchiness: 0.7, ..layout() });
+        for (n, l) in layouts.iter().enumerate() {
+            for species in [vec![one(1., 0.2), one(0.4, 0.)], vec![one(0.7, 0.3), one(1.3, 0.1), one(0.5, 0.25)]] {
+                let favour = |x: f64, z: f64| 0.5 + 0.5 * (x * 0.03).sin() * (z * 0.02).cos();
+                let trees = place_favouring(l, &species, 7, &[&ground], &favour);
+                let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                for p in &trees {
+                    for v in [p.position.x, p.position.z, p.scale, p.yaw] {
+                        h = (h ^ v.to_bits()).wrapping_mul(0x100_0000_01b3);
+                    }
+                    h = (h ^ (p.species as u64 * 31 + p.variant as u64)).wrapping_mul(0x100_0000_01b3);
+                }
+                println!("FINGERPRINT layout {} species {}: {} trees, {:016x}", n, species.len(), trees.len(), h);
+            }
+        }
     }
 
     #[test]

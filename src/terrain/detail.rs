@@ -67,8 +67,8 @@ pub fn bound(c: &Context, slope: f64, amplitude: f64) -> f64 {
     let Some(f) = c.fields else { return 0. };
     let k = Kinds::at(c, f, slope);
     // The most each kind gives (ledges and granite's blocks for rock).
-    let rock = 0.7 * 1.5 + 1.2 + 1.0 * 0.6;
-    let loose = k.scree * 0.5 + k.glacial * (1.5 + 0.9) + k.alluvium * 0.34 + k.blown * 0.15 + k.pan * 0.05;
+    let rock = 0.7 * 1.5 + 1.2 + 1.0 * 0.6 + 0.25;
+    let loose = k.scree * 0.5 + k.glacial * (1.5 + 0.9) + k.alluvium * 0.34 + k.blown * 0.15 + k.pan * 0.05 + 0.03;
     let h = (k.bare * rock + (1. - k.bare) * loose).min(REACH);
     amplitude.abs() * ((1. - k.ice) * h + k.ice * 0.4) * 1.25 + 0.02
 }
@@ -106,7 +106,9 @@ pub fn local_bound(c: &Context, slope: f64, half: f64, heights: (f64, f64), nois
     let (k0, k1) = (Kinds::at(c, f, 0.), Kinds::at(c, f, slope));
     let most = |a: f64, b: f64| a.max(b);
     let d = 2.5 * 2. * half;
-    let lip = |style: FractalStyle, scale: f64, smallest: f64, roughness: f64| steepest(style, scale, smallest, roughness) * d;
+    // How far a fractal of unit amplitude can change over the distance: by its steepest
+    // gradient, but never more than its whole range (2: Perlin's is -1 to 1).
+    let lip = |style: FractalStyle, scale: f64, smallest: f64, roughness: f64| (steepest(style, scale, smallest, roughness) * d).min(2.);
     use FractalStyle::*;
     // Glaciers.
     let ice = most(k0.ice, k1.ice);
@@ -138,7 +140,8 @@ pub fn local_bound(c: &Context, slope: f64, half: f64, heights: (f64, f64), nois
             // The ledges' height changes only with the slope, which a cell's base hardly does.
             0.7 * hardness * steep + texture
         };
-        change += bare * rock_change;
+        // The roughness every rock has.
+        change += bare * (rock_change + 0.25 * lip(Perlin, 4., 0.01, 0.62));
     }
     let loose = 1. - k0.bare.min(k1.bare);
     if loose > 0. {
@@ -151,7 +154,8 @@ pub fn local_bound(c: &Context, slope: f64, half: f64, heights: (f64, f64), nois
             + glacial * 1.5 * lip(Perlin, 25., 2., 0.5)
             + alluvium * (0.3 * lip(Perlin, 30., 3., 0.5) + 0.04 * lip(Perlin, 0.4, 0.05, 0.6))
             + blown * 0.15 * lip(Perlin, 12., 2., 0.4)
-            + pan * 0.05);
+            + pan * 0.05
+            + 0.03 * lip(Perlin, 0.5, 0.01, 0.6));
     }
     let change = amplitude.abs() * (1.25 * change.min(2. * REACH) + 0.02);
     (centre - change, centre + change)
@@ -175,6 +179,12 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
     let stones = |style: CellStyle, scale: f64, salt: u32| {
         let k = keep(scale);
         if k <= 0. { 0. } else { k * cells(seed ^ salt, style, scale, false, Metric::Euclidean, 1., c) }
+    };
+    // Blocks broken along joints and cleavage, faceted rather than rounded (cells measured
+    // by Manhattan distance are diamond-faceted).
+    let blocks = |scale: f64, salt: u32| {
+        let k = keep(scale);
+        if k <= 0. { 0. } else { k * cells(seed ^ salt, CellStyle::Stones, scale, false, Metric::Manhattan, 1., c) }
     };
 
     let Kinds { ice, bare, scree, glacial, alluvium, blown, pan } = Kinds::at(c, f, slope);
@@ -202,7 +212,7 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
             // Domes, and corestones weathered out in places (tors), not everywhere.
             Rock::Granite => {
                 let tors = smoothstep(0.3, 0.55, fbm(FractalStyle::Perlin, 40., 10., 0.5));
-                0.8 * tors * stones(CellStyle::Stones, 4., 0x61) + 1.0 * fbm(FractalStyle::Billow, 18., 0.5, 0.5)
+                0.8 * tors * blocks(4., 0x61) + 1.0 * fbm(FractalStyle::Billow, 18., 0.5, 0.5)
             }
             // Ribs along the foliation, and crumbling between.
             Rock::Gneiss => 0.8 * fbm(FractalStyle::Ridged, 5., 0.1, 0.55),
@@ -226,7 +236,11 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
             Rock::Basalt => 0.4 * stones(CellStyle::F1, 0.8, 0x91) - 0.3 * (1. - smoothstep(0., 0.1, stones(CellStyle::Edges, 0.8, 0x91))),
             Rock::Sediment => 0.,
         };
-        h += bare * (ledges + face * texture);
+        // And rough at every scale, as rock is: a fractal from a few metres down to a
+        // centimetre whose amplitude falls more slowly than its scale (rock surfaces' Hurst
+        // exponents are about 0.7-0.8), so it has texture close up as well as from afar.
+        let rough = 0.25 * fbm(FractalStyle::Perlin, 4., 0.01, 0.62);
+        h += bare * (ledges + face * (texture + rough));
     }
 
     let loose = 1. - bare;
@@ -235,7 +249,7 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
         if scree > 0. {
             // A talus slope is a plane at the angle of repose, rough at the scale of its
             // stones, not lumpy.
-            s += scree * (0.08 * stones(CellStyle::Stones, 0.5, 0xa1) + 0.04 * stones(CellStyle::Stones, 0.2, 0xa3));
+            s += scree * (0.08 * blocks(0.5, 0xa1) + 0.04 * blocks(0.2, 0xa3));
         }
         if glacial > 0. {
             // Hummocks. (Its boulders are real ones, the landscape's own, `object::boulders`:
@@ -253,6 +267,8 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
             // and deep.
             s += pan * -0.03 * (1. - smoothstep(0., 0.025, stones(CellStyle::Edges, 1.5, 0xc1)));
         }
+        // Loose ground is rough too, at the scale of its clods and stones.
+        s += 0.03 * fbm(FractalStyle::Perlin, 0.5, 0.01, 0.6);
         h += loose * s;
     }
     amplitude * ((1. - ice) * h.clamp(-REACH, REACH) + ice * glacier)
@@ -271,7 +287,10 @@ fn joints(c: &Context, noise: &SeededNoise, spacing: f64) -> (f64, f64) {
     let across = |dir: (f64, f64), s: f64, o: f64| {
         let u = (p.x * dir.0 + p.z * dir.1) / s + 0.25 * noise.noise(p / (4. * s) + crate::na::Vector3::new(o, 1.3, 0.2));
         let d = (u - u.round()).abs() * s;
-        (1. - smoothstep(0.03, 0.15, d), u.floor() as i64)
+        // Joints die out and pick up again along their length, and open unevenly.
+        let along = noise.noise(p / (1.5 * s) + crate::na::Vector3::new(o + 5.1, 2.7, 0.9));
+        let open = smoothstep(-0.25, 0.15, along);
+        (open * (1. - smoothstep(0.03, 0.15, d)), u.floor() as i64)
     };
     let ((g1, i), (g2, j)) = (across(a, spacing, 7.7), across(b, 1.6 * spacing, 3.1));
     let mut h = (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (j as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
@@ -354,8 +373,9 @@ mod tests {
                 }
             }
         }
-        // And on sand, small cells' bounds are centimetres, not metres.
-        assert!(worst < 0.2, "{}", worst);
+        // And on sand, small cells' bounds are a few tens of centimetres, not metres (on this
+        // 42° slope, steeper than sand rests, a third of the ground counts as bare rock).
+        assert!(worst < 0.5, "{}", worst);
     }
 
     #[test]

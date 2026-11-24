@@ -714,6 +714,7 @@ fn scenery_params(o: &Value) -> SceneryParams {
     p.snowline = o["snowline"].as_f64();
     p.treeline = o["treeline"].as_f64();
     p.min_river_width = number(o, "min_river_width", p.min_river_width);
+    p.ground_materials = o["ground_materials"].as_bool().unwrap_or(p.ground_materials);
     p
 }
 

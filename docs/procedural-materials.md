@@ -122,6 +122,7 @@ what faces up, algae on the shaded side of a trunk) and, on a landscape, its fie
 
 | Preset | |
 |---|---|
+| `sandstone` | Desert sandstone: buff to orange, in laminae a few centimetres thick that waver across the face, sugary grains, iron stains in patches, dark desert varnish down steep faces. |
 | `granite_outcrop` | Weathered granite: grey crystalline rock, mottled, iron-stained, black water streaks down steep faces, grey crustose and yellow-green map lichen on what faces up. |
 | `limestone_cliff` | Pale grey crag, ochre where fresh, striped black by cyanobacteria where water runs, fluted by solution (karren) on steep faces, pitted on top. |
 | `gneiss` | Folded bands and lenses of pale quartz-feldspar and dark biotite. |

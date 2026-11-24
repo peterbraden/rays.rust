@@ -2793,6 +2793,12 @@
           "doc": "Full scale: also write a map of the whole planet here."
         },
         {
+          "name": "ground_materials",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Full scale, with the default ground cover: shade bare rock (by its lithology), scree, sand and gravel with the library's natural materials; false for plain colours."
+        },
+        {
           "name": "height_map",
           "kind": "path",
           "default": null,

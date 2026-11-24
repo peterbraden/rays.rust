@@ -211,6 +211,20 @@ scene's origin, the planet's curve lowers the ground (about 20 m at 16 km).
 
 ### Procedural by default
 
+The landscape's own ground cover shades what lies bare with the library's natural materials
+(docs/procedural-materials.md): each rock by its lithology (`granite_outcrop`,
+`limestone_cliff`, `sandstone`, `quartzite`, `slate` for shale, `schist`, `gneiss`, `basalt`),
+scree, dune sand and river gravel, each chosen at a point by its share of the ground there
+(`scenery::Bare`) as snow and ice are; plants, salt crust, snow and ice keep their own. The
+materials carry detail from centimetres up, filtered to the pixel, so close up the ground has
+grain, crystals, stains and lichen, and from afar their average colours. `"ground_materials":
+false` keeps plain colours.
+
+The shapes aim at realism rather than at features: rock is rough at every scale (a fractal from
+a few metres to a centimetre whose amplitude falls more slowly than its size, as rock surfaces'
+Hurst exponents of 0.7-0.8 have it), joints die out and pick up along their length, broken
+blocks are faceted rather than rounded, and loose ground is rough at the scale of its stones.
+
 A full-scale landscape whose camera is within 2 km of the ground displaces it with its own
 detail unless the scene says otherwise (a graph of its own, or `"displacement": false`): a
 `ground` node, out to 40 times the camera's height (500 m to 4 km), on nested grids whose

@@ -153,13 +153,16 @@ pub struct SceneryParams {
     pub min_river_width: f64,
     /// Cells per face edge of the mesh over the whole planet.
     pub globe: usize,
+    /// Shade bare rock, scree, sand and gravel with the library's natural materials
+    /// (`material::library`), each rock its own; else with plain colours.
+    pub ground_materials: bool,
 }
 
 impl Default for SceneryParams {
     fn default() -> SceneryParams {
         SceneryParams {
             resolution: 384, min_spacing: 0.5, roughness: 1., exaggeration: 1.,
-            snowline: None, treeline: None, min_river_width: 0., globe: 192,
+            snowline: None, treeline: None, min_river_width: 0., globe: 192, ground_materials: true,
         }
     }
 }
@@ -769,6 +772,82 @@ pub struct Ground {
     /// the bluer ice beneath.
     snow: [Snow; 2],
     ice: [Ice; 2],
+    /// The library's materials for each kind of bare ground (`Bare::index`), if used.
+    materials: Vec<Option<Box<dyn MaterialModel + Sync + Send>>>,
+}
+
+/// What lies bare on the ground at a point, under any snow or ice: plants and soil (the
+/// cover's colour), or bare rock of a kind, or loose stones, sand or gravel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Bare { Plain, Rock(Rock), Scree, Sand, Gravel }
+
+impl Bare {
+    const COUNT: usize = 4 + 9;
+
+    fn index(self) -> usize {
+        match self {
+            Bare::Plain => 0,
+            Bare::Scree => 1,
+            Bare::Sand => 2,
+            Bare::Gravel => 3,
+            Bare::Rock(r) => 4 + r.index(),
+        }
+    }
+
+    /// The library's material for it, and its seed's salt: rocks by their lithology (slate
+    /// for shale), loose ground by what it is.
+    fn library(self) -> Option<&'static str> {
+        Some(match self {
+            Bare::Plain => return None,
+            Bare::Scree => "scree",
+            Bare::Sand => "dune_sand",
+            Bare::Gravel => "river_gravel",
+            Bare::Rock(r) => match r {
+                Rock::Sediment => "scree",
+                Rock::Shale => "slate",
+                Rock::Sandstone => "sandstone",
+                Rock::Limestone => "limestone_cliff",
+                Rock::Quartzite => "quartzite",
+                Rock::Schist => "schist",
+                Rock::Gneiss => "gneiss",
+                Rock::Granite => "granite_outcrop",
+                Rock::Basalt => "basalt",
+            },
+        })
+    }
+}
+
+/// The shares of each kind of bare ground at a point, as the cover's colours are blended.
+#[derive(Clone, Copy, Debug)]
+struct Shares([f64; Bare::COUNT]);
+
+impl Shares {
+    fn of(s: Bare) -> Shares {
+        let mut w = [0.; Bare::COUNT];
+        w[s.index()] = 1.;
+        Shares(w)
+    }
+
+    /// As `mix` blends colours: `t` of `other` into these.
+    fn mix(&mut self, other: Shares, t: f64) {
+        let t = t.clamp(0., 1.);
+        for (a, b) in self.0.iter_mut().zip(other.0) { *a = *a * (1. - t) + b * t; }
+    }
+
+    /// One of them, chosen by its share.
+    fn pick(&self) -> Bare {
+        let mut x = rand() * self.0.iter().sum::<f64>();
+        for (k, &w) in self.0.iter().enumerate() {
+            if x < w || k == Bare::COUNT - 1 {
+                return match k {
+                    0 => Bare::Plain, 1 => Bare::Scree, 2 => Bare::Sand, 3 => Bare::Gravel,
+                    k => Bare::Rock(Rock::from_index(k - 4)),
+                };
+            }
+            x -= w;
+        }
+        Bare::Plain
+    }
 }
 
 /// What covers the ground at a point: the shares of snow and of glacier ice, the rest bare
@@ -782,6 +861,8 @@ pub struct Cover {
     pub ice: f64,
     /// How much of the ice is blue rather than white, 0 to 1.
     pub blue: f64,
+    /// What lies bare under the snow and ice, chosen by the shares of the kinds there.
+    pub surface: Bare,
 }
 
 /// Albedos of real surfaces (linear, as the renderer's colours are).
@@ -811,6 +892,12 @@ impl Ground {
             noise: PerlinNoise::shuffled(seed.wrapping_add(77)),
             snow: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("firn"), 1., seed)],
             ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
+            materials: (0..Bare::COUNT).map(|k| {
+                let s = if k < 4 { [Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel][k] } else { Bare::Rock(Rock::from_index(k - 4)) };
+                let name = s.library().filter(|_| p.ground_materials)?;
+                let definition = serde_json::json!({"type": "library", "name": name, "seed": seed.wrapping_mul(31).wrapping_add(k as u64)});
+                Some(crate::scenefile::SceneFile::parse_material_definition(&definition, name, &serde_json::Map::new()))
+            }).collect(),
         }
     }
 
@@ -967,10 +1054,10 @@ impl Ground {
         let mix = |a: Color, b: Color, t: f64| { let t = t.clamp(0., 1.); a * (1. - t) + b * t };
         let snowline = self.snowline(&d);
         let treeline = self.treeline(&d);
-        let bare = |ground: Color| Cover { ground, snow: 0., snow_age: 0., ice: 0., blue: 0. };
+        let bare = |ground: Color| Cover { ground, snow: 0., snow_age: 0., ice: 0., blue: 0., surface: Bare::Plain };
         // Snow ages towards the snowline: coarser, dustier, turning to firn.
         let age = |h: f64| 1. - smoothstep(snowline, snowline + 800., h + (n(300., 0.35) - 0.5) * 300.);
-        if class == LAVA { return bare(colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain); }
+        if class == LAVA { return Cover { surface: Bare::Rock(Rock::Basalt), ..bare(colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain) }; }
         if class == ICE {
             // Snow over the glacier's accumulation zone, bare ice below the snowline.
             let snow = smoothstep(snowline - 300., snowline + 100., h + (n(700., 0.2) - 0.5) * 300.);
@@ -1002,6 +1089,7 @@ impl Ground {
                 snow_age: age(h),
                 ice,
                 blue: if ice > 0. { (bare_ice * (1. - crevasse) * blue + crevasse) / ice } else { 0. },
+                surface: Bare::Plain,
             };
         }
         let tree = treeline + (n(1500., 0.3) - 0.5) * 400.;
@@ -1036,13 +1124,18 @@ impl Ground {
         };
         // Alpine meadow from the treeline up.
         ground = mix(ground, colour(MEADOW), smoothstep(tree - 100., tree + 200., h));
+        // The kinds of bare ground, blended as their colours are.
+        let mut shares = Shares::of(Bare::Plain);
         if class == TILL {
             // Till and moraines: unsorted rubble, boulders in a grey matrix of rock flour,
             // thinly grown over where it is warm enough (moraines left by the last glaciers
             // carry forest and pasture).
             let rubble = colour(SCREE) * (0.75 + 0.5 * n(12., 0.95)) * (1. - 0.3 * smoothstep(0.6, 0.7, n(3., 0.15)));
             let grown = if dry { 0.15 } else { 0.6 * (1. - smoothstep(tree - 200., tree + 100., h)) };
-            ground = mix(rubble, ground, grown * smoothstep(0.3, 0.6, n(200., 0.45)));
+            let g = grown * smoothstep(0.3, 0.6, n(200., 0.45));
+            ground = mix(rubble, ground, g);
+            shares = Shares::of(Bare::Scree);
+            shares.mix(Shares::of(Bare::Plain), g);
         }
         if class == ALLUVIUM {
             // Valley floors: fields and meadows where it is wet enough, gravel where it is too
@@ -1050,6 +1143,7 @@ impl Ground {
             let fields = mix(colour(GRASS), colour(FIELDS), smoothstep(0.4, 0.6, n(350., 0.8)));
             let barren = if dry { 1. } else { smoothstep(tree, tree + 300., h) };
             ground = mix(fields, colour(GRAVEL), barren);
+            shares.mix(Shares::of(Bare::Gravel), barren);
         }
         // Playas: the flat floors of closed basins, white with salt where the water last
         // evaporated, cracked into polygons a few metres across, darker and browner where the
@@ -1065,6 +1159,8 @@ impl Ground {
                 // Polygonal cracks: the ridges of a noise's cells, thin dark lines.
                 let crack = 1. - 0.35 * (1. - smoothstep(0.0, 0.025, (n(4., 0.15) - 0.5).abs()));
                 ground = mix(ground, crust * crack * (0.92 + 0.16 * n(40., 0.35)), extent);
+                // (Salt crust has no library material: a plain colour.)
+                shares.mix(Shares::of(Bare::Plain), extent);
             }
         }
         // Wind-blown sand, over all but steep rock (slip faces stand at about 33°), its colour
@@ -1075,22 +1171,31 @@ impl Ground {
             let extent = smoothstep(0.5, 2.5, sand + 2. * (n(300., 0.85) - 0.5)) * smoothstep(0.75, 0.85, flat);
             let dune = mix(colour(DUNE_SAND), colour(RED_SAND), smoothstep(0.3, 0.7, n(8000., 0.55)));
             ground = mix(ground, dune * (0.9 + 0.2 * n(20., 0.15)), extent);
+            shares.mix(Shares::of(Bare::Sand), extent);
         }
         // Beaches.
-        ground = mix(ground, colour(SAND), 1. - smoothstep(2., 12., h + 8. * n(150., 0.4)));
+        let beach = 1. - smoothstep(2., 12., h + 8. * n(150., 0.4));
+        ground = mix(ground, colour(SAND), beach);
+        shares.mix(Shares::of(Bare::Sand), beach);
         // Bare rock on steep slopes (about 40°), and scree and rock above the meadows.
         let high = smoothstep(tree + 300., tree + 900., h + (n(600., 0.6) - 0.5) * 300.);
         // (Bare at gentler slopes on rock that keeps thin soils, steeper on rock that weathers to
         // soil.)
         let bare = self.bareness(&d, h);
         let rock = (1. - smoothstep(0.7 + bare, 0.85 + bare, flat)).max(high * (1. - 0.6 * smoothstep(0.92, 0.99, flat)));
-        let stone = mix(self.stone(&d, h), colour(SCREE), smoothstep(0.85, 0.95, flat)) * (0.7 + 0.6 * n(250., 0.7));
+        let loose = smoothstep(0.85, 0.95, flat);
+        let stone = mix(self.stone(&d, h), colour(SCREE), loose) * (0.7 + 0.6 * n(250., 0.7));
         ground = mix(ground, stone, rock) * grain;
+        if rock > 0. {
+            let mut bare = Shares::of(Bare::Rock(self.rock(&d, h).filter(|&r| r != Rock::Sediment).unwrap_or(Rock::Sediment)));
+            bare.mix(Shares::of(Bare::Scree), loose);
+            shares.mix(bare, rock);
+        }
         // Snow lies above the snowline where slopes are gentle enough to hold it, and drifts
         // lower in sheltered places.
         let line = snowline + (n(900., 0.1) - 0.5) * 500.;
         let snow = smoothstep(line - 150., line + 150., h) * smoothstep(0.72, 0.88, flat + 0.15 * (n(120., 0.3) - 0.5));
-        Cover { ground, snow, snow_age: age(h), ice: 0., blue: 0. }
+        Cover { ground, snow, snow_age: age(h), ice: 0., blue: 0., surface: shares.pick() }
     }
 }
 
@@ -1156,7 +1261,11 @@ impl MaterialModel for Land {
         match crate::material::snow::pick(&[1. - c.snow - c.ice, c.snow, c.ice]) {
             1 => scatter_bsdf(&g.snow[(rand() < c.snow_age) as usize].bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s),
             2 => scatter_bsdf(&g.ice[(rand() < c.blue) as usize].bsdf(&i.normal, Some(s)), r, &i.point, s),
-            _ => scatter_bsdf(&LambertianBSDF { albedo: c.ground.as_reflectance(), normal: i.normal }, r, &i.point, s),
+            // Bare ground: its library material, or its colour.
+            _ => match g.materials.get(c.surface.index()).and_then(|m| m.as_deref()) {
+                Some(m) => m.scatter(r, intersection, s),
+                None => scatter_bsdf(&LambertianBSDF { albedo: c.ground.as_reflectance(), normal: i.normal }, r, &i.point, s),
+            },
         }
     }
 }

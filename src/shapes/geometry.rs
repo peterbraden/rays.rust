@@ -183,9 +183,10 @@ pub trait Geometry: Sync{
     fn undisplaced(&self, _p: &Vector3<f64>, _face: u32) -> Option<Undisplaced> { None }
 
     /// The map from the scene's space to the shape's own at `p` (hit as part `face`), where it
-    /// was placed by a transform: solid textures are read there, so they move, turn and scale
-    /// with their object, as POV-Ray's do (a plank turned turns its grain). None where the
-    /// shape's space is the scene's.
+    /// was placed by a transform, less any scaling: solid textures are read there, so they move
+    /// and turn with their object, as POV-Ray's do (a plank turned turns its grain), but keep
+    /// their size in scene units (a library material's grain is as fine on a large table as on
+    /// a small box; its `scale` sizes it). None where the shape's space is the scene's.
     fn pattern_frame(&self, _p: &Vector3<f64>, _face: u32) -> Option<Affine3<f64>> { None }
 
     /// The accuracy of this shape's hits, in its own units, beyond floating-point rounding: the

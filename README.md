@@ -98,7 +98,9 @@ After PBRT's chapter 5. The `"camera"` takes a `"type"`:
 - `"isometric"`: an orthographic view of `"lookat"`, `"height"` tall, from `"azimuth"` degrees
   round (default 45) and `"elevation"` degrees up (default 35.26°, at which the three axes are
   drawn alike, 120° apart; 30 gives pixel art's 2:1 diamonds), `"distance"` back (default twice
-  the height); `"location"` isn't needed.
+  the height); `"location"` isn't needed. Orthographic and isometric cameras take an `"aperture"`
+  (default 0) and `"focus_distance"` (default `lookat`) for a model's shallow depth of field:
+  blur grows as aperture × |depth − focus| / focus, so a camera further back needs a wider one.
 - `"realistic"`: rays traced through a real lens (`"lens": "dgauss.50mm"`, `"wide.22mm"`,
   `"telephoto.250mm"`, `"fisheye.10mm"` or a pbrt `.dat` file), with `"f_number"`, `"blades"`
   and `"film_diagonal"`: depth of field, vignetting, distortion and aberrations come from the

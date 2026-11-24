@@ -574,13 +574,15 @@ impl SceneFile {
     ///   at or `"focus_distance"`; `"astigmatism": {"cylinder": power, "axis": degrees,
     ///   "seidel": power}` (`camera::Astigmatism`), powers in reciprocal scene units.
     /// - `"orthographic"`: parallel rays from a rectangle `"height"` tall (by default what the
-    ///   perspective camera sees at the point looked at).
+    ///   perspective camera sees at the point looked at); through a thin lens of radius
+    ///   `"aperture"` (default 0, all in focus) focused at the point looked at or
+    ///   `"focus_distance"`, which blurs by aperture × |depth - focus| / focus.
     /// - `"isometric"`: an orthographic camera looking at `"lookat"` from `"azimuth"` degrees
     ///   round `"up"` (default 45, from x towards z) and `"elevation"` degrees above the ground
     ///   (default `camera::ISOMETRIC_ELEVATION`, 35.26°, true isometric; 30° gives pixel art's
     ///   2:1 diamonds), a rectangle `"height"` tall, from `"distance"` back (default the distance
-    ///   of `"location"`, which is optional and otherwise sets nothing, or twice the height); see
-    ///   `SceneFile::axonometric`.
+    ///   of `"location"`, which is optional and otherwise sets nothing, or twice the height), and
+    ///   the orthographic camera's `"aperture"`; see `SceneFile::axonometric`.
     /// - `"spherical"`: every direction, `"mapping": "equirectangular"` (the default) or
     ///   `"equal_area"`.
     /// - `"realistic"`: rays traced through a lens (`lens`): `"lens"`, a built-in name
@@ -624,7 +626,9 @@ impl SceneFile {
             },
             Some("orthographic") => {
                 let h = c["height"].as_f64().unwrap_or_else(|| angle().tan() * (lookat - location).norm());
-                Box::new(camera::OrthographicCamera::new(placement, h, aspect))
+                let focus = c["focus_distance"].as_f64().unwrap_or((lookat - location).norm());
+                Box::new(camera::OrthographicCamera::new(placement, h, aspect)
+                    .with_lens(SceneFile::parse_number(&c["aperture"], 0.), focus))
             },
             Some("spherical") => Box::new(camera::SphericalCamera::new(placement, match c["mapping"].as_str() {
                 None | Some("equirectangular") => camera::SphereMapping::Equirectangular,
@@ -5350,6 +5354,14 @@ mod tests {
         let r = cam.get_ray(0.5, 0.5, 0., 0.);
         // Only the location's distance counts: from azimuth 225°, it looks down along (1, -1, 1).
         assert!((r.ro.norm() - 10.).abs() < 1e-9 && (r.rd - Vector3::new(1., -1., 1.).normalize()).norm() < 1e-9, "{:?}", r);
+        // Through a lens, focused at lookat.
+        let cam = SceneFile::parse_camera(serde_json::json!({"type": "isometric", "lookat": [0, 0, 0],
+            "height": 2, "distance": 10, "aperture": 0.5}), 100, 100);
+        for _ in 0..16 {
+            let r = cam.get_ray(0.5, 0.5, 0., 0.);
+            let t = r.rd.dot(&(-r.ro));
+            assert!((r.ro + r.rd * t).norm() < 1e-9, "{:?}", r);
+        }
         let other = serde_json::json!({"type": "orthographic", "location": [0, 0, 1], "lookat": [0, 0, 0], "up": [0, 1, 0]});
         assert_eq!(SceneFile::axonometric(other.clone()), other);
     }

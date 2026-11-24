@@ -218,17 +218,29 @@ impl Camera for ThinLensCamera {
 }
 
 /// Orthographic projection (PBR section 5.2.1): parallel rays along the view direction, from a
-/// rectangle `height` tall centred on the camera's position.
+/// rectangle `height` tall centred on the camera's position; optionally through a thin lens, as
+/// pbrt's orthographic camera: each ray leaves a point on a disc of radius `aperture` about its
+/// pinhole ray's start, aimed at where that ray crosses the plane of focus, `focus` ahead. Things
+/// keep their size at every depth, and blur by aperture × |depth - focus| / focus, depth from
+/// the camera's plane: the tilt-shift look of a model.
 pub struct OrthographicCamera {
     pub placement: Placement,
     width: f64,
     height: f64,
+    aperture: f64,
+    focus: f64,
 }
 
 impl OrthographicCamera {
     pub fn new(placement: Placement, height: f64, aspect: f64) -> OrthographicCamera {
         assert!(height > 0., "An orthographic camera's height must be positive, got {}", height);
-        OrthographicCamera { placement, width: height * aspect, height }
+        OrthographicCamera { placement, width: height * aspect, height, aperture: 0., focus: 1. }
+    }
+
+    /// Through a lens of radius `aperture`, focused `focus` ahead of the camera's plane.
+    pub fn with_lens(self, aperture: f64, focus: f64) -> OrthographicCamera {
+        assert!(aperture == 0. || focus > 0., "An orthographic camera with an aperture must focus ahead of it, got {}", focus);
+        OrthographicCamera { aperture, focus, ..self }
     }
 }
 
@@ -236,7 +248,12 @@ impl Camera for OrthographicCamera {
     fn get_ray(&self, x: f64, y: f64, sx: f64, sy: f64) -> Ray {
         let f = self.placement.frame();
         let ro = f.location + f.camx * ((x + sx - 0.5) * self.width) + f.camy * ((y + sy - 0.5) * self.height);
-        Ray { ro, rd: f.camz }
+        if self.aperture <= 0. {
+            return Ray { ro, rd: f.camz };
+        }
+        let lens = random_point_on_disc(self.aperture);
+        let from = ro + f.camx * lens[0] + f.camy * lens[1];
+        Ray { ro: from, rd: (ro + f.camz * self.focus - from).normalize() }
     }
 }
 
@@ -441,6 +458,21 @@ mod tests {
         assert_eq!(a.rd, b.rd);
         // 8 wide and 4 high; looking down +z, the image's right is -x.
         assert!(((b.ro - a.ro) - Vector3::new(-8., 4., 0.)).norm() < 1e-12, "{}", b.ro - a.ro);
+    }
+
+    #[test]
+    fn test_orthographic_lens_focuses_on_its_plane() {
+        let p = Placement::still(Frame::look_at(Vector3::new(0., 0., -5.), Vector3::zeros(), Vector3::y()));
+        let c = OrthographicCamera::new(p, 4., 2.).with_lens(0.5, 5.);
+        let mut spread = 0f64;
+        for _ in 0..64 {
+            let r = c.get_ray(0.25, 0.75, 0., 0.);
+            // Every ray through the same point of the plane of focus, which the pinhole's ray reaches.
+            let t = (0. - r.ro.z) / r.rd.z;
+            assert!(((r.ro + r.rd * t) - Vector3::new(2., 1., 0.)).norm() < 1e-9, "{}", r.ro + r.rd * t);
+            spread = spread.max((r.ro - Vector3::new(2., 1., -5.)).norm());
+        }
+        assert!(spread > 0.1 && spread <= 0.5, "{}", spread);
     }
 
     #[test]

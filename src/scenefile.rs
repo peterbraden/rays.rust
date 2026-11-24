@@ -4307,6 +4307,16 @@ impl SceneFile {
     /// radiance is the air's per unit of sunlight times the sun's `intensity`
     /// (`skysphere::sky_brightness_for_sun`), on the same scale as the sunlight on everything
     /// under it. So the sky can't be given a `brightness` of its own.
+    /// A skysphere without a `"cache"` of its own keeps its tables (`skysphere::table_file`)
+    /// in its scene's landscape's, if that has one: a scene that is slow to build for its
+    /// landscape is as slow again for its sky, in a browser.
+    pub fn sky_cache(objects: &mut [Value]) {
+        let Some(dir) = objects.iter().filter(|o| o["type"].as_str() == Some("landscape")).find_map(|o| o["cache"].as_str()).map(str::to_string) else { return };
+        for o in objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere") && o.get("cache").is_none()) {
+            o["cache"] = serde_json::json!(dir);
+        }
+    }
+
     pub fn sky_follows_sun(sun: &Value, objects: &mut [Value]) {
         if sun.is_null() {
             return;
@@ -4406,6 +4416,7 @@ impl SceneFile {
     pub fn from_scenefile(mut s: SceneFile) -> Scene {
         s.camera = SceneFile::axonometric(std::mem::take(&mut s.camera));
         SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
+        SceneFile::sky_cache(&mut s.objects);
         SceneFile::lightning_follows_sun(&s.sun, &mut s.objects);
         let max_bounding = BBox::new( // TODO
             Vector3::new(-1000., -1000., -1000.),
@@ -4763,6 +4774,20 @@ impl SceneFile {
     /// `terrain::object::world_manifest`), whether built yet or not: for a host without a
     /// filesystem to fetch and provide before building the scene. Each landscape sees the
     /// scene's camera as `from_scenefile` gives it one.
+    /// The files of tables the scene keeps in a `cache` (its skies', `skysphere::table_file`),
+    /// whether made yet or not: as `world_manifests`, for a host without a filesystem to fetch
+    /// before building the scene.
+    pub fn cached_files(doc: Value) -> Vec<String> {
+        let Ok(doc) = SceneFile::substitute_variables(doc) else { return vec![] };
+        let mut objects: Vec<Value> = doc["objects"].as_array().cloned().unwrap_or_default();
+        SceneFile::sky_follows_sun(&doc["sun"], &mut objects);
+        SceneFile::sky_cache(&mut objects);
+        objects.iter()
+            .filter(|o| o["type"].as_str() == Some("skysphere") && o["lut"].as_bool() != Some(false))
+            .filter_map(|o| Some(crate::skysphere::table_file(o["cache"].as_str()?, &crate::skysphere::parse_sky_params(o))))
+            .collect()
+    }
+
     pub fn world_manifests(doc: Value) -> Vec<String> {
         let Ok(doc) = SceneFile::substitute_variables(doc) else { return vec![] };
         let camera = SceneFile::axonometric(doc["camera"].clone());

@@ -1346,6 +1346,11 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     // The lookup table is on by default; "lut": false integrates every ray exactly.
     let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
         let sky = LUTSky::cached(sky, &o.to_string());
+        if let Some(dir) = o["cache"].as_str() {
+            let tables = TableFile { sun: sky.sky.sun_table.get().cloned().unwrap_or_default(),
+                psi: sky.sky.ms_table.get().map(|m| m.psi.clone()), lut: Some(sky.lut.clone()) };
+            tables.write(&table_file(dir, &sky.sky));
+        }
         // Lit by a moon too (set by the scene, `celestial::moon::Moonlight`).
         Box::new(match o.get("moonlight") {
             Some(m) => sky.moonlit(SceneFile::parse_vec3(&m["direction"]), SceneFile::parse_number(&m["share"], 0.)),
@@ -1360,8 +1365,30 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     }
 }
 
-/// The sky described by a `skysphere` object.
+/// The sky described by a `skysphere` object, with its tables: kept from the last build of
+/// the same sky, read from its `cache` (`table_file`), or built.
 pub fn parse_sky_material(o: &Value) -> SkyMaterial {
+    let sky = parse_sky_params(o);
+    // Reuse the tables last built, if they were for this same description (see `LAST_LUT`).
+    let description = o.to_string();
+    let cached = LAST_TABLES.lock().unwrap().as_ref().filter(|t| t.0 == description).cloned();
+    if let Some((_, sun, multiple)) = cached {
+        if let Some(t) = sun { let _ = sky.sun_table.set(t); }
+        if let Some(psi) = multiple { let _ = sky.ms_table.set(MultipleScattering { psi }); }
+        return sky.with_tables();
+    }
+    if let Some(tables) = o["cache"].as_str().and_then(|dir| TableFile::read(&table_file(dir, &sky))) {
+        let _ = sky.sun_table.set(tables.sun);
+        if let Some(psi) = tables.psi { let _ = sky.ms_table.set(MultipleScattering { psi }); }
+        if let Some(lut) = tables.lut { *LAST_LUT.lock().unwrap() = Some((description.clone(), std::sync::Arc::new(lut))); }
+    }
+    let sky = sky.with_tables();
+    *LAST_TABLES.lock().unwrap() = Some((description, sky.sun_table.get().cloned(), sky.ms_table.get().map(|m| m.psi.clone())));
+    sky
+}
+
+/// The sky described by a `skysphere` object, its tables not yet built.
+pub fn parse_sky_params(o: &Value) -> SkyMaterial {
     let earth_location = SceneFile::parse_vec3_def(o, "earth_location", Vector3::new(0., -6360e3, 0.));
     
     // Handle preset or custom scattering parameters
@@ -1386,7 +1413,7 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
     let rayleigh_thickness = SceneFile::parse_number(&o["rayleigh_thickness"], preset.rayleigh_thickness);
     let mie_thickness = SceneFile::parse_number(&o["mie_thickness"], preset.mie_thickness);
     
-    let sky = SkyMaterial {
+    SkyMaterial {
         earth: Sphere::new(
             earth_location,
             SceneFile::parse_number(&o["earth_radius"], 6360e3),
@@ -1409,18 +1436,113 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
         ms_table: std::sync::OnceLock::new(),
         spectral_ms: std::sync::OnceLock::new(),
         crepuscular_rays: o["crepuscular_rays"].as_bool().unwrap_or(false),
-    };
-    // Reuse the tables last built, if they were for this same description (see `LAST_LUT`).
-    let description = o.to_string();
-    let cached = LAST_TABLES.lock().unwrap().as_ref().filter(|t| t.0 == description).cloned();
-    if let Some((_, sun, multiple)) = cached {
-        if let Some(t) = sun { let _ = sky.sun_table.set(t); }
-        if let Some(psi) = multiple { let _ = sky.ms_table.set(MultipleScattering { psi }); }
-        return sky.with_tables();
     }
-    let sky = sky.with_tables();
-    *LAST_TABLES.lock().unwrap() = Some((description, sky.sun_table.get().cloned(), sky.ms_table.get().map(|m| m.psi.clone())));
-    sky
+}
+
+/// # The sky's tables, kept in a file
+///
+/// The sky's tables (the view table, `SkyViewLUT`, the sun's optical depths and multiple
+/// scattering) depend only on the sky's parameters, and take seconds to build: on one thread,
+/// as in a browser, as long as the rest of a landscape's scene together. So a `skysphere` with
+/// a `"cache"` directory (by default its scene's landscape's, `SceneFile::sky_cache`) keeps
+/// them there, in `sky-<key>.bin` (`table_file`), the key a hash of those parameters; the
+/// scene builder fetches the file as it does a landscape's world. The numbers are kept whole
+/// (f64, little-endian), so a sky read from the file is the sky built, to the bit. About 19 MB,
+/// nearly all of it the view table.
+///
+/// The parameters are given to the key as Rust prints them, so they must come out the same
+/// on every platform, as a world's must: parsing, `sky_follows_sun` (a division) and
+/// normalising the sun's direction are exact.
+const TABLE_FILE_VERSION: &str = "1";
+const TABLE_FILE_MAGIC: &[u8; 8] = b"RAYSSKY\0";
+
+/// Where `sky`'s tables are kept in directory `dir`.
+pub fn table_file(dir: &str, sky: &SkyMaterial) -> String {
+    let s = sky;
+    let parameters = format!("{:?}", (
+        (s.atmosphere.center, s.atmosphere.radius, s.earth.center, s.earth.radius, s.sun_direction),
+        (s.rayleigh_thickness, s.mie_thickness, s.brightness, s.rayleigh_coefficients, s.mie_coefficient, s.mie_anisotropy),
+        (s.ozone, s.multiple_scattering, s.ground_albedo, LUT_ALTITUDES, LUT_WIDTH, LUT_HEIGHT)));
+    let key = crate::world::key(&["sky tables", TABLE_FILE_VERSION, &parameters]);
+    std::path::Path::new(dir).join(format!("sky-{}.bin", key)).to_string_lossy().into_owned()
+}
+
+/// A sky's tables as kept in a file.
+struct TableFile {
+    sun: Vec<Depths>,
+    psi: Option<Vec<Vector3<f64>>>,
+    lut: Option<SkyViewLUT>,
+}
+
+impl TableFile {
+    fn encode(&self) -> Vec<u8> {
+        let mut out = TABLE_FILE_MAGIC.to_vec();
+        let mut put = |v: f64| out.extend_from_slice(&v.to_le_bytes());
+        put(self.sun.len() as f64);
+        for d in &self.sun { put(d.r); put(d.m); put(d.o); }
+        match &self.psi {
+            Some(psi) => { put(psi.len() as f64); for v in psi { put(v.x); put(v.y); put(v.z); } },
+            None => put(-1.),
+        }
+        match &self.lut {
+            Some(lut) => {
+                put(lut.width as f64); put(lut.height as f64); put(lut.slices.len() as f64);
+                for slice in &lut.slices {
+                    put(slice.len() as f64);
+                    for (a, b, c) in slice { for v in [a, b, c] { put(v.x); put(v.y); put(v.z); } }
+                }
+            },
+            None => put(-1.),
+        }
+        out
+    }
+
+    fn decode(bytes: &[u8]) -> Option<TableFile> {
+        let body = bytes.strip_prefix(TABLE_FILE_MAGIC.as_slice())?;
+        let mut words = body.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap()));
+        let mut next = || words.next();
+        let count = |next: &mut dyn FnMut() -> Option<f64>| -> Option<Option<usize>> {
+            let n = next()?;
+            Some((n >= 0.).then_some(n as usize))
+        };
+        let vector = |next: &mut dyn FnMut() -> Option<f64>| -> Option<Vector3<f64>> { Some(Vector3::new(next()?, next()?, next()?)) };
+        let sun = (0 .. count(&mut next)??).map(|_| Some(Depths { r: next()?, m: next()?, o: next()? })).collect::<Option<Vec<_>>>()?;
+        let psi = match count(&mut next)? {
+            Some(n) => Some((0 .. n).map(|_| vector(&mut next)).collect::<Option<Vec<_>>>()?),
+            None => None,
+        };
+        let lut = match count(&mut next)? {
+            Some(width) => {
+                let height = count(&mut next)??;
+                let slices = (0 .. count(&mut next)??).map(|_| {
+                    (0 .. count(&mut next)??).map(|_| Some((vector(&mut next)?, vector(&mut next)?, vector(&mut next)?))).collect::<Option<Vec<_>>>()
+                }).collect::<Option<Vec<_>>>()?;
+                Some(SkyViewLUT { width, height, slices })
+            },
+            None => None,
+        };
+        // Nothing left over: a file cut short or run on isn't this.
+        next().is_none().then_some(TableFile { sun, psi, lut })
+    }
+
+    /// The tables in `path` (through `assets`, so a browser can be given them), if they are
+    /// there and whole.
+    fn read(path: &str) -> Option<TableFile> {
+        TableFile::decode(&crate::assets::read(path).ok()?)
+    }
+
+    /// Keep the tables in `path`, unless they are there already; written under another name
+    /// first, so the file is never there in part. Where nothing can be written (a browser),
+    /// nothing is.
+    fn write(&self, path: &str) {
+        let path = std::path::Path::new(path);
+        if path.exists() || crate::assets::is_provided(&path.to_string_lossy()) { return; }
+        if let Some(dir) = path.parent() && std::fs::create_dir_all(dir).is_err() { return; }
+        let partial = path.with_extension("bin.part");
+        if std::fs::write(&partial, self.encode()).is_ok() && std::fs::rename(&partial, path).is_err() {
+            let _ = std::fs::remove_file(&partial);
+        }
+    }
 }
 
 /// The sun and multiple scattering tables most recently built, with the description of the sky
@@ -1439,6 +1561,41 @@ mod tests {
 
     fn single_scattering_sky_at(sun: &str) -> SkyMaterial {
         SkyMaterial { multiple_scattering: false, ..sky_at(sun) }
+    }
+
+    /// A scene's sky keeps its tables where `cached_files` says, whole, and a sky with them
+    /// to hand reads them rather than building its own.
+    #[test]
+    fn test_sky_tables_are_kept_and_read() {
+        let base = std::env::temp_dir().join(format!("sky-tables-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (first, second) = (base.join("a").to_string_lossy().into_owned(), base.join("b").to_string_lossy().into_owned());
+        let doc = |dir: &str| serde_json::json!({
+            "camera": { "location": [0, 2, 0], "lookat": [0, 2, 1], "up": [0, 1, 0], "angle": 0.8 }, "sun": { "intensity": 3 },
+            "objects": [{ "type": "skysphere", "sun_direction": [0.3, 0.4, -0.5], "cache": dir }]
+        });
+        let files = SceneFile::cached_files(doc(&first));
+        assert_eq!(files.len(), 1);
+        assert!(!std::path::Path::new(&files[0]).exists());
+        let _scene = SceneFile::from_value_overridden(doc(&first), &crate::scenefile::Overrides { width: Some(4), height: Some(3), seed: None });
+        let bytes = std::fs::read(&files[0]).expect("the sky's tables weren't kept");
+        let kept = TableFile::decode(&bytes).expect("the file doesn't read back");
+        assert_eq!(kept.encode(), bytes);
+        assert!(kept.lut.is_some() && !kept.sun.is_empty() && kept.psi.is_some());
+        // The same sky elsewhere, its tables changed where it will find them: it reads them.
+        let mut changed = kept;
+        for v in changed.psi.as_mut().unwrap() { *v *= 2.; }
+        let mut o = doc(&second)["objects"][0].clone();
+        o["brightness"] = serde_json::json!(sky_brightness_for_sun(3.));
+        let path = table_file(&second, &parse_sky_params(&o));
+        assert_eq!(path, SceneFile::cached_files(doc(&second))[0]);
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(&path, changed.encode()).unwrap();
+        let sky = parse_sky_material(&o);
+        assert_eq!(sky.ms_table.get().unwrap().psi, changed.psi.unwrap());
+        // A file cut short is no table.
+        assert!(TableFile::decode(&bytes[.. bytes.len() - 8]).is_none());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

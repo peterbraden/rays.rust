@@ -220,6 +220,13 @@ pub fn world_manifests(json: &str) -> Vec<String> {
     serde_json::from_str(json).map(rays::scenefile::SceneFile::world_manifests).unwrap_or_default()
 }
 
+/// Files of tables a scene keeps in a `cache` (its skies'), made yet or not, for the page to
+/// fetch and `provide` before building the scene, as `world_manifests`'s worlds.
+#[wasm_bindgen]
+pub fn cached_files(json: &str) -> Vec<String> {
+    serde_json::from_str(json).map(rays::scenefile::SceneFile::cached_files).unwrap_or_default()
+}
+
 /// Encode summed linear samples (three per pixel) as RGBA bytes for display. `output` is the
 /// scene file's `output` object as JSON, or `null`.
 #[wasm_bindgen]

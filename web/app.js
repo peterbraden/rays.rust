@@ -149,22 +149,26 @@ function assetPaths(value, found = new Set()) {
     return found;
 }
 
-// The files of the scene's landscapes' worlds, as kept in their `cache` directories by the
-// command line: each world's manifest names a file for each of its stages (src/world.rs), and
-// given those the workers read the world rather than simulate it, which takes minutes. A
-// world that hasn't been built (no manifest) is simulated in the browser; `worldNote` says so.
+// The files the scene keeps in `cache` directories, as the command line keeps them: its
+// landscapes' worlds (each world's manifest names a file for each of its stages,
+// src/world.rs), given which the workers read a world rather than simulate it, which takes
+// minutes; and its skies' tables (src/skysphere.rs), seconds to build. A world that hasn't
+// been built (no manifest) is simulated in the browser, and `worldNote` says so; tables not
+// yet made are built.
 let worldNote = '';
 async function worldFiles(json) {
-    let manifests = [];
+    let manifests = [], tables = [];
     try {
         manifests = encoder.worldManifests(json);
+        tables = encoder.cachedFiles(json);
     } catch (e) {
         // The workers' build will say what is wrong with the scene; this instance is spent.
         encoder = null;
         instantiate().then(r => { encoder = r; });
         return [];
     }
-    const files = [];
+    // Tables are fetched with the rest; one not there yet is left out.
+    const files = (await Promise.all(tables.map(p => fetchAsset(p).then(() => p, () => null)))).filter(Boolean);
     const missing = [];
     for (const path of manifests) {
         let manifest;

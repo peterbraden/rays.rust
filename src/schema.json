@@ -2948,6 +2948,12 @@
           "doc": "Look the sky up in a precomputed table; false integrates every ray exactly."
         },
         {
+          "name": "cache",
+          "kind": "path",
+          "default": null,
+          "doc": "Directory where the sky's tables are kept (sky-<key>.bin, about 19 MB) and reused. By default the scene's landscape's cache, if it has one."
+        },
+        {
           "name": "moonlight",
           "kind": "json",
           "default": null,

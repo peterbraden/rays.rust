@@ -53,6 +53,11 @@ export async function instantiate() {
             return guard(() => glue.world_manifests(json));
         },
 
+        /** Files of tables the scene keeps in a `cache`, such as its sky's (see web/src/lib.rs). */
+        cachedFiles(json) {
+            return guard(() => glue.cached_files(json));
+        },
+
         /** Give the contents of a file that scenes name by `path`. */
         addAsset(path, bytes) {
             guard(() => glue.provide(path, bytes));

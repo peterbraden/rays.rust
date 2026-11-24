@@ -71,7 +71,9 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
         (Some(env), LightSampling::MIS { bsdf_pdf }) if reaches_sky => color * power_heuristic(bsdf_pdf, env.pdf(&r.rd.normalize())),
         _ => color,
     };
-    let color = Color { rgb: (color.rgb - shadowed.component_mul(&mis.rgb)).map(|v| v.max(0.)) };
+    // (Not clamped at nothing: a sample can be less, where its shadow sample stands for more
+    // light than this path found, and the mean is only right if it stays so.)
+    let color = Color { rgb: color.rgb - shadowed.component_mul(&mis.rgb) };
     match &s.sun {
         Some(sun) if reaches_sky => {
             let d = r.rd.normalize();
@@ -210,8 +212,15 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
     let bias = scene.render.shadow_bias.max(intersection.spawn_offset());
     biased_intersection.point = intersection.point + (intersection.facing_normal(r) * bias);
 
+    // The rays leaving this vertex leave its surface (`shapes::leaving`): its point, as exact
+    // as the hit's error, and as far off as this bias and a material's own offsets put them.
+    let vertex = crate::shapes::leaving::Leaving {
+        point: intersection.point,
+        tolerance: intersection.spawn_offset(),
+        reach: 10. * bias + 1e-6 * (1. + intersection.point.amax()),
+    };
     let mut cast = 1;
-    let (c, o) = trace_sample(r, &biased_intersection, depth, scene, prior);
+    let (c, o) = crate::shapes::leaving::with(Some(vertex), || trace_sample(r, &biased_intersection, depth, scene, prior));
     cast += c;
     (cast, o) 
 }

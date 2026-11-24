@@ -75,6 +75,16 @@ pub fn begin_path() {
     chromatic::begin_path();
 }
 
+/// Take up a path kept elsewhere (the wavefront's, whose vertex the host shades:
+/// `wavefront::integrator::host_bounce`): it has scattered `scatterings` times in media, which
+/// left their densities scaled by `scale` for its segments, and has or hasn't `left` a vertex
+/// that isn't a mirror's or glass's.
+pub fn resume_path(scatterings: u32, scale: f64, left: bool) {
+    begin_path();
+    PATH.with(|p| p.set((scatterings, scale)));
+    VERTICES.with(|v| v.set(left as u32));
+}
+
 /// The path is at a vertex, about to scatter: its shadow rays and its continuation leave it.
 /// A specular vertex is then taken back (`specular_vertex`), so that what the camera sees in a
 /// mirror or through glass is seen as directly.
@@ -308,7 +318,7 @@ pub struct Scaled {
 }
 
 impl DensityField for Scaled {
-    fn export(&self) -> Option<FieldExport> { self.field.export().map(|f| f.scaled(self.by)) }
+    fn export(&self) -> Option<FieldExport> { self.field.export().and_then(|f| f.scaled(self.by)) }
     fn density(&self, p: &Vector3<f64>) -> f64 { self.by * self.field.density(p) }
     fn majorant(&self) -> f64 { self.by * self.field.majorant() }
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
@@ -546,19 +556,52 @@ pub enum FieldExport {
     /// A Nubis cloud layer's record (`NubisCloudLayer::export`), flat, or curved round a planet
     /// of `radius` (`planet::PlanetMapping`) where that isn't 0.
     Nubis { record: Vec<f32>, radius: f64 },
+    /// A layer of altocumulus's record (`BenardAltocumulus::export`), flat or round a planet
+    /// likewise.
+    Benard { record: Vec<f32>, radius: f64 },
+    /// A layer of cirrus's record (`HoganKewCirrus::export`), likewise.
+    Cirrus { record: Vec<f32>, radius: f64 },
+    /// Precipitation's record (`Precipitation::export`), likewise.
+    Rain { record: Vec<f32>, radius: f64 },
+    /// Mammatus's record (`Mammatus::export`), likewise.
+    Mammatus { record: Vec<f32>, radius: f64 },
+    /// A cumulonimbus's record (`Cumulonimbus::export`), likewise.
+    Cumulonimbus { record: Vec<f32>, radius: f64 },
 }
 
 impl FieldExport {
-    /// With every density multiplied by `by`.
-    fn scaled(self, by: f64) -> FieldExport {
-        match self {
+    /// With every density multiplied by `by`, where the record has a number that does that.
+    fn scaled(self, by: f64) -> Option<FieldExport> {
+        Some(match self {
             FieldExport::Constant(d) => FieldExport::Constant(d * by),
             FieldExport::Nubis { mut record, radius } => {
                 // Its densest extinction, which the rest is a fraction of.
                 record[7] *= by as f32;
                 FieldExport::Nubis { record, radius }
             },
-        }
+            FieldExport::Benard { mut record, radius } => {
+                record[2] *= by as f32;
+                FieldExport::Benard { record, radius }
+            },
+            FieldExport::Cirrus { mut record, radius } => {
+                record[2] *= by as f32;
+                FieldExport::Cirrus { record, radius }
+            },
+            // (Its extinction isn't a multiple of anything in its record.)
+            FieldExport::Rain { .. } => return None,
+            FieldExport::Mammatus { mut record, radius } => {
+                // The anvil's density and the pouches'.
+                record[8] *= by as f32;
+                record[9] *= by as f32;
+                FieldExport::Mammatus { record, radius }
+            },
+            FieldExport::Cumulonimbus { mut record, radius } => {
+                // The liquid cloud's density and the ice's.
+                record[10] *= by as f32;
+                record[11] *= by as f32;
+                FieldExport::Cumulonimbus { record, radius }
+            },
+        })
     }
 }
 
@@ -583,12 +626,16 @@ pub struct FlatMedium {
     pub reduced: Option<(u32, f64)>,
     /// The mean cosine of the scattering angle, whole and truncated.
     pub mean_cosine: (f64, f64),
+    /// The Oz approximation of the sunlight scattered many times, if the medium takes it.
+    pub oz: Option<Oz>,
+    /// Whether its vertices send sun probes (`VolumeMaterial::sun_probes`).
+    pub sun_probes: bool,
 }
 
 impl Volume {
     /// The medium as data, scattering as `material` says; or why a kernel couldn't render it:
     /// they have the plain path tracing of a grey medium filling its box, with delta-M
-    /// truncation and the similarity relations, lit by the sun, the lights and the sky. Sun and glitter probes they leave
+    /// truncation, the similarity relations and the Oz approximation, lit by the sun, the lights and the sky, with sun probes (`pathtrace::send_probe`). Glitter probes they leave
     /// out: those change a render's noise, not its mean.
     pub fn flat(&self, material: &VolumeMaterial) -> Result<FlatMedium, String> {
         let a = &material.approximation;
@@ -599,7 +646,6 @@ impl Volume {
             (material.halos.is_some(), "halos"),
             (material.rainbow.is_some(), "rainbows"),
             (material.emission.is_some(), "it emits"),
-            (a.oz.is_some(), "the Oz approximation"),
             (a.diffusion.is_some(), "the diffusion approximation"),
         ];
         if let Some((_, why)) = unported.iter().find(|(is, _)| *is) {
@@ -611,6 +657,8 @@ impl Volume {
             phase: material.phase, albedo: material.albedo.as_reflectance(), peak: material.forward_peak(1),
             reduced: a.similarity_after.map(|n| (n, material.density_scale(n.max(1)))),
             mean_cosine: (material.mean_cosine(0), material.mean_cosine(1)),
+            oz: a.oz,
+            sun_probes: material.sun_probes,
         })
     }
 }
@@ -1249,6 +1297,11 @@ impl VolumeMaterial {
         let found = s.objects.nearest_intersection(&probe, f64::INFINITY, 0.);
         let mis = chromatic::side_weight(found.as_ref().map(|h| h.dist));
         let Some(hit) = found else { return Color::black() };
+        // Off the surface, as a vertex there would be shaded (`trace::trace_intersection`): its
+        // shadow ray to the sun starts from the point, and from the surface itself a low sun's
+        // meets the sea it left.
+        let bias = s.render.shadow_bias.max(hit.spawn_offset());
+        let hit = Intersection { point: hit.point + hit.facing_normal(&probe) * bias, ..hit };
         let Some(glint) = hit.object.medium.material_at(hit.point).sun_glint(&probe, &hit, s) else { return Color::black() };
         let air = match &s.atmosphere {
             Some(sky) if hit.dist > crate::trace::AERIAL_PERSPECTIVE_FROM => Color { rgb: sky.segment(point, &d, hit.dist).0 },
@@ -1541,6 +1594,41 @@ mod tests {
         // A 0-or-1 estimate of the same mean has variance T(1 - T).
         assert!(var < 0.5 * expected * (1. - expected), "variance {} vs {}", var, expected * (1. - expected));
         assert!(ratio.iter().all(|t| (0. ..=1.).contains(t)));
+    }
+
+    /// Bounds that aren't bounds (a majorant grid sampled from the density can miss a wisp):
+    /// over a constant medium bounded at a third of its density, weighted delta tracking's
+    /// estimates (its weight where the light gets through, and where it collides before a
+    /// distance) and ratio tracking's transmittance still average to exp(-σL).
+    #[test]
+    fn test_walks_are_unbiased_where_a_bound_is_exceeded() {
+        struct Under(f64);
+        impl shared::media::Medium<f64> for Under {
+            fn density(&self, _x: f64, _y: f64, _z: f64) -> f64 { self.0 }
+            fn bound(&self) -> f64 { self.0 }
+            fn majorant_from(&self, _x: f64, _y: f64, _z: f64, _dx: f64, _dy: f64, _dz: f64) -> (f64, f64) { (self.0 / 3., f64::INFINITY) }
+        }
+        struct R(crate::geometry::Pcg32);
+        impl shared::Random<f64> for R { fn next(&mut self) -> f64 { self.0.next_f64() } }
+        let (sigma, length, half) = (0.8, 2., 1.);
+        let medium = Under(sigma);
+        let mut rng = R(crate::geometry::Pcg32::new(3, 1));
+        let n = 400_000;
+        let (mut escaped, mut before_half, mut through) = (0., 0., 0.);
+        for _ in 0..n {
+            let mut w = 1.;
+            match shared::media::delta_track_weighted(&medium, (0., 0., 0.), (1., 0., 0.), 0., length, 1., &mut rng, &mut w, &mut true) {
+                None => escaped += w,
+                Some(t) if t < half => before_half += w,
+                Some(_) => {},
+            }
+            through += shared::media::ratio_track(&medium, (0., 0., 0.), (1., 0., 0.), 0., length, 0., 1., 1., &mut rng).unwrap_or(0.);
+        }
+        let (escaped, before_half, through) = (escaped / n as f64, before_half / n as f64, through / n as f64);
+        let (t_all, t_half) = ((-sigma * length).exp(), (-sigma * half).exp());
+        assert!((escaped - t_all).abs() < 0.02, "escaped {} vs {}", escaped, t_all);
+        assert!((before_half - (1. - t_half)).abs() < 0.02, "collided before {} {} vs {}", half, before_half, 1. - t_half);
+        assert!((through - t_all).abs() < 0.01, "ratio tracking {} vs {}", through, t_all);
     }
 
     #[test]

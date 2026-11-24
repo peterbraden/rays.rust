@@ -1084,7 +1084,12 @@ pub struct Grid2 {
 /// over which the ray is above the cell, and returns true to stop. A 2D version of John
 /// Amanatides and Andrew Woo, "A Fast Voxel Traversal Algorithm for Ray Tracing",
 /// Eurographics 1987.
-pub fn walk_grid(grid: &Grid2, y_lo: f64, y_hi: f64, r: &Ray, mut visit: impl FnMut(usize, usize, f64, f64) -> bool) {
+pub fn walk_grid(grid: &Grid2, y_lo: f64, y_hi: f64, r: &Ray, visit: impl FnMut(usize, usize, f64, f64) -> bool) {
+    walk_grid_within(grid, y_lo, y_hi, r, 0., f64::INFINITY, visit)
+}
+
+/// `walk_grid` over the stretch of the ray from `from` to `to` (multiples of its direction).
+pub fn walk_grid_within(grid: &Grid2, y_lo: f64, y_hi: f64, r: &Ray, from: f64, to: f64, mut visit: impl FnMut(usize, usize, f64, f64) -> bool) {
     let max = (grid.min.0 + grid.nx as f64 * grid.cell, grid.min.1 + grid.nz as f64 * grid.cell);
     let bounds = BBox::new(Vector3::new(grid.min.0, y_lo, grid.min.1), Vector3::new(max.0, y_hi, max.1));
     let invrd = Vector3::new(1. / r.rd.x, 1. / r.rd.y, 1. / r.rd.z);
@@ -1092,7 +1097,10 @@ pub fn walk_grid(grid: &Grid2, y_lo: f64, y_hi: f64, r: &Ray, mut visit: impl Fn
         Some(x) => x,
         None => return,
     };
-    let mut t = tmin.max(0.);
+    let tmax = tmax.min(to);
+    // (A stretch that ends before it starts visits one cell with nothing in it, as a box
+    // behind the ray always has: the full walk is the same as before the stretch was added.)
+    let mut t = tmin.max(0.).max(from);
     let p = r.ro + r.rd * t;
     let cell_of = |v: f64, lo: f64, n: usize| (((v - lo) / grid.cell).floor().max(0.) as usize).min(n - 1);
     let (mut ix, mut iz) = (cell_of(p.x, grid.min.0, grid.nx), cell_of(p.z, grid.min.1, grid.nz));

@@ -1782,10 +1782,61 @@ UI, file IO and rayon's threads would follow.
    the failing scenes less one ingredient at a time
    (`gpu::tests::measure_device_against_shader`); a small scene of a floor, a ball and a
    sphere light differed there by 0.1%, only with the sphere light.
-   Next: Oz (a sum of sun transmittances at scaled densities, at a path's first vertex in a
-   medium), then the other cloud kinds, moved one by one, and the global mapping. The
-   ocean's shape and water, ported earlier, should move to `shared` too, so that their
-   second copies go.
+   Since (late November 2026), surveyed again first, the 79 demo scenes and the two in
+   `demo/`, each tried at one sample: 9 reached the GPU, and none with a sea. The rough seas
+   merged since (choppy crests and foam, both on by default) had taken every ocean scene off
+   it: the kernel marched a plain height field, and its water had no foam. What was named as
+   in the way of the rest (a scene may have several): the sea 13 (6 of them landscapes), a
+   cloud's density 25 (altocumulus 4; the weather's fields 5; the others one or two each),
+   terrain, grass and forests 12, crepuscular rays 10, diffusion 7, rainbows, halos and
+   diffraction 5, the rings 4; and 8 were too slow to say.
+   Done, in that order of what was cheapest for the scenes it moved:
+   - Oz in the kernels' media (`MEDIUM_OZ`): at a path's first scattering the sun is the
+     octaves' sum, one walk of `media_transmittance` each at the thinned density, and later
+     vertices leave the sun out. A tile test against the path tracer. By itself it moves no
+     demo scene: each of the seven that use it wants something more (crepuscular rays,
+     terrain, another cloud).
+   - Altocumulus (`benard_altocumulus`), moved to `shared::altocumulus` and not ported: the
+     renderer's density is the same bits at 900,000 points (old function against new, with
+     waves and turrets; renders themselves differ run to run, so a checksum of a picture
+     can't say), the shader's f32 within 4e-5 of it and the device within 5e-6 of that. A
+     third kind of medium (`MEDIUM_BENARD`), curved round the planet by the code the Nubis
+     layers use (`KernelLayer`).
+   - The sea's choppy crests in its kernel (`wave_source`: the map inverted by three rounds
+     of fixed-point iteration, then the slopes through its Jacobian), from the displacement's
+     tiles (five numbers a texel). Ray by ray against the renderer, 4,000 rays, a plane and
+     the planet: none disagree on hitting, distances to 3e-7, normals to 3e-4.
+   - Foam in the kernel's water (`sea_foam`): the tiles of fresh and residual foam at the
+     point's source, broken up by `shared::sea` (the lace and the torn crests, moved there
+     with the same bits at 600,000 points), a diffuse surface where it covers the point,
+     bubbles paling the water where it doesn't. Tile tests against the CPU's integrator with
+     foam over a third of the sea.
+   Now on the GPU again: ocean-1, ocean-2, ocean-boat, moon-glade, nubis-clouds and
+   stratocumulus; and new, altocumulus-castellanus, altocumulus-undulatus, benard-altocumulus
+   and cirrocumulus: 19 of the 81. In linear light at 512 spp (`measure_clouds`, 32 x 18, bands
+   of rows): benard-altocumulus within 0.8% of the path tracer in every band; nubis-clouds
+   within 0.8% but for the sea's horizon band, 4.5% bright as before (still to be found).
+   ocean-1 at 160 x 100, 32 spp: FLIP 0.028 against the path tracer at 64.
+   Known:
+   - Noise, not mean: with no sun probes a sunlit altocumulus is far noisier at equal
+     samples (at 32 spp the comparison's exposure fit read 0.89, a least-squares fit pulled
+     down by fireflies; at 512, 0.993, the path tracer's own). Probes in the kernels are the
+     remedy.
+   - The shader has grown: the WGSL from 2.4 MB to 4.4 MB (altocumulus's five noise calls and
+     the choppy map, each inlined at every call of a density or of the sea). To measure on
+     Metal and in a browser, where the compile was already seconds; if it costs, the
+     altocumulus's noise calls fold into a loop, and the march needs only one copy of the
+     height.
+   - Far from the origin f32 resolves the foam's noise coarsely (its filaments are 0.6 m
+     across: blocky beyond some tens of kilometres, where a pixel holds many).
+   - The landscapes (landscape, landscape-orbit, terrain-alpine, -coast, -volcanic,
+     moonlit-alpine) now flatten and are refused only for size: 130 to 386 MB of primitives
+     against lavapipe's 128 MB buffer. A real device may take them as they are (untried);
+     otherwise the primitives want more than one buffer, or 16-bit normals.
+   Next: crepuscular rays (crepuscular-rays is ready but for them), then the other cloud
+   kinds, moved one by one (cumulus, mammatus, lenticular and cirrus a scene each; the
+   weather's fields five), sun probes, and the global mapping. The ocean's shape and water,
+   ported earlier, should move to `shared` too, so that their second copies go.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU
@@ -2131,3 +2182,474 @@ chose is then an ordinary scene file, to be tweaked (the scene builder is the ed
 1 first (a world with a state, and progress), as 3, 4 and 5 read it. Then 3 and 4, which make
 the one-seed picture. 2 alongside, as it is the terrain's own work. 5 after 1, when there is a
 world to ship.
+
+## 15. One renderer: the wavefront, on whichever device there is
+
+The direction (November 2026): one integrator, the wavefront, whose kernels run on the GPU
+when there is one and on the CPU when there isn't; code written and tested only on the CPU is
+ready for the GPU; and less code to keep. Old scenes go on rendering as they do.
+
+Where we are. Three copies of light transport: `trace` (recursive, f64, `dyn` materials and
+shapes, thread-local path state; renders everything, 1,231 lines and all of `material/`), the
+CPU wavefront integrator's own stages (`wavefront::integrator`, f64, 878 lines; no media),
+and the kernels (`shaders/pathtrace`, f32, 3,700 lines; the GPU runs them, and the tests run
+them on the CPU through `radiance`). Section 12's step 5 was to remove the second; this
+section is that, taken to its end.
+
+### The shape of it
+
+- One driver of queues (the scheduler's), two backends for a kernel: wgpu, or the same crate
+  compiled natively and run over the queue with rayon. The kernels are already both.
+- What the kernels have no code for goes through host queues, by area, as the GPU's
+  materials do today (`HOST_QUEUE`, `gpu::host`): a material shaded by the scene's own
+  `MaterialModel::scatter`; and, to add, a shape intersected by its own code, and a medium
+  walked by its own. On the CPU backend a host queue costs nothing extra (the paths are in
+  memory); on the GPU it is a round trip, which is what makes porting an area worth doing.
+- `trace` then has no loop of its own: what remains of it is what the host queues call. The
+  CPU wavefront integrator's stages go first (they duplicate the kernels and nothing else
+  calls them); `trace` goes when every demo scene renders through the wavefront at parity.
+
+### Steps, each ending with pictures compared
+
+1. A CPU backend for the kernels: `render_pass` calls `pathtrace::intersect`, `shade` and the
+   sky's functions over its queues in place of its own stages, the host queue as now. Gate:
+   the flattenable scenes against `trace` by FLIP, and against the GPU sample for sample
+   (the same f32 code and random numbers: differences are the device's sin and exp, last
+   bits). Then delete the stages. Known cost: f32 on the CPU, which is step 2's to make
+   harmless; where a scene shows it first, that scene is step 2's test.
+2. The local frame (below).
+3. Host queues for shapes and for media on both backends, so no scene is refused: the
+   refusals in `FlatScene::build` and `Buffers::build` become classifications. The hard
+   part, known: host code reads the path's state from thread-locals that `trace` sets
+   (`volume`'s scatterings and density scale, `NEXT_SUN_WEIGHT`, the sample's wavelengths
+   and time: 12 `thread_local!`s). Each becomes a field of the path that the host stage
+   sets before it calls and reads back after; spectral rendering and motion blur need the
+   path to carry wavelengths and a time, which the kernels then honour or hand to the host.
+4. Adaptive sampling, the time map and resumable accumulation on the wavefront's passes
+   (the GPU's already has the first and last).
+5. `trace`'s loop removed; `--wavefront` and `"integrator"` become no-ops kept for old scene
+   files. From here an area moves from host to kernel by use, as now.
+
+Done, step 1 (November 2026). `kernels` holds the scene as the kernels read it, apart from
+the device; `wavefront::integrator` runs `pathtrace::intersect_surface`, `intersect_media`,
+`shade` and `sky_light` over its batches, and its own stages are deleted with what in
+`flat` only they used (the f64 traversal, the light choice): 880 lines of second copy for
+150 of rounds. Part of step 3 came with it, since the stages had rendered shapes their own
+code intersects and that was not to be lost: `PRIM_HOST`, a shape the host intersects between
+the kernels' two halves of the intersection and answers shadow rays for (`HostShapes`, a
+call from within a kernel: so the CPU's only, and the GPU leaves such scenes to it), its
+vertices the host's. Media render on the CPU for the first time outside `trace`.
+Against `trace` at 160 x 100, 32 spp against 64 (FLIP): demo 0.024, ocean-1 0.028,
+block-terrain 0.015 (a host shape), benard-altocumulus 0.065 (as the GPU: noise, no sun
+probes), saturn 0.0025 (the path tracer's own at 32 spp). The tests against the path tracer
+(hard cases, host materials, host shapes, the furnace's mean) pass unchanged but for one
+bound on a pixel's noise.
+- Found: saturn was first 0.031, all of it in the rings. A host vertex's next ray started
+  where f64 put it, a hair off the surface; narrowed to f32 at 1.5 million km a point moves
+  64 m, so half the rays through the rings started on the wrong side of them. The host's
+  rays now start 4e-6 of their distance from the origin further off, on the side they leave
+  by. This is the precision problem of step 2 met on the CPU, as hoped, and its kind: not
+  where things are seen (directions are fine) but where a ray starts again.
+- Given up until the kernels have them: Sobol' points for the kernels' vertices (a pixel of
+  the furnace at 64 spp strays 19% where it strayed under 15%), and the light BVH
+  (lamp-field's 900 lamps are chosen by power on the CPU too now).
+- `trace` is still the default, and what renders a scene the kernels refuse.
+Done, of step 4: the CPU's wavefront takes its samples in the scheduler's blocks
+(`Kernels::block`, `scheduler::plan`), as the GPU's, so it samples adaptively and resumes; a
+block's sums are its passes' to the bit. Testing that found why renders didn't repeat run
+to run: the sky's tables are built from the camera's position, read off a camera ray, whose
+origin is a random point of the lens. Seeded (`environment::viewpoint`), a scene set up
+twice is laid out the same to the bit, and a resumed render is the uninterrupted one.
+Then the CPU's two render loops became one: `rendercontext::render`, the path tracer's
+driver (regions, passes lowest layer first, adaptive sampling, saved states, progress, the
+time map), renders each chunk with the kernels where the scene is laid out for them
+(`Kernels::samples`) and a path at a time by the scene's own code where it isn't
+(`render_pixel`, `trace`). So step 4 is done on the CPU (a time map under the kernels
+shares a batch's time among its paths by their rays), and of step 5, the loop: `trace` is
+now a way to render a chunk, not a renderer. demo.json, 320 x 200, 64 spp, four cores: the
+recursive tracer 5.8 s, the kernels 2.9 s; two runs of the kernels the same file.
+
+Done, step 2's frame (November 2026). The kernels' frame is about the camera
+(`kernels::origin`: the viewpoint to the nearest whole number a float holds; in
+`pathtrace::Params::origin`), and the host lays the scene out in it in f64: primitives,
+planes, the tree's boxes, lights, media's boxes, camera rays, the air's centres with their
+|c|² - r² (which `excess` already took), and the sea's (its planet's centre and excess in
+its record, where it had assumed the world's origin). Host vertices and host shapes go to
+and from the world's frame at the queue. What is tabulated by where it is in the world adds
+the origin back in f32 (the waves' tiles, the foam's noise, the clouds' densities): no
+worse than before, and no better; the phase from the host, as planned, is still to do, and
+is what the far sea's foam needs.
+- The test the frame is for: a scene of primitives, a plane, lights, an emitter, plastic
+  and glass renders the same 7,000 km from the world's origin as at it, every pixel within
+  a thousandth (`test_a_scene_far_from_the_origin_is_the_scene_at_it`); laid out about the
+  world's origin its triangles are on a half-metre grid there.
+- What it showed of the host's code, which computes in the world's frame in f64: a torus
+  (its quartic) and rough glass (ray offsets that grow with the distance from the world's
+  origin) each changed a tenth of that picture's pixels out there. `trace` has the same
+  flaws; nothing renders there today. Each goes when its shape or material is a kernel's.
+- The sea ray by ray in the frame (camera off the origin): as before, none of 4,000 rays
+  disagree. demo, ocean-1, block-terrain, benard-altocumulus, saturn: FLIP unchanged.
+- Not done: a far body in a frame of its own (the two-float subtraction): Saturn and the
+  Moon are the host's shapes, in f64, and what f32 cost there was where rays start again
+  (above). The planet as a sphere primitive still rounds half a metre at its centre's
+  distance; `excess`'s form would mend it, as for the sea.
+
+Where that leaves the scenes (surveyed through `--wavefront` on the CPU, the 81, each at one
+sample with five minutes to build): 40 render through the kernels (9 reached them before
+this section, on the GPU alone), 31 are refused and rendered by `trace` as before, and 10
+took longer than the survey allowed. Of the 31, 30 are media the kernels have no code for
+(a cloud's density, diffusion, rainbows, halos; 9 of them with crepuscular rays too), and
+the other is the stress test (spectral, motion blur).
+Not done, and why:
+- (Done since: the default. A scene renders with the first that can of a hardware GPU (a
+  build with `gpu`), the kernels on the CPU and `trace`, which says why it was needed;
+  `scene::Integrator`, `"integrator": "auto"`. `--gpu` takes a software adapter too,
+  `--wavefront` keeps to the CPU, `--path-tracer` is `trace`. A saved state is keyed by
+  the integrator that rendered it.) What the kernels still lack that a picture shows, now
+  that they are what most scenes get: the scene's `sampler` choice, sun and glitter probes
+  (sunlit clouds are noisier: benard-altocumulus FLIP 0.065 against 0.037 at 32 spp) and
+  the light BVH.
+- (Done since: Sobol' points. `pathtrace::decide`: a vertex's decisions, the next direction,
+  an area light's point, the sky's direction and the sun's disc, each take a group of four
+  Owen-scrambled Sobol' dimensions seeded by pixel, depth and decision (Burley's padding,
+  stateless: nothing to carry but the sample's number, in `state.w`), for a path's first six
+  vertices. Against a converged reference at 64 spp, 200 x 125, mean FLIP: demo 0.0189 ->
+  0.0158 (the path tracer with Sobol' points 0.0157, with independent numbers 0.0189),
+  teapot-sky 0.0242 -> 0.0162 (0.0159, 0.0242): the kernels' noise was the path tracer's
+  without its sampler, and is now the path tracer's. For about 4% of teapot-sky's time.
+  That measurement also found the kernels' checkerboards laid out about the camera.)
+- (Done since: cirrus. Hogan and Kew's density moved to `shared::cirrus`, the same bits in
+  the renderer at 120,000 points over three genera before the old copy went; the generating
+  field's two realisations mixed for the layer's time into one table of 1024 x 1024 floats.
+  hogan-kew-cirrus and sunset render through the kernels. Global cirrus (orbit, the
+  weather's) has a density of its own, a 3D field sampled on the sphere, and is still the
+  path tracer's; so are halos and diffraction, which ask each point's crystal size.)
+- (Done since: media beside the host's vertices. A material or shape of the scene's own
+  code traces its shadow rays through the scene's media by that code, which keeps a path's
+  state in thread-locals; the host now sets it from the path's flags (`volume::resume_path`).
+  desert-noon, desert-butte, desert-mesas, desert-overlook and forest-sunlit, Nubis clouds
+  over terrain, render through the kernels.)
+- (Done since: precipitation, in `shared::rain`, the same bits in the renderer for rain,
+  snow melting to rain, and hail. No scene is the kernels' for it alone: each that rains
+  also has crepuscular rays, a rainbow, the diffusion approximation or a cumulonimbus.)
+- (Done since: crepuscular rays, at the camera's vertex in `shade`: every piece of the
+  air's single scattering was in the bounce kernel already, for the haze's transmittance and
+  the sun's. crepuscular-rays and snow-showers render through the kernels (crepuscular-rays
+  at 16 spp against a 64 spp reference: FLIP 0.0547, the path tracer's own 0.0492). Comparing
+  them found `trace` clamping each sample at nothing after taking the shadowed air from it,
+  which left shadowed tiles 5% too bright; the clamp is gone. The cost: `occluded` and
+  `media_transmittance` are called from a second place, and rust-gpu inlines both, so the
+  WGSL grew from 4.7 to 6.4 MB. One call site again would mean the shadow sample waiting
+  for the vertex's light loop, which a ray that escapes never reaches.)
+- (Done since: mammatus, in `shared::mammatus`, the same bits in the renderer. Each kind of
+  cloud is compiled into a kernel wherever it walks media, and there are four such places
+  (the collision, the shadow rays of a vertex and of the crepuscular sample, the probe), so
+  the WGSL is 7.8 MB with six kinds: the walks want one call site a kernel.)
+- (Done since: cumulonimbus, in `shared::cumulonimbus`, the same bits in the renderer at
+  300,000 points. The WGSL is 9.5 MB.)
+- (Done since: the crepuscular samples' shadow rays moved from `shade` to `intersect`,
+  where they are two more turns of the loop that traces the path's own ray: one traversal
+  and one walk a kernel again. Measured first: of the 9.5 MB of WGSL the sample's own walk
+  through media was 2.1 MB and its any-hit traversal 0.4 MB. Now 7.2 MB; the GPU's picture of
+  crepuscular-rays is the CPU kernels', region by region to three places, and its noise is
+  as before (FLIP 0.0548 at 16 spp). What a kind of cloud costs is still its code at each
+  of the walks: the collision's, the shadow rays', the probe's.)
+- (Done since: sun probes. A medium's vertex sends one (`pathtrace::send_probe`) with the
+  path: it waits in the path's `hit`, and the next round's `intersect` traces it and the
+  shadow ray from the collision it meets as two more turns of its loop (`find_all`, which
+  the CPU runs with a finder that knows the host's shapes), so no kernel gained a traversal
+  or a walk: 7.5 MB of WGSL. benard-altocumulus at 32 spp against a 256 spp reference: FLIP
+  0.0618 without, 0.0581 with, the path tracer 0.0479; the mean unchanged (the kernels are
+  0.6% brighter than the path tracer there with or without, which is something else, not
+  found). The gain is less than the probes' share of the gap was taken to be. mammatus,
+  which looked the same case (0.0957 against 0.0690 at 16 spp), isn't: it has the Oz
+  approximation, whose sun no probe finds. Both scenes have a sea, and the kernels send no
+  glitter probes: the next suspect.)
+- (Done since: glitter probes, which were the cause: without their sea the two scenes'
+  noise is the path tracer's on the kernels (benard 0.0463 against 0.0458, mammatus 0.0338
+  against 0.0346). With them: mammatus at 16 spp FLIP 0.0957 -> 0.0721 (the path tracer
+  0.0690), benard-altocumulus at 32 spp 0.0581 -> 0.0509 (0.0479). mammatus then read 5%
+  redder on the kernels than by `trace`. Twelve seeds each didn't settle it (the means are
+  a few pixels' fireflies); the mean without each render's three brightest pixels did, to
+  half a percent a seed: probes on or off changed the kernels' by 4% and the path tracer's
+  by nothing. Counting what each tracer's probes found: sent and reaching the sea alike,
+  lit 4.4% of the kernels' and 3.4% of the path tracer's, whose probe took the glint at the
+  hit as found, on the surface, where an ordinary vertex is moved off it first: under a low
+  sun the shadow ray met the sea it left. `VolumeMaterial::glitter_probe` now offsets it,
+  and the two agree to 0.3%. A lesson for these comparisons: when two unbiased estimators
+  disagree, the newer one isn't the suspect by default.)
+- The shader's size, measured (WGSL, by kernel; a render compiles only the kernels its
+  scene needs, the `_media` ones only with media). Against 3dc74bb, before this section's
+  clouds and probes: bounce_paths_media 1339K -> 2946K, intersect_paths_media 583K -> 2287K,
+  intersect_paths 134K -> 463K, bounce_paths 636K -> 681K. Two changes: a kernel without
+  media holds no probe code (`Finder::MEDIA`), and the layers' bounds have one call site
+  (`shared::media::planet_ray`): intersect_paths 247K, the media kernels 2814K and 2176K,
+  the module 7.8 -> 7.4 MB. What the rest is: each kind of cloud 150K (Nubis, rain) to 500K
+  (cumulonimbus) a media kernel; Perlin's noise, inlined at each of some sixty call sites
+  in the densities, 1.1 MB of each; Worley's 0.1 MB. Taking the cube's eight corners in a
+  loop made each copy larger, not smaller. What would shrink it is fewer call sites: a
+  density's noise funnelled through one call in a loop over what it asks for; not done,
+  since what it buys isn't known: lavapipe here (Mesa 25.2.8, LLVM 20) compiles the plain
+  kernels in 0.4 s and the media kernels in 1.2-1.5 s at 128, 256 and 512 bits alike, before
+  and after. The hang on CI (Mesa 26.0.8, LLVM 21, a Xeon Platinum 8573C, lavapipe at its
+  native width) was in tests whose scenes have no media, whose kernels hardly grew; it is
+  not reproduced here, and its cause is unknown.
+- A perf pass (CPU kernels, 160 x 100, 8 spp unless said; stage seconds summed over four
+  threads). Where the time is, by kind of scene:
+  - Plain geometry and sky (demo, teapot-sky): 0.2 s, shading most of it. Nothing large.
+  - The sea (ocean-1): the wave march, 1.4 of 1.8 stage-seconds.
+  - Clouds (benard-altocumulus, callgrind inside the batches): the density 82%, Perlin's
+    noise half of all of it, Worley's 6%; the shadow rays' walks (`media_transmittance`)
+    32% and the collisions the rest; bounds 7%. The cost is the number of densities asked
+    for, so tighter bounds (fewer null collisions) or fewer noise lookups a density are what
+    would move it. mammatus also spends 18% in the sky stage: the aerial haze before every
+    vertex, a 32-step integration each, the path tracer's too.
+  - Host-heavy (grass-meadow): 98% in the grass's own intersection, by three callers: the
+    intersection stage (40%), its material's shadow rays (33%) and `FlatScene::refine`
+    (24%), which repeated the search that had found the hit, the whole grid walk since the
+    grass took the trait's default ranged search. Fixed: a ranged search that walks only the
+    stretch asked for; 21-24 -> 15.7 s on the kernels, 13.7 -> 13.1 by `trace`, the same
+    picture. The kernels are still a fifth slower than `trace` there.
+  - Building: forest-dense took 821 s to build for a 2.6 s render, all of it the forests'
+    dart throwing (single-threaded, tens of millions of darts, each tested against the
+    trees about it by an index and `hypot`). Fixed: the cells hold the trees' positions,
+    the dart's own cell first, the distance squared with `hypot` only where they could
+    disagree; the same trees (`print_placement_fingerprints`): 85 s.
+  - On the GPU: shading was half as slow again from the Sobol' points' table (fixed,
+    9bdc7d9); the shader module's creation grew 0.7 -> 2 s with the WGSL (a module per
+    kernel would load only what a render compiles); the probes nearly double a cloud
+    scene's intersection, a loss at equal time on benard-altocumulus (FLIP 0.0488 at 64 spp
+    without, 0.0507 at 32 with, the same time) and a large gain on mammatus (0.0726 at 16
+    with, 0.0862 at 32 without).
+- Majorant grids for the clouds (the perf pass's next step: the cost is the densities a walk
+  asks for, 95-100% of them in clear air). Each cloud's box gets a grid of up to two million
+  cells, 8 times wider than high, each the most density found at two lattices (the cells'
+  corners and the points between) within two cells, times 1.5, at least a quarter of the
+  medium's bound, and 1/64 of it where nothing is in reach. Sampled, not proven, so the
+  walks are made correct where it fails: weighted delta tracking (Kutz et al. 2017), signed
+  ratio-tracking estimates, and a path that meets an overshoot walks by the layers' proven
+  bounds from there on (unbiased: a walk may choose its majorant at each event from what came
+  before), so a miss is one weight of at most 8 on one path. What it took to get there, on
+  altocumulus-castellanus: one lattice spread a cell missed whole turrets (density 0.15 in a
+  cell bounded at 0.003), and weights renewed at each walk multiplied bounce by bounce inside
+  them, pixels of thousands. Kept by kind and checked: altocumulus's cells are finer than a
+  grid's lattice (its grids found cloud in empty cells at random points: 5-37 in two
+  million), so it has none and keeps `Benard::tops`; cirrus's own bounds are close (the grid
+  saved a tenth of the densities and took six times the steps: a third slower); a grid that
+  misses at a million random points isn't kept. Inside the grid the cell's bound alone is
+  used (taking the least with the layer's cost more than it saved). At 160 x 100, CPU
+  kernels: cumulonimbus 676 -> 10 densities a camera ray, about 30 -> 17 s at 32 spp;
+  mammatus about 30 -> 23 s; stratocumulus 16 -> 12 s; snow-showers' walks a tenth quicker,
+  its two grids' build (3 s) more than that at this size. Pictures within noise of
+  renders without (RMSE against an independent render without, the same as two without).
+- Media through the host in the wavefront's rounds (the rest of step 3), and with them the
+  thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
+  rendered a path at a time by the scene's own code under the same driver now, and the
+  pictures would be the same; what changes them, and removes code, is the density moving
+  to `shared` (altocumulus was a day's pattern: 400 lines moved, none duplicated). So the
+  next cloud kinds go there one by one, and the host's media never get a queue.
+- Spectral rendering and motion blur in the kernels (wavelengths and a time on the path).
+
+### SIMD on the CPU's wavefront: measured (November 2026)
+
+The question: now that the CPU runs the kernels over batches, do vector instructions pay?
+What was measured, on four cores with AVX-512 available, 320 x 200:
+- Where the time is (`--wavefront`'s stage table): demo and teapot-sky are shading and the
+  sky, traversal under a third; ocean-1 is the wave march; the cloud scenes are the walks
+  through the medium.
+- Building for the machine's own CPU (`-C target-cpu=native`): 8 to 10% on the heavy scenes,
+  15% on teapot-sky, nothing on demo. The compiler vectorises little of this by itself.
+- Perlin's noise in lanes (`kernels::measure::measure_lanes`: 4, 8 and 16 points at once,
+  each lane the scalar's operations in order, so the same bits): 1.1x. Its cost is the chain
+  of table reads, eleven a point, which lanes leave as they are; only gathers would move
+  them, and those are AVX2's, which a baseline build hasn't.
+- A profile of a real render (callgrind, collecting inside `Kernels::batch`) said something
+  else was wrong: on nubis-clouds 60% of the instructions were the walk asking for local
+  bounds, a few percent the densities. Counted on the scene's own camera rays
+  (`measure_camera_walks`), the f32 walk asked for 2,784 bounds a ray where f64 asks for
+  183: it stalled at the weather map's edges (above, in the commit that fixed it). Fixed:
+  8.1 s to 2.0 s, faster than the path tracer's 2.8 s. That was worth four times, on the
+  GPU too, against lanes' tenth.
+- Tried and dropped: noise's gradient without a branch (three times faster at scattered
+  points, nothing in a render, where a ray's neighbouring points share their hashes; kept
+  for the 15% it takes off the shader's size) and `floor` at f32 without the library's
+  call (nothing).
+So: not yet. A micro-benchmark at scattered points misled twice here; profile a render.
+What would pay next, by the stage tables: the sea's march (12 us a ray: the choppy map's
+three rounds of tile reads a step), the sky's fixed march (a quarter of the simple scenes,
+branch-free: the one stage lanes fit as it stands), and a wide BVH when the GPU wants one.
+
+### Profiling the CPU's wavefront: a second round (November 2026)
+
+By callgrind inside `Kernels::batch` on real renders (96 x 60, 2 spp; `batch` is never
+inlined, so `--toggle-collect=*Kernels*batch*` collects in it), then timed at 320 x 200,
+16 spp on four cores. What was found, and what each was worth:
+- The sea: over half its instructions were the choppy map's tile lookups, whose indices
+  wrapped by six integer divisions each (eight in the renderer's own `bilinear`). Masks, a
+  tile being a power of two across: ocean-1 6.9 -> 5.1 s by the kernels, 8.1 -> 6.5 s by
+  the path tracer, the same image.
+- A mesh's traversal: f32's `min` and `max` in the box test (a quarter of teapot-sky's
+  instructions, allowing for a NaN already ruled out), and the tests' thread-local counters
+  at every box and primitive, running in every render since the kernels became the CPU's
+  stages (now pathtrace's `stats` feature). About a tenth of demo and teapot-sky.
+- Clouds round the planet: `atan2f`, a sixth of nubis-clouds, for an angle of a sixtieth of
+  a radian. A series at f32 (`Real::small_angle`): 6.9 -> 5.4 s.
+- Not wins, though a profile said so: `floor` at f32 without the library's call (8% of
+  altocumulus's instructions; timed, slower in noise and a wash in the sea), and the sky
+  table's arcsine and arctangent found once for its two slices (the compiler had). An
+  instruction count is not a time: divisions were undercounted, the library's floor
+  overcounted. Time every change.
+- Found on the way: cloud scenes didn't render the same twice (the sky table's visibility
+  rays through the clouds drew unseeded numbers). Seeded.
+- A build for x86-64-v3 (AVX2's generation; `RUSTFLAGS="-C target-cpu=x86-64-v3"`) gives the
+  same images to the byte on all five scenes, on both CPU paths, and is faster where there
+  is arithmetic to vectorise: ocean-1 3.7 -> 2.9 s by the kernels and 4.7 -> 3.4 s by the
+  path tracer, teapot-sky and nubis-clouds a tenth, demo and altocumulus nothing. Switched
+  on since (`.cargo/config.toml`): a binary needs a processor of 2013 or later (Haswell;
+  AMD's Excavator, 2015), and `RUSTFLAGS="-C target-cpu=x86-64"` builds one for any.
+What is left, by the profiles: altocumulus is half Perlin's noise, asked for at every
+tentative collision in the layer's slab though 85% of the slab is clear air: it wants local
+bounds as the Nubis layers have (a map of where a column can hold cloud), which would cut
+the evaluations several times over, on the GPU too. The simple scenes have no hot spot
+left (traversal 29%, the sky's tables 17%, shading 15%).
+
+Done since: altocumulus's local bounds. The density was asked for at every tentative
+collision in the layer's slab, and 2 to 11% of the slab is cloud (the cloudlets are domes
+with gaps between, and the slab is as tall as the tallest turret). Now a map of how high
+cloud can be over each texel, a quarter of a cell across (`Benard::tops`, in the layer's
+record after its Worley texture; `majorant_from` as a Nubis layer's column tops), lets the
+walk skip what is above it: 26% of a plain layer's slab, 54 to 80% of a waved, turreted or
+sparse one's.
+- The density split into a column's part and a height's (`Benard::column`), the same bits
+  (a fingerprint of 1.6 million values, before and after).
+- The map is sampled, not derived (no bound on a warped, lumpy outline comes cheaply): the
+  highest a column's cloud can be (`column_top`: the dome at its noise's most, a turret's
+  top) at 25 points a texel, for cloudlets taken no smaller than a quarter reach, each texel
+  the highest of its own and its neighbours' and a tenth of a thickness over. Tested, not
+  proved: at 9 points a texel and 0.15, a handful of two million points had cloud over a
+  texel marked clear (a cloudlet 90 m across between samples 78 m apart); as it is, none in
+  ten million across five kinds of layer (`test_the_map_of_tops_bounds_the_cloud`).
+- It costs ten million samples for the default layer: 2 s on four cores, at f32 through the
+  kernel's functions, built apart from the render's threads (which otherwise wait on it
+  and leave it one). Skipped where a texel would be coarser than half a cell
+  (cirrocumulus), where it would bound nothing.
+- 240 x 150, 8 spp, kernels / path tracer: altocumulus-castellanus 46 -> 20 s / 60 -> 28 s,
+  altocumulus-undulatus 12.0 -> 8.2 s / 16.9 -> 11.5 s, benard-altocumulus 8.9 -> 8.2 s /
+  13.4 -> 12.2 s; against the path tracer as before (castellanus FLIP 0.036 for 0.0375).
+  The GPU's kernels take the same bound from the same record.
+- Then tightened: a dome's height varies across the layer, not up it, so a column's top
+  takes the dome's own noise in place of its most. A plain layer's slab is 42% above the
+  map for 26%, the test still finding no cloud over it; benard-altocumulus and
+  altocumulus-undulatus another sixth faster.
+
+And the sea's march: once a step crossed the surface the crossing was placed by twenty
+halvings (twenty-four in the renderer's), each asking for the surface, which is the choppy
+map inverted and eight tiles read: a fifth of a render of the sea. By false position with
+the Illinois rule instead, four askings (six in the renderer's f64), the surface being
+nearly straight across a step; and the kernel's march is one loop with one place the
+surface is asked for, where it had three (the shader 5% smaller). Against the renderer ray
+by ray as before (none of 4,000 disagree; distances to 8e-7 on average). ocean-1, 320 x
+200, 16 spp: 4.4 -> 3.8 s by the kernels, 5.3 -> 4.7 s by the path tracer; ocean-boat 1.9
+-> 1.1 s and 2.0 -> 1.2 s. What is left of the sea is the march's own steps, a hundred a
+ray, each bounded by the steepest slope anywhere: a map of the tiles' highest waves by
+area would let a ray skimming over them stride.
+
+### The kernels on the device against the kernels on the CPU, bit for bit (November 2026)
+
+`gpu::tests::measure_device_against_cpu` renders each pixel's first sample both ways and
+counts the pixels whose bits differ (lavapipe here; another device will count otherwise).
+What it found, on scenes of one ingredient each (96 x 60):
+- An area light, a box and a plane under a black sky: 85% of pixels the same bits, the
+  rest within 4 steps of a float. Traversal, the materials, light sampling and the random
+  numbers are the same on both.
+- The same under a plain sky: 20% the same, most of the rest 1e-5 to 1e-3 apart. The sky's
+  sampling density took sin θ back through the arccosine of the direction, and a device's
+  inverse trigonometry is its own (Mesa's a polynomial good to a part in 10^5). From the
+  direction itself (`env_density`): 85 to 92% the same, the rest within 4 steps but for
+  half a percent of pixels whose paths part.
+- And the CPU added a vertex's two sky answers one after the other where `answer_sky` sums
+  them first: now as the GPU's.
+What is left, by kind:
+1. The device's own functions where a value passes through them: exp, pow and log (the
+   air's march, the media's walks), asin and atan2 as coordinates into the sky's tables,
+   sin and cos in sampling. demo.json, under a skysphere, is 9% the same bits and 60%
+   1e-5 to 1e-3 apart for these. Only our own functions, in `shared`, would close it.
+2. Last bits where the device's compiler orders or fuses arithmetic its own way, or its
+   sqrt is a step out: the '4 steps' above.
+3. Paths that part: a comparison that falls the other side (a texel of the sky's table
+   chosen by atan2 and acos, a Fresnel choice, Russian roulette, a traversal's tie) after
+   1 or 2. Half a percent of pixels a sample on these scenes, more where a path is long
+   (nubis-clouds 2%).
+4. The host's sums: the GPU adds a block's samples in f32 on the device, the CPU each in
+   f64; and adaptive sampling looks at the film at different sample counts on the two.
+5. What the GPU doesn't render at all (host shapes), which is the CPU's either way.
+
+### GPU-ready by construction
+
+What a kernel can't hold is refused where the code is written, not when someone next builds
+the shaders:
+- `shaders/shared` is `no_std` with no allocator on the CPU too (done): `Box`, `Vec`,
+  `String` aren't in scope.
+- `shared_rules` (done; `cargo test`, stable): its source may not name `dyn`, the heap's
+  types, f64 or f32 outside the floats' own implementations, a float literal (constants are
+  `Real::ratio`), an inclusive range or `is_finite`; and every public function must be
+  called by the shader or by another function there, since rust-gpu compiles a generic
+  function only where something calls it. That last rule found three already
+  (`phase::forward_peak` and the truncation's two): right on the CPU, never compiled for the
+  GPU; listed as host-only by name.
+- The proof stays rust-gpu and naga compiling it, in CI. To add there: the kernels built
+  for the CPU with every shared function called at f32 against its f64 at random points (the
+  pattern of `test_altocumulus_is_the_renderers_on_the_device`), as one table-driven test
+  that a new function joins by a line.
+- New light transport, shapes and media are written in `shared` first, and the renderer
+  calls them. The rules could be clippy's (`disallowed_types`) but clippy can't see float
+  literals or uncalled generics, and a test needs no configuration.
+What this can't promise: that a function is small enough once rust-gpu has inlined it
+(the WGSL is 4.4 MB), or that a device's compiler is right (lavapipe on Zen 5, section 12).
+
+### f32 everywhere a render computes: the local frame
+
+f64 is for where things are in the world; a render needs where they are from the camera.
+f32 holds a direction to 6e-8, a fifteen-thousandth of a pixel's angle at 1,000 pixels across
+a 60 degree view: so a point stored relative to the camera is placed to far less than a
+pixel at any distance, and what fails today is only what is stored relative to something
+else. The plan is to choose the frame on the host, in f64, once, and give the kernels
+nothing but local numbers.
+- The render's origin is the camera (snapped, so nearby cameras share buffers; a moving
+  camera re-bases by a translation of the records, not a rebuild). `FlatScene` subtracts it
+  in f64 before narrowing: primitives, boxes, lights, media.
+- Things defined about a far centre keep that centre in a form that cancels exactly: the
+  planet's `excess` (|p - c|² - r² from p·p + 2 r y, already how the air, the sea and
+  `above_sphere` work), generalised to a record's centre given as the offset from the origin
+  plus the precomputed constant; a moon or giant thousands of kilometres off is its own
+  frame, the ray taken into it by one subtraction done in two floats (a double-single
+  difference, 48 bits: the one place more than f32 is needed, and it is three operations).
+- Fields evaluated at world positions (noise, tiles, weather maps, the foam) take the
+  origin's phase from the host: for a lattice of period P (Perlin's 256, a tile's size), the
+  origin is sent as its cell modulo P and its fraction, worked out in f64, and the kernel
+  adds the local offset to the fraction. The far sea's foam and the smallest wave tile
+  (blocky today beyond tens of kilometres) are this.
+- Ray offsets scale with the hit's distance from the origin (`offset_for` does) and no
+  longer with its world coordinates.
+- Time and wavelength are already small numbers.
+Then the CPU backend and the GPU compute the same thing, and `trace`'s f64 is a reference
+for tests, not a second renderer. Assumed, to check on the scenes that stress it (orbit,
+moon, landscape-orbit, the far sea): that nothing needs more than the two-float subtraction.
+Known not to be covered: building the world (tectonics, the landscape's simulation, the
+weather) stays f64 on the host; only what a path touches is narrowed.
+
+### What it removes
+
+`wavefront::integrator`'s stages (step 1); the ports in `pathtrace` that duplicate
+`ocean.rs` and `skysphere.rs` once those move to `shared` (the sea's shape and water, the
+air: some 900 lines of second copies); `trace`'s loop and the `Camera`/`RenderContext`
+paths that only it uses (step 5). What stays, on purpose: `MaterialModel`, `Geometry` and
+`Medium` as the host queues' interface, for everything not yet in a kernel.
+
+### Open decisions
+
+- Whether the CPU backend may be f32 before the local frame is in (step 1 before 2, as
+  written: it shows the precision problems on the CPU, where they can be debugged), or the
+  frame comes first.
+- Whether `trace` is kept, frozen, as the tests' reference after step 5, or the references
+  become stored images.

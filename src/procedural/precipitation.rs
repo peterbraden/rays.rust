@@ -30,7 +30,6 @@
 
 use crate::na::{Vector2, Vector3};
 use crate::noise::PerlinNoise;
-use crate::procedural::nubis_clouds::{lerp, smoothstep};
 use crate::volume::DensityField;
 
 /// What falls.
@@ -65,36 +64,20 @@ impl Kind {
 /// Extinction (per metre) of snow falling at `rate` mm/h of water, for Gunn and Marshall's
 /// distribution of melted diameters and flakes three times as wide.
 pub fn snow_extinction(rate: f64) -> f64 {
-    if rate <= 0. {
-        return 0.;
-    }
-    let n0 = 3800. * rate.powf(-0.87) * 1e-6; // m⁻³ mm⁻¹, with D² in mm² to m²
-    let lambda = 2.55 * rate.powf(-0.48);
-    9. * std::f64::consts::PI * n0 / lambda.powi(3)
+    shared::rain::snow_extinction(rate)
 }
 
 /// Extinction (per metre) of hail of mean diameter `size` mm falling at `rate` mm/h of water
-/// (as ice), exponentially distributed in size and falling at 3.62 √D m/s.
+/// (as ice), exponentially distributed in size and falling at 3.62 √D m/s: the water flux is
+/// R = N₀ (π/6) 3.62 √1000 Γ(4.5) / Λ^4.5 (D in metres), solved for N₀.
 pub fn hail_extinction(rate: f64, size: f64) -> f64 {
-    if rate <= 0. {
-        return 0.;
-    }
-    let lambda = 1000. / size.max(0.1); // m⁻¹
-    // Water flux R = N₀ (π/6) 3.62 √1000 Γ(4.5) / Λ^4.5 (D in metres), solved for N₀.
-    let flux = rate / 3.6e6;
-    let n0 = flux / (std::f64::consts::PI / 6. * 3.62 * 1000f64.sqrt() * 11.631_728 / lambda.powf(4.5));
-    std::f64::consts::PI * n0 / lambda.powi(3)
+    shared::rain::hail_extinction(rate, size)
 }
 
 /// Extinction (per metre) of rain falling at `rate` mm/h, for the Marshall-Palmer distribution
 /// of drop sizes.
 pub fn rain_extinction(rate: f64) -> f64 {
-    if rate <= 0. {
-        return 0.;
-    }
-    let n0 = 8000. * 1e-6; // m⁻³ mm⁻¹, with D² in mm² to m²
-    let lambda = 4.1 * rate.powf(-0.21);
-    std::f64::consts::PI * n0 / lambda.powi(3)
+    shared::rain::rain_extinction(rate)
 }
 
 pub struct Precipitation {
@@ -156,9 +139,7 @@ impl Precipitation {
     /// The most extinction anywhere: the full rate, with the streaks' strengthening, in
     /// whichever form stops more light.
     pub fn peak_extinction(&self) -> f64 {
-        let rate = self.rain_rate * (1. + 0.5 * self.streakiness);
-        let melted = if self.melting_level.is_some() { rain_extinction(rate) } else { 0. };
-        self.kind.extinction(rate).max(melted)
+        self.recipe().peak_extinction()
     }
 
     /// What is falling at height y.
@@ -174,53 +155,67 @@ impl Precipitation {
         self.shear * (self.base - self.ground)
     }
 
-    /// The rain rate at `p`, relative to `rain_rate` (0 to about 1.5 in the streaks).
+    /// The rain rate at `p`, relative to `rain_rate` (0 to about 1.5 in the streaks): the cells
+    /// it falls from at the base, back along its drift; streaks drawn out down the fall;
+    /// evaporation, fraying the weaker streaks first; and the drops leaving the cloud over its
+    /// last hundred metres or so (`shared::rain::Rain::intensity`).
     pub fn intensity(&self, p: &Vector3<f64>) -> f64 {
-        if p.y < self.ground || p.y > self.base {
-            return 0.;
-        }
-        let fallen = self.base - p.y;
-        // Where this rain fell from, at the base.
-        let drift = self.wind_direction * self.shear * fallen;
-        let q = Vector2::new(p.x, p.z) - drift;
-        let from_centre = (q - self.center).norm() / self.radius;
-        let region = smoothstep(0., self.fade.max(1e-9), 1. - from_centre);
-        if region <= 0. {
-            return 0.;
-        }
-        let c = self.cells.fbm(q.x / self.cell_size, 0.5, q.y / self.cell_size, 4, 0.5, 2.);
-        let shafts = smoothstep(1. - self.coverage, 1. - self.coverage + 0.2, c) * region;
-        if shafts <= 0. {
-            return 0.;
-        }
-        // Streaks, drawn out down the fall.
-        let s = self.streaks.fbm(q.x / self.streak_size, p.y / (self.streak_size * 15.), q.y / self.streak_size, 3, 0.5, 2.);
-        let streaks = lerp(1., 0.2 + 1.3 * s, self.streakiness);
-        // Evaporation, fraying the streaks: the weaker ones end first.
-        let left = (-fallen / self.fall_depth).exp();
-        let frayed = if self.fall_depth.is_finite() {
-            smoothstep(0., 0.3, left - (1. - s) * 0.4)
-        } else {
-            1.
+        self.recipe().intensity(&Permutations(self), p.x, p.y, p.z)
+    }
+}
+
+/// The permutations as the shared recipe reads them: the cells' noise, then the streaks'.
+struct Permutations<'a>(&'a Precipitation);
+
+const STREAKS_AT: u32 = 512;
+
+impl shared::Tables<f64> for Permutations<'_> {
+    fn value(&self, _i: u32) -> f64 {
+        0.
+    }
+
+    fn index(&self, i: u32) -> u32 {
+        if i < STREAKS_AT { self.0.cells.permutation()[i as usize] as u32 } else { self.0.streaks.permutation()[(i - STREAKS_AT) as usize] as u32 }
+    }
+}
+
+impl Precipitation {
+    /// The recipe, as the shared code takes it (`shared::rain::Rain`, where the density is:
+    /// the GPU's shader compiles the same functions at f32).
+    fn recipe(&self) -> shared::rain::Rain<f64> {
+        let (kind, hail_size) = match self.kind {
+            Kind::Rain => (shared::rain::RAIN, 0.),
+            Kind::Snow => (shared::rain::SNOW, 0.),
+            Kind::Hail(d) => (shared::rain::HAIL, d),
         };
-        // Drops leave the cloud over its last hundred metres or so.
-        let below = if self.base_variation > 0. {
-            self.streaks.fbm(q.x / self.cell_size, 0.21, q.y / self.cell_size, 3, 0.5, 2.) * self.base_variation
-        } else {
-            0.
-        };
-        let emerging = smoothstep(below, below + 150., fallen);
-        (shafts * streaks * left * frayed * emerging).clamp(0., 1. + 0.5 * self.streakiness)
+        shared::rain::Rain {
+            base: self.base, ground: self.ground, rain_rate: self.rain_rate, cell_size: self.cell_size, coverage: self.coverage,
+            fall_depth: if self.fall_depth.is_finite() { self.fall_depth } else { 0. }, shear: self.shear,
+            wind: (self.wind_direction.x, self.wind_direction.y), streak_size: self.streak_size, streakiness: self.streakiness,
+            base_variation: self.base_variation, center: (self.center.x, self.center.y), radius: self.radius, fade: self.fade,
+            kind, hail_size, melting_level: self.melting_level.unwrap_or(0.), evaporates: self.fall_depth.is_finite(),
+            melts: self.melting_level.is_some(), cells: 0, streaks: STREAKS_AT,
+        }
+    }
+
+    /// The precipitation as data, for the GPU's shader (`pathtrace::load_rain`, which has the
+    /// layout): the recipe's numbers in their fields' order, then the two permutations.
+    pub fn export(&self) -> Vec<f32> {
+        let r = self.recipe();
+        let mut out: Vec<f32> = [
+            r.base, r.ground, r.rain_rate, r.cell_size, r.coverage, r.fall_depth, r.shear, r.wind.0, r.wind.1, r.streak_size,
+            r.streakiness, r.base_variation, r.center.0, r.center.1, r.radius, r.fade, r.kind as f64, r.hail_size,
+            r.melting_level, r.evaporates as u32 as f64, r.melts as u32 as f64,
+        ].iter().map(|&v| v as f32).collect();
+        out.extend(self.cells.permutation().iter().map(|&p| p as f32));
+        out.extend(self.streaks.permutation().iter().map(|&p| p as f32));
+        out
     }
 }
 
 impl DensityField for Precipitation {
     fn density(&self, p: &Vector3<f64>) -> f64 {
-        let i = self.intensity(p);
-        if i <= 0. {
-            return 0.;
-        }
-        self.kind_at(p.y).extinction(self.rain_rate * i)
+        self.recipe().density(&Permutations(self), p.x, p.y, p.z)
     }
 
     fn majorant(&self) -> f64 {
@@ -228,17 +223,13 @@ impl DensityField for Precipitation {
     }
 
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
-        let ahead = p + d * 0.01;
-        let (lo, hi) = (self.ground, self.base);
-        let to_y = |y: f64| if d.y != 0. { (y - ahead.y) / d.y } else { f64::INFINITY };
-        if ahead.y < lo {
-            return (0., if d.y > 0. { to_y(lo) + 0.01 } else { f64::INFINITY });
-        }
-        if ahead.y > hi {
-            return (0., if d.y < 0. { to_y(hi) + 0.01 } else { f64::INFINITY });
-        }
-        let exit = if d.y > 0. { to_y(hi) } else if d.y < 0. { to_y(lo) } else { f64::INFINITY };
-        (self.peak_extinction(), exit + 0.01)
+        self.recipe().majorant_from(p.y, d.y)
+    }
+
+    /// As data, where nothing but the density is asked of it (a drop size is, for rainbows
+    /// and diffraction).
+    fn export(&self) -> Option<crate::volume::FieldExport> {
+        Some(crate::volume::FieldExport::Rain { record: Precipitation::export(self), radius: 0. })
     }
 
     /// Raindrops: about 3.67 / Λ mm across, the median of the distribution by volume. (Snow

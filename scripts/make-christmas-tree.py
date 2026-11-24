@@ -262,7 +262,9 @@ add({"type": "forest", "seed": 12, "lod": {"pixels": 1},
 # Fog, thicker near the ground and in drifting banks.
 add({"type": "volume", "min": [-80, -0.5, -80], "max": [80, 25, 100],
      "density": {"node": "expr", "expr": "0.025 * exp(-max(y, 0) / 5) * (0.7 + 0.3 * noise3d(x / 9, y / 4, z / 9))", "range": [0, 0.025]},
-     "albedo": [0.98, 0.98, 0.98], "g": 0.75})
+     "albedo": [0.98, 0.98, 0.98], "g": 0.75,
+     # The bulbs' glow sampled along each camera ray too: far less speckle about them.
+     "equiangular": True})
 
 camera = {"location": [-0.6, 1.35, -6.4], "lookat": [0.55, 1.75, 0], "up": [0, 1, 0], "angle": 0.62,
           "aperture": 0.035}

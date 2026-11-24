@@ -25,6 +25,24 @@ directions in that space. And candidates are rendered at twice the resolution an
 down in linear light, as the reference was, so detail finer than a pixel averages out rather
 than showing as sampling noise.
 
+That loss sees colour, and little else: scripts/loss-benchmark.py, which tests a loss on
+pairs of scan crops whose answer is known, found it scored a scan's other half no nearer than
+a different scan coloured like it (a third of the time), barely told a scan from its own
+phase-randomised blobs, and was least at the right scale for an eighth of the scans. So
+structure is compared besides (`StructureLoss`, on lightness normalised to mean 0 and
+deviation 1): the joint distribution of an oriented filter bank's responses with the next
+level's (after Portilla and Simoncelli), which tells shapes from blobs, and the radially
+averaged power spectrum, which tells sizes, and so holds the scale. `FitLoss` is the two
+together, structure weighed to count about as much as colour between different scans;
+`--no-structure` leaves it out.
+
+And a fit sees the scan twice: whole, at --resolution pixels, and in detail, a quarter of it
+across at the same pixels (four times as fine), compared with four tiles of the scan, one in
+each quadrant (`DETAIL_TILES`). At 128 pixels across a two-metre scan a pebble is a few
+pixels and a leaf one or two, too few for any loss to see their shapes; in detail they're
+there (the benchmark's structure and identity scores rise threefold at that sampling). The
+detail view doubles the renders; `--no-detail` leaves it out.
+
 The parameters are found by CMA-ES (Hansen, "The CMA evolution strategy: a tutorial", 2016),
 which needs no gradients: the renderer isn't differentiable.
 
@@ -81,7 +99,8 @@ area, turned mint green at 0.12).
     scripts/fit-material.py scree|spec.json [--iterations 30] [--resolution 160] [--samples 8] [--record] [-o out_dir]
 
 Writes to out_dir: fitted.json (a library file with the fitted preset under `name`, and the
-library material using it), compare.png (reference, start, fitted), and log.csv.
+library material using it), compare.png (reference, start, fitted; a second row for the
+detail view, against the scan's first tile), and log.csv.
 """
 import argparse, copy, csv, json, math, os, subprocess, sys, tempfile, time
 
@@ -95,15 +114,27 @@ def srgb_to_linear(c):
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
-def load_reference(path, resolution):
+def load_reference(path, resolution, crop=None):
     """The reference albedo, sRGB-encoded in [0, 1], resampled to resolution square (averaged
-    in linear light, as the render's pixels average it)."""
+    in linear light, as the render's pixels average it); or a crop of it, (x, y, width) as
+    fractions of its width."""
     im = np.asarray(Image.open(path).convert("RGB"), dtype=np.float64) / 255.
     lin = srgb_to_linear(im)
+    if crop:
+        n = min(lin.shape[:2])
+        x, y, w = (int(round(c * n)) for c in crop)
+        lin = lin[y:y + w, x:x + w]
     channels = [Image.fromarray(lin[:, :, k].astype(np.float32), mode="F").resize((resolution, resolution), Image.BOX)
                 for k in range(3)]
     lin = np.stack([np.asarray(c, dtype=np.float64) for c in channels], axis=2)
     return linear_to_srgb(lin)
+
+
+# The detail view: a quarter of the scan across, compared with these tiles of it (x, y and
+# width as fractions of the scan's width), one in each quadrant, so no one tile's lighting or
+# odd stone decides the fit.
+DETAIL = 0.25
+DETAIL_TILES = [(0.125, 0.125, DETAIL), (0.625, 0.125, DETAIL), (0.125, 0.625, DETAIL), (0.625, 0.625, DETAIL)]
 
 
 def linear_to_srgb(c):
@@ -173,6 +204,135 @@ class PatchLoss:
             qb = np.sort(pb[:n] @ self.projections, axis=0)
             total += float(np.mean((qa - qb) ** 2)) + self.colour_weight * self.colours(la, lb, rng)
         return total / self.levels
+
+
+def luminance(img):
+    """Lightness along the first opponent axis, normalised to mean 0 and deviation 1: what's
+    left is structure, its contrast and colour being the colour terms' business."""
+    l = img @ OPPONENT[:, 0]
+    return (l - l.mean()) / (l.std() + 1e-6)
+
+
+class StructureLoss:
+    """What things look like, not their colour: the shapes, sizes and orientations of the
+    pattern, compared on lightness normalised to mean 0 and deviation 1 (so neither a scan's
+    uneven lighting nor a candidate's contrast passes for structure). Three parts:
+
+    - `patch`: the sliced Wasserstein distance between contrast-normalised 7x7 patches (each
+      patch less its own mean, over the image's deviation) at each level of a pyramid: edges,
+      corners and textures in a neighbourhood, wherever they are, whatever their brightness.
+    - `bank`: an oriented filter bank's responses, jointly with the coarser level's: at each
+      level, a pixel's complex responses to four orientations of a log-Gabor filter an octave
+      wide about a quarter of the sampling rate (even and odd parts: lines and edges), with the
+      magnitudes of the next level's at the same place. The joint distribution of these is a
+      texture's signature in Portilla and Simoncelli's sense ("A parametric texture model based
+      on joint statistics of complex wavelet coefficients", IJCV 2000): which orientations
+      occur together, and how detail sits within larger forms, tell a leaf from a blob of the
+      same size; compared by sliced Wasserstein distance, as Heitz et al. compare a network's
+      features, without the network.
+    - `spectrum`: the radially averaged power spectrum in half-octave bands, as log power: the
+      sizes things come in. It moves along the frequency axis when the material is scaled, so
+      it is what holds a fit's scale.
+    """
+
+    # Each part's weight makes it 1 for two different scans (the median over the scans that
+    # the library's presets name, at 256 pixels a quadrant; scripts/loss-benchmark.py).
+    WEIGHTS = {"patch": 50., "bank": 360., "spectrum": 2.4}
+
+    def __init__(self, parts=("bank", "spectrum"), levels=4, samples=4096, projections=64, seed=3):
+        self.parts, self.levels, self.samples, self.seed = parts, levels, samples, seed
+        self.weights = self.WEIGHTS
+        rng = np.random.default_rng(seed)
+        self.proj = {}
+        for name, d in (("patch", 49), ("bank", 12)):
+            p = rng.normal(size=(d, projections))
+            self.proj[name] = p / np.linalg.norm(p, axis=0)
+
+    @staticmethod
+    def swd(fa, fb, proj):
+        n = min(len(fa), len(fb))
+        qa, qb = np.sort(fa[:n] @ proj, axis=0), np.sort(fb[:n] @ proj, axis=0)
+        return float(np.mean((qa - qb) ** 2))
+
+    def patches(self, l, rng):
+        p = 7
+        h, w = l.shape[0] - p + 1, l.shape[1] - p + 1
+        n = min(self.samples, h * w)
+        ys, xs = rng.integers(0, h, n), rng.integers(0, w, n)
+        x = np.stack([l[ys + dy, xs + dx] for dy in range(p) for dx in range(p)], axis=1)
+        return x - x.mean(axis=1, keepdims=True)
+
+    @staticmethod
+    def bank(l):
+        """Complex responses to four orientations of a log-Gabor filter, (h, w, 4)."""
+        h, w = l.shape
+        fy, fx = np.meshgrid(np.fft.fftfreq(h), np.fft.fftfreq(w), indexing="ij")
+        r = np.hypot(fx, fy) + 1e-9
+        radial = np.exp(-np.log(r / 0.25) ** 2 / (2 * (0.55 * np.log(2)) ** 2))
+        radial[0, 0] = 0.
+        phi = np.arctan2(fy, fx)
+        f = np.fft.fft2(l)
+        out = []
+        for k in range(4):
+            d = np.cos(phi - k * np.pi / 4)
+            angular = np.where(d > 0, d ** 4, 0.) * 2.
+            out.append(np.fft.ifft2(f * radial * angular))
+        return np.stack(out, axis=2)
+
+    def bank_features(self, levels, rng):
+        feats = []
+        for k in range(len(levels) - 1):
+            fine, coarse = self.bank(levels[k]), np.abs(self.bank(levels[k + 1]))
+            h, w = fine.shape[:2]
+            coarse = np.repeat(np.repeat(coarse, 2, axis=0), 2, axis=1)[:h, :w]
+            n = min(self.samples, h * w)
+            idx = rng.integers(0, h * w, n)
+            f = np.concatenate([fine.real.reshape(-1, 4), fine.imag.reshape(-1, 4), coarse.reshape(-1, 4)], axis=1)[idx]
+            feats.append(f)
+        return feats
+
+    @staticmethod
+    def spectrum(l):
+        h, w = l.shape
+        p = np.abs(np.fft.fft2(l)) ** 2 / (h * w)
+        fy, fx = np.meshgrid(np.fft.fftfreq(h), np.fft.fftfreq(w), indexing="ij")
+        r = np.hypot(fx, fy)
+        # Half-octave bands from four cycles across the image to the sampling limit.
+        edges = 0.5 * 2. ** -np.arange(0., np.log2(min(h, w) / 8.) + 0.25, 0.5)[::-1]
+        bands = [p[(r >= lo) & (r < hi)].mean() for lo, hi in zip(edges[:-1], edges[1:])]
+        return np.log(np.array(bands) + 1e-8)
+
+    def parts_of(self, a, b):
+        la, lb = luminance(a), luminance(b)
+        pa, pb = PatchLoss.pyramid(la, self.levels), PatchLoss.pyramid(lb, self.levels)
+        out = {}
+        if "patch" in self.parts:
+            t = 0.
+            for k, (x, y) in enumerate(zip(pa, pb)):
+                rng = np.random.default_rng(self.seed + k)
+                t += self.swd(self.patches(x, rng), self.patches(y, rng), self.proj["patch"])
+            out["patch"] = t / self.levels
+        if "bank" in self.parts:
+            fa, fb = self.bank_features(pa, np.random.default_rng(self.seed)), self.bank_features(pb, np.random.default_rng(self.seed))
+            out["bank"] = sum(self.swd(x, y, self.proj["bank"]) for x, y in zip(fa, fb)) / len(fa)
+        if "spectrum" in self.parts:
+            out["spectrum"] = float(np.mean((self.spectrum(la) - self.spectrum(lb)) ** 2))
+        return out
+
+    def __call__(self, a, b):
+        return sum(self.weights[k] * v for k, v in self.parts_of(a, b).items())
+
+
+class FitLoss:
+    """What a fit minimises: colour (`PatchLoss`, which mostly sees colour) and structure
+    (`StructureLoss`, which sees none), the structure weighed to count about as much as
+    colour does between two different scans."""
+
+    def __init__(self, structure=0.15, parts=("bank", "spectrum")):
+        self.colour, self.structure, self.weight = PatchLoss(), StructureLoss(parts), structure
+
+    def __call__(self, a, b):
+        return self.colour(a, b) + self.weight * self.structure(a, b)
 
 
 def get(obj, path):
@@ -365,6 +525,10 @@ def main():
     a.add_argument("--sigma", type=float, default=0.2, help="CMA-ES's initial step, in the unit cube")
     a.add_argument("--rays", default=os.path.join(ROOT, "target/release/rays"))
     a.add_argument("-o", "--output", default="fit")
+    a.add_argument("--no-structure", dest="structure", action="store_false",
+                   help="the colour loss alone (PatchLoss), as fits before the structure term were")
+    a.add_argument("--no-detail", dest="detail", action="store_false",
+                   help="the whole scan only, without the detail view (half the renders)")
     args = a.parse_args()
     import cma
 
@@ -395,7 +559,9 @@ def main():
     size = float(spec["size"])
     args.view = spec.get("view", "ground")
     reference = load_reference(os.path.join(base, spec["reference"]), args.resolution)
-    loss = PatchLoss()
+    details = [load_reference(os.path.join(base, spec["reference"]), args.resolution, t) for t in DETAIL_TILES] \
+        if args.detail else []
+    loss = FitLoss() if args.structure else PatchLoss()
     problem = Problem(spec, preset)
     os.makedirs(args.output, exist_ok=True)
 
@@ -403,7 +569,12 @@ def main():
         def evaluate(x, tag):
             p, u = problem.make(x, usage)
             img = render(p, u, name, args, size, tmp, tag)
-            return loss(reference, img), img
+            total = loss(reference, img)
+            if not details:
+                return total, [img]
+            # The detail view: as much again, its loss the mean over the scan's tiles.
+            detail = render(p, u, name, args, size * DETAIL, tmp, tag + "d")
+            return total + float(np.mean([loss(t, detail) for t in details])), [img, detail]
 
         x0 = problem.start(usage)
         start_loss, start_img = evaluate(x0, "start")
@@ -427,10 +598,12 @@ def main():
                   open(os.path.join(args.output, "fitted.json"), "w"), indent=1)
         with open(os.path.join(args.output, "log.csv"), "w", newline="") as f:
             csv.writer(f).writerows(log)
+        # A row a view: the scan (its first tile, for the detail), the start and the fit.
         r = args.resolution
-        sheet = Image.new("RGB", (3 * r, r))
-        for k, img in enumerate([reference, start_img, best[2]]):
-            sheet.paste(Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)), (k * r, 0))
+        sheet = Image.new("RGB", (3 * r, r * len(start_img)))
+        for row, ref in enumerate([reference] + details[:1]):
+            for k, img in enumerate([ref, start_img[row], best[2][row]]):
+                sheet.paste(Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)), (k * r, row * r))
         sheet.save(os.path.join(args.output, "compare.png"))
         print("loss %.5f -> %.5f; wrote %s" % (start_loss, best[0], args.output), file=sys.stderr)
         if args.record:
@@ -452,6 +625,7 @@ def main():
             library[name]["references"][index]["fit"] = {
                 "loss": {"start": round(start_loss, 6), "fitted": round(best[0], 6)},
                 "iterations": args.iterations, "resolution": args.resolution, "samples": args.samples,
+                "loss_kind": ("structure" if args.structure else "colour") + ("+detail" if args.detail else ""),
                 "date": time.strftime("%Y-%m-%d"), "applied": False, "values": values}
             with open(library_path, "w") as f:
                 json.dump(library, f, indent=2)

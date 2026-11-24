@@ -94,7 +94,10 @@ Rays.rust is a raytracer written in Rust with the following features:
   features that only need showing to work go into `demo/scenes/stress-test.json` (plots of
   shapes, materials, lights, media, plants and camera effects in one garden; spectral, light
   BVH, motion blur, realistic lens, flare and adaptive sampling at once), not new scenes.
-  Fixed scenes for measurements (`scripts/variance.sh`) are in demo/benchmarks/
+  Fixed scenes for measurements (`scripts/variance.sh`) are in demo/benchmarks/. Forests' levels
+  of detail are checked against full detail under many conditions (view, sun, species, density,
+  season) by `scripts/lod-suite.py` (FLIP, brightness near and far, memory, time; results in
+  `target/lod-suite/`, docs/research/learned-lod/suite.md)
 - Render speed over history: `scripts/benchmark.py` builds master commits in a scratch worktree
   (target/bench) and renders `demo/benchmarks/teapot-sky.json` (mesh, plane, skysphere; kept in
   the oldest scene format so every commit can read it) 5 times each, appending time, rays and

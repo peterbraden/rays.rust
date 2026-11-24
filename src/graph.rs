@@ -22,6 +22,16 @@
 //!   `plan`, and `style`: `"f1"` (distance to the nearest feature point, in cells), `"edges"`
 //!   (F2 - F1: zero along the cracks between cells), or `"stones"` (a rounded stone in each
 //!   cell, each its own size and height, as Terragen's Fake Stones), each in [0, amplitude].
+//! - `cells` also takes `style` `"f2"` (distance to the second nearest) and `"id"` (a random
+//!   value in [0, 1) for each cell), a `metric` (`"euclidean"`, `"manhattan"`, `"chebyshev"`)
+//!   and `jitter` (how far feature points stray from their cells' centres, 1 by default).
+//! - `gabor` and `phasor`: sparse Gabor convolution noise and phasor noise (`patterns::Gabor`),
+//!   `frequency` (or `wavelength`), `bandwidth`, `direction` and `spread` (anisotropy),
+//!   `impulses`, `profile` (phasor: `"sine"`, `"saw"`, `"square"`), `plan`, `seed`, `amplitude`.
+//! - `gradient` (along `direction`), `rings` (from the line through `center` along `axis`),
+//!   `spherical` (from `center`): distances over `scale`, POV-Ray's patterns of those names.
+//! - `checker` (`size`, `plan`) and `brick` (`size` [x, y, z], `mortar`, `style` `"mortar"` or
+//!   `"id"`, `seed`): POV-Ray's, in [0, 1], box filtered.
 //! - `talus`: fallen blocks and scree, angular and fractured, many small to few large, sorted
 //!   down the slope (`talus.rs`). Heights in metres; meant for a terrain's
 //!   `"vertical_displacement"`, so blocks stand upright on a slope and a material can find them.
@@ -64,6 +74,11 @@
 //!   hi] onto `to` [lo, hi], linearly).
 //! - `terrace`: `input` stepped in `step`s, each step's riser `sharpness` (0: smooth, 1:
 //!   vertical, default 0.8) of the way to a cliff, as strata weather into ledges.
+//! - `wave`: `input` times `frequency` plus `phase` turned into repeating bands of `shape`
+//!   `"ramp"`, `"triangle"`, `"sine"` (default), `"scallop"` or `"square"`, raised to
+//!   `exponent`, box filtered over the footprint (`patterns::Wave`).
+//! - `transform`: `input` read in a space `scale`d (a number or [x, y, z]), `rotate`d (degrees
+//!   about x, then y, then z) and `translate`d from the scene's.
 //! - `warp`: `input` read at a point moved by `amount` (metres, default 1) times a vector of
 //!   noise `scale` across (default 10; `seed`, `octaves`, default 3), so its features flow and
 //!   bend (domain distortion, Inigo Quilez, "Domain warping",

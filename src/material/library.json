@@ -5082,7 +5082,7 @@
         "input": {
           "node": "wave",
           "shape": "sine",
-          "frequency": 14,
+          "frequency": 6,
           "input": {
             "node": "add",
             "inputs": [
@@ -5096,15 +5096,15 @@
               },
               {
                 "node": "warp",
-                "amount": 0.4,
-                "scale": 3,
+                "amount": 0.9,
+                "scale": 1.5,
                 "seed": 642,
                 "octaves": 2,
                 "input": {
                   "node": "fractal",
                   "scale": 1.5,
                   "seed": 641,
-                  "amplitude": 0.15,
+                  "amplitude": 0.3,
                   "smallest": 0.02
                 }
               }
@@ -5608,41 +5608,41 @@
         [
           0,
           [
-            0.12,
-            0.115,
-            0.11
+            0.102,
+            0.098,
+            0.093
           ]
         ],
         [
           0.3,
           [
-            0.2,
-            0.19,
-            0.18
+            0.17,
+            0.162,
+            0.153
           ]
         ],
         [
           0.6,
           [
-            0.27,
-            0.26,
-            0.24
+            0.23,
+            0.221,
+            0.204
           ]
         ],
         [
           0.85,
           [
-            0.33,
-            0.3,
-            0.27
+            0.281,
+            0.255,
+            0.23
           ]
         ],
         [
           1,
           [
-            0.38,
-            0.34,
-            0.3
+            0.323,
+            0.289,
+            0.255
           ]
         ]
       ],
@@ -7271,7 +7271,7 @@
     "overlay": true,
     "doc": "Overlay: wet ground or rock, darker and glossy under a film of water: on a landscape where its wetness says (water gathers in hollows), elsewhere \"amount\" of it in patches.",
     "variables": {
-      "amount": 0.4,
+      "amount": 0.6,
       "where": {
         "node": "max",
         "inputs": [
@@ -7328,7 +7328,7 @@
           "mask": {
             "node": "multiply",
             "inputs": [
-              0.65,
+              0.8,
               "$where"
             ]
           }

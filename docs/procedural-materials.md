@@ -105,6 +105,53 @@ Overlays are `surface_layers`: the base's bump stays under them (dust lies on th
 relief), and a layer with its own bump adds it (moss cushions). Their masks read slope, aspect
 and altitude in the scene's directions, whichever way the object is turned, and noise in the
 object's own space.
+## Natural landscapes
+
+![Natural materials](material-library-natural.jpg)
+
+*The natural set (`scripts/material-gallery.py`): ground and rock as a patch of rough ground with a
+half-sunk boulder from eye height, beside hills a few hundred metres across from above; the
+natural overlays over a plain grey rock; bark on a trunk.*
+
+These are made for the landscapes: each has structure at every scale from centimetres (crystals,
+grains, ripples, lichen) through metres (stains, streaks, colonies of lichen, stones) to tens of
+metres (tone), all filtered to the pixel, so the same material serves a boulder at your feet and
+a cliff a kilometre away, and far off becomes its true average colour rather than noise. They
+read the scene's slope and aspect (water streaks run down steep faces, lichen and moss grow on
+what faces up, algae on the shaded side of a trunk) and, on a landscape, its fields.
+
+| Preset | |
+|---|---|
+| `granite_outcrop` | Weathered granite: grey crystalline rock, mottled, iron-stained, black water streaks down steep faces, grey crustose and yellow-green map lichen on what faces up. |
+| `limestone_cliff` | Pale grey crag, ochre where fresh, striped black by cyanobacteria where water runs, fluted by solution (karren) on steep faces, pitted on top. |
+| `gneiss` | Folded bands and lenses of pale quartz-feldspar and dark biotite. |
+| `schist` | Silvery grey-green, finely foliated, glittering with mica (each flake its own roughness). |
+| `scree` | Angular stones in three sizes (35, 11 and 3.5 cm) lying on each other with dark gaps, each its own shade, older ones with lichen. |
+| `river_gravel` | Rounded pebbles of many rocks on sand. |
+| `dune_sand` | Ripples 11 cm apart across the `wind` (a direction; phasor noise with a sawtooth profile: gentle upwind, steep downwind), heavy minerals dark in their troughs, smooth on slopes steeper than sand rests. |
+| `beach_sand` | Pale dry sand with shell fragments; below `waterline` (scene y, metres) dark, glossy and rippled by waves. |
+| `mudflat` | Wet glossy mud, water standing in hollows, cracked where it has dried. |
+| `oak_bark`, `pine_bark`, `birch_bark`, `beech_bark` | Furrowed ridges with algae on the side away from `shade`; plates and fissures; white with lenticels, black and rough below `rough_below` metres; smooth grey with lichen. Furrows run along y. |
+| `map_lichen` (overlay) | Rhizocarpon's yellow-green crusts, tiled by black cracks, in colonies on what faces the sky. |
+| `wet` (overlay) | Darker and glossy under water: where a landscape's `wetness` field says water gathers, elsewhere `amount` of it in patches. |
+
+`lichen`, `moss` and `rain_streaks` (above) belong here too.
+
+On a landscape, use them as the layers of its `surface_layers`, masked as before by its fields:
+
+```json
+"Ground": { "type": "surface_layers", "layers": [
+  { "material": { "type": "library", "name": "granite_outcrop" } },
+  { "material": { "type": "library", "name": "scree" },
+    "mask": { "node": "field", "field": "sediment", "from": 0.05, "to": 1 } },
+  { "material": { "type": "library", "name": "wet", "over": { "type": "library", "name": "mudflat" } },
+    "mask": { "node": "field", "field": "flow", "from": 5, "to": 6 } } ] }
+```
+
+Seen from a kilometre, centimetre detail only sets a material's average, so it is close to the
+ground (a figure on a path, a boulder in the foreground) that these show; from afar, it is the
+landscape's own layers and their masks that make it read.
+
 ## Patterns and colour maps
 
 Any colour (a lambertian's or plastic's `albedo`, a mix's `amount`, a roughness) can be a

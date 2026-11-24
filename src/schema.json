@@ -9344,11 +9344,11 @@
           "kind": "enum",
           "required": true,
           "doc": "The preset.",
-          "options": ["carrara_marble", "nero_marquina", "travertine", "granite", "slate", "concrete", "terrazzo", "oak", "pine", "walnut", "brushed_steel", "hammered_copper", "rusted_iron", "verdigris_copper", "galvanized_steel", "leather", "cork", "car_paint", "linen", "terracotta", "brick_wall", "dust", "grime", "rain_streaks", "moss", "lichen", "mud_splash", "worn_edges", "grey_granite", "weathered_granite", "black_galaxy", "quartzite", "engineered_quartz", "quartz_crystal", "rose_quartz", "calacatta_marble", "verde_marble", "limestone", "basalt", "dried_mud", "asphalt", "glazed_tiles", "plaster", "weathered_oak", "maple", "ebony", "aged_bronze", "cast_iron", "chipped_paint"]
+          "options": ["aged_bronze", "asphalt", "basalt", "beach_sand", "beech_bark", "birch_bark", "black_galaxy", "brick_wall", "brushed_steel", "calacatta_marble", "car_paint", "carrara_marble", "cast_iron", "chipped_paint", "concrete", "cork", "dried_mud", "dune_sand", "dust", "ebony", "engineered_quartz", "galvanized_steel", "glazed_tiles", "gneiss", "granite", "granite_outcrop", "grey_granite", "grime", "hammered_copper", "leather", "lichen", "limestone", "limestone_cliff", "linen", "map_lichen", "maple", "moss", "mud_splash", "mudflat", "nero_marquina", "oak", "oak_bark", "pine", "pine_bark", "plaster", "quartz_crystal", "quartzite", "rain_streaks", "river_gravel", "rose_quartz", "rusted_iron", "schist", "scree", "slate", "terracotta", "terrazzo", "travertine", "verde_marble", "verdigris_copper", "walnut", "weathered_granite", "weathered_oak", "wet", "worn_edges"]
         },
         {"name": "scale", "kind": "number", "default": 1, "doc": "Size of every pattern in the material, and of its relief."},
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Moves every pattern to another part of its noise, so objects of one material differ."},
-        {"name": "over", "kind": "material", "default": null, "doc": "For an overlay (dust, grime, rain_streaks, moss, lichen, mud_splash, worn_edges): the material it lies over, a name or a definition."}
+        {"name": "over", "kind": "material", "default": null, "doc": "For an overlay (dust, grime, rain_streaks, moss, lichen, map_lichen, wet, mud_splash, worn_edges): the material it lies over, a name or a definition."}
       ],
       "example": {"type": "library", "name": "oak"}
     },

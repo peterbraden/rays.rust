@@ -584,8 +584,14 @@
               "name": "pattern",
               "kind": "enum",
               "default": null,
-              "doc": "The pattern of bumps; required unless \"map\" is given.",
+              "doc": "The pattern of bumps; required unless \"map\" or \"graph\" is given.",
               "options": ["bumps", "dents", "wrinkles", "ripples", "waves"]
+            },
+            {
+              "name": "graph",
+              "kind": "json",
+              "default": null,
+              "doc": "In place of a pattern: a function graph giving the height in scene units (times amount, then 1 by default), filtered to the pixel's footprint; the same graph as a colour map's pattern makes the relief follow the colours. A material's own \"normal\" takes the same fields and goes with the material."
             },
             {"name": "amount", "kind": "number", "default": 0.5, "doc": "How strongly the normal is tilted."},
             {
@@ -8559,7 +8565,7 @@
           "name": "albedo",
           "kind": "color",
           "required": true,
-          "doc": "Fraction of light reflected, per channel. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}."
+          "doc": "Fraction of light reflected, per channel. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}, or a pattern coloured by a map, {\"pattern\": graph, \"color_map\": [[value, colour or texture], ...], \"interpolation\": linear|smooth|step} (docs/procedural-materials.md)."
         }
       ],
       "example": {"type": "lambertian", "albedo": [0.8, 0.3, 0.2]}
@@ -8588,7 +8594,7 @@
           "name": "albedo",
           "kind": "color",
           "required": true,
-          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}."
+          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}, or a pattern coloured by a map, {\"pattern\": graph, \"color_map\": [[value, colour or texture], ...], \"interpolation\": linear|smooth|step} (docs/procedural-materials.md)."
         },
         {
           "name": "refractive_index",
@@ -8596,7 +8602,7 @@
           "default": 1.5,
           "doc": "Index of the coat, setting how much it reflects."
         },
-        {"name": "roughness", "kind": "number", "default": 0, "doc": "Blur of the coat's reflection."}
+        {"name": "roughness", "kind": "json", "default": 0, "doc": "Blur of the coat's reflection: a number, or a texture (eg. a pattern with a color_map of numbers) whose grey level it is."}
       ],
       "example": {"type": "plastic", "albedo": [0.8, 0.2, 0.2]}
     },
@@ -9100,7 +9106,7 @@
           "default": [0.9, 0.9, 0.9],
           "doc": "Without metal, eta or k: the colour reflected at normal incidence."
         },
-        {"name": "roughness", "kind": "number", "default": 0, "doc": "GGX roughness; 0 is a mirror."},
+        {"name": "roughness", "kind": "json", "default": 0, "doc": "GGX roughness; 0 is a mirror. Or a texture whose grey level scales roughness_u and roughness_v (each 1 unless given)."},
         {
           "name": "roughness_u",
           "kind": "number",
@@ -9126,7 +9132,7 @@
           "name": "albedo",
           "kind": "color",
           "default": [0.5, 0.5, 0.5],
-          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}."
+          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}, or a pattern coloured by a map, {\"pattern\": graph, \"color_map\": [[value, colour or texture], ...], \"interpolation\": linear|smooth|step} (docs/procedural-materials.md)."
         },
         {"name": "roughness", "kind": "number", "default": 0, "doc": "Roughness of the coat."},
         {"name": "refractive_index", "kind": "number", "default": 1.5, "doc": "Index of the coat."},
@@ -9504,6 +9510,24 @@
         {"name": "wetness", "kind": "number", "default": 0, "doc": "Darker and glossier.", "min": 0, "max": 1}
       ],
       "example": {"type": "soil", "preset": "loam"}
+    },
+    "library": {
+      "label": "Library material",
+      "group": "Other",
+      "doc": "A ready-made procedural material (src/material/library.json, docs/procedural-materials.md): stones, woods, metals and more, patterns sized in metres, and overlays that weather another material. A field naming one of the preset's variables sets it (amount, color, palette, tint...); any other field replaces the preset's own.",
+      "fields": [
+        {
+          "name": "name",
+          "kind": "enum",
+          "required": true,
+          "doc": "The preset.",
+          "options": ["aged_bronze", "asphalt", "basalt", "beach_sand", "beech_bark", "birch_bark", "black_galaxy", "brick_wall", "brushed_steel", "calacatta_marble", "car_paint", "carrara_marble", "cast_iron", "chipped_paint", "concrete", "cork", "dried_mud", "dune_sand", "dust", "ebony", "engineered_quartz", "galvanized_steel", "glazed_tiles", "gneiss", "granite", "granite_outcrop", "grey_granite", "grime", "hammered_copper", "leather", "lichen", "limestone", "limestone_cliff", "linen", "map_lichen", "maple", "moss", "mud_splash", "mudflat", "nero_marquina", "oak", "oak_bark", "pine", "pine_bark", "plaster", "quartz_crystal", "quartzite", "rain_streaks", "river_gravel", "rose_quartz", "rusted_iron", "schist", "scree", "slate", "terracotta", "terrazzo", "travertine", "verde_marble", "verdigris_copper", "walnut", "weathered_granite", "weathered_oak", "wet", "worn_edges"]
+        },
+        {"name": "scale", "kind": "number", "default": 1, "doc": "Size of every pattern in the material, and of its relief."},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Moves every pattern to another part of its noise, so objects of one material differ."},
+        {"name": "over", "kind": "material", "default": null, "doc": "For an overlay (dust, grime, rain_streaks, moss, lichen, map_lichen, wet, mud_splash, worn_edges): the material it lies over, a name or a definition."}
+      ],
+      "example": {"type": "library", "name": "oak"}
     },
     "mix": {
       "label": "Mix",

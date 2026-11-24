@@ -30,7 +30,7 @@
 //! gradually as the simulation does, and detail finer than the context's filter (the spacing
 //! the surface is diced to) is left out, so it doesn't alias.
 
-use crate::graph::{cells, fractal, CellStyle, Context, Field, FractalStyle};
+use crate::graph::{cells, fractal, CellStyle, Context, Field, FractalStyle, Metric};
 use crate::noise::SeededNoise;
 use crate::terrain::geology::Rock;
 
@@ -174,7 +174,7 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
     };
     let stones = |style: CellStyle, scale: f64, salt: u32| {
         let k = keep(scale);
-        if k <= 0. { 0. } else { k * cells(seed ^ salt, style, scale, false, c) }
+        if k <= 0. { 0. } else { k * cells(seed ^ salt, style, scale, false, Metric::Euclidean, 1., c) }
     };
 
     let Kinds { ice, bare, scree, glacial, alluvium, blown, pan } = Kinds::at(c, f, slope);

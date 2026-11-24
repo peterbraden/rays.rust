@@ -16,18 +16,26 @@ use std::sync::Arc;
 /// forest demo, against the octree this replaced, the trees tested per ray fell from 101 to 18
 /// and the triangles from 2600 to 75. It passes the range searched on to its items, so a tree
 /// stops at the nearest hit found so far elsewhere, and a shadow ray stops at the first leaf.
+///
+/// The items are kept by value, in the order of the BVH's leaves, rather than as the `Arc`s
+/// they are given in: a leaf's triangles then lie together in memory, where as separate
+/// allocations each test of one was a cache miss (the Christmas tree's shadow rays spent a
+/// fifth of the render in them).
 pub struct GeometrySet<T: Geometry + Send> {
     bvh: Bvh,
-    items: Vec<Arc<T>>,
+    items: Vec<T>,
     primitives: u64,
 }
 
-impl<T: Geometry + Send> GeometrySet<T> {
+impl<T: Geometry + Send + Clone> GeometrySet<T> {
     pub fn new(items: &[Arc<T>]) -> GeometrySet<T> {
         let primitives = items.iter().map(|t| t.primitives()).sum();
-        let (bvh, items) = Bvh::build(items.to_vec(), |t| t.bounds());
+        let (bvh, items) = Bvh::build(items.iter().map(|t| (**t).clone()).collect(), |t| t.bounds());
         GeometrySet { bvh, items, primitives }
     }
+}
+
+impl<T: Geometry + Send> GeometrySet<T> {
 
     pub fn len(&self) -> usize {
         self.items.len()

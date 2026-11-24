@@ -27,6 +27,7 @@ use crate::na::{Matrix3, Matrix4, Vector3};
 ///
 /// The inverse and the normal matrix are computed once here rather than per ray; inverting a 4x4
 /// matrix for every ray tested against every instance would dominate the cost.
+#[derive(Clone)]
 pub struct Transform {
     pub item: Arc<dyn Geometry + Sync + Send>,
     pub transform: Affine3<f64>,

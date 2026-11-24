@@ -563,8 +563,15 @@ pub fn levels(courses: &[Course], raw: &[Vec<f64>], lake: &[Vec<Option<f64>>]) -
     out
 }
 
-/// Where the ground rises beside the water, its slope (rise over run).
+/// Where the ground rises beside the water, its slope (rise over run): the bank up to the
+/// floodplain.
 const BANK: f64 = 1.;
+/// The floodplain each side of a river, in channel widths beyond its bank (a model choice):
+/// flat at the bankfull level, where the river overflows in flood.
+const FLOODPLAIN: f64 = 3.;
+/// Beyond the floodplain, the ground rises back to the drawn ground at this slope (rise over
+/// run): the valley's side, or a terrace's scarp, gentler than the bank.
+const VALLEY_SIDE: f64 = 0.5;
 /// The water's surface reaches this much beyond its edge, as a fraction of the half width and
 /// in metres, to tuck under the banks: enough that its straight edges between nodes stay under
 /// the banks round a bend (the banks rise at 1:1 beyond the edge, so it is hidden there).
@@ -585,10 +592,14 @@ impl Segment {
         (l(self.a.node.half, self.b.node.half), l(self.a.level, self.b.level), 1.5 * l(self.a.node.depth, self.b.node.depth))
     }
 
+    /// How high the banks stand over the water at fraction `t` along: to the bankfull level.
+    fn freeboard(&self, t: f64) -> f64 { self.a.node.freeboard + (self.b.node.freeboard - self.a.node.freeboard) * t }
+
     /// How far beyond its centreline the carving can reach (or a lake's surface).
     fn reach(&self) -> f64 {
         if self.a.kind == Kind::Lake || self.b.kind == Kind::Lake { return self.a.node.half.max(self.b.node.half) + SHORE; }
-        let s = |v: &Vertex| v.node.half * (1. + BANK_SAMPLE.0) + BANK_SAMPLE.1 + (v.node.freeboard + v.cut + 2.) / BANK;
+        let s = |v: &Vertex| v.node.half * (1. + BANK_SAMPLE.0) + BANK_SAMPLE.1 + v.node.freeboard / BANK
+            + FLOODPLAIN * 2. * v.node.half + (v.cut + 2.) / VALLEY_SIDE;
         s(&self.a).max(s(&self.b))
     }
 }
@@ -662,7 +673,12 @@ impl Carve {
             let (half, level, deepest) = s.at(t);
             let deepest = deepest.max(least);
             let wide = half + widen.min(TUCK.0 * half + 0.5 * TUCK.1);
-            let h = if r < wide { level - deepest * (1. - (r / wide).powi(2)) } else { level + (r - wide) * BANK };
+            // The channel; its bank up to the bankfull level; the floodplain, flat at that
+            // level; and the valley's side rising beyond it.
+            let freeboard = s.freeboard(t);
+            let plain = wide + freeboard / BANK + FLOODPLAIN * 2. * half;
+            let h = if r < wide { level - deepest * (1. - (r / wide).powi(2)) }
+                else { level + ((r - wide) * BANK).min(freeboard) + (r - plain).max(0.) * VALLEY_SIDE };
             nearest.insert(s.course, (r, h, half));
         }
         let mut best: Option<(f64, f64)> = None;
@@ -1160,9 +1176,14 @@ mod tests {
         let (centre, half) = carve.surface([50., 0.]).unwrap();
         assert_eq!(half, 5.);
         assert!((centre - 98.5).abs() < 1e-9, "{}", centre);
-        // The bed meets the water's edge at the level, and the bank rises beyond it.
+        // The bed meets the water's edge at the level, and the bank rises beyond it to the
+        // bankfull level (half a metre up); then the floodplain, flat at that level for three
+        // widths; then the valley's side, rising 1 in 2.
         assert!((carve.surface([50., 5.]).unwrap().0 - 100.).abs() < 1e-9);
-        assert!((carve.surface([50., 8.]).unwrap().0 - 103.).abs() < 1e-9);
+        assert!((carve.surface([50., 5.25]).unwrap().0 - 100.25).abs() < 1e-9);
+        assert!((carve.surface([50., 8.]).unwrap().0 - 100.5).abs() < 1e-9);
+        assert!((carve.surface([50., 35.]).unwrap().0 - 100.5).abs() < 1e-9);
+        assert!((carve.surface([50., 45.5]).unwrap().0 - 105.5).abs() < 1e-9);
         assert!(carve.surface([50., 200.]).is_none());
         // Ground above the water is cut down to the bed, but only where the mesh shows it.
         assert!((carve.carved([50., 0.], 104., 1.) - 98.5).abs() < 1e-9);

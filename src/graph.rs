@@ -173,16 +173,22 @@ pub struct Context<'a> {
     /// before displacement: `talus` then finds its blocks' footing below it.
     pub lifted: bool,
     pub fields: Option<&'a dyn Fields>,
+    /// The scene, for nodes that look about them (`occlusion`); None where there is none.
+    pub scene: Option<&'a crate::scene::Scene>,
+    /// Where `p` and `normal` were mapped into an object's frame (`in_frame`): the point and
+    /// normal in the scene, which `slope`, `aspect`, `altitude` and `occlusion` read, so that
+    /// dust settles on what faces up in the scene, whichever way its object is turned.
+    pub scene_frame: Option<(Vector3<f64>, Vector3<f64>)>,
 }
 
 impl<'a> Context<'a> {
     pub fn new(p: Vector3<f64>, normal: Vector3<f64>, filter: f64) -> Context<'a> {
-        Context { p, normal, filter, lifted: false, fields: None }
+        Context { p, normal, filter, lifted: false, fields: None, scene: None, scene_frame: None }
     }
 
     /// At a shading point on the displaced surface, unfiltered (see `lifted`).
     pub fn lifted(p: Vector3<f64>, normal: Vector3<f64>) -> Context<'a> {
-        Context { p, normal, filter: 0., lifted: true, fields: None }
+        Context { p, normal, filter: 0., lifted: true, fields: None, scene: None, scene_frame: None }
     }
 
     /// At a shading point: where a displaced surface's point was displaced from, with the
@@ -200,8 +206,8 @@ impl<'a> Context<'a> {
     /// where the surface wasn't displaced (a displaced surface's filter is its vertices'
     /// spacing): what textures and bumps read, so detail finer than a pixel fades to its mean
     /// rather than aliasing.
-    pub fn at_hit_filtered(i: &'a crate::intersection::Intersection, s: &crate::scene::Scene) -> Context<'a> {
-        let c = Context::at_hit(i);
+    pub fn at_hit_filtered(i: &'a crate::intersection::Intersection, s: &'a crate::scene::Scene) -> Context<'a> {
+        let c = Context { scene: Some(s), ..Context::at_hit(i) };
         if c.filter > 0. {
             return c;
         }
@@ -220,13 +226,14 @@ impl<'a> Context<'a> {
             p: frame.transform_point(&crate::na::Point3::from(self.p)).coords,
             normal: (normals * self.normal).try_normalize(1e-12).unwrap_or(self.normal),
             filter: self.filter * linear.determinant().abs().cbrt(),
+            scene_frame: Some(self.scene_frame.unwrap_or((self.p, self.normal))),
             ..self
         }
     }
 
     /// As `at_hit_filtered`, in the hit object's own space (`Geometry::pattern_frame`), where
     /// solid textures are read so that they go with their object.
-    pub fn at_hit_in_object(i: &'a crate::intersection::Intersection, s: &crate::scene::Scene) -> Context<'a> {
+    pub fn at_hit_in_object(i: &'a crate::intersection::Intersection, s: &'a crate::scene::Scene) -> Context<'a> {
         let c = Context::at_hit_filtered(i, s);
         match i.object.geometry.pattern_frame(&i.point, i.face) {
             Some(f) => c.in_frame(&f),
@@ -234,19 +241,30 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// The same, in this scene (for `occlusion`).
+    pub fn with_scene(self, scene: Option<&'a crate::scene::Scene>) -> Context<'a> {
+        Context { scene, ..self }
+    }
+
     /// The same, on a surface with these fields.
     pub fn with_fields(self, fields: Option<&'a dyn Fields>) -> Context<'a> {
         Context { fields, ..self }
     }
 
+    /// The point and normal in the scene (see `scene_frame`).
+    pub fn in_scene(&self) -> (Vector3<f64>, Vector3<f64>) {
+        self.scene_frame.unwrap_or((self.p, self.normal))
+    }
+
     /// The local up and height (`Fields::vertical`), where y isn't up.
     fn vertical(&self) -> Option<(Vector3<f64>, f64)> {
-        self.fields.and_then(|f| f.vertical(&self.p))
+        self.fields.and_then(|f| f.vertical(&self.in_scene().0))
     }
 
     /// The surface's slope, degrees from level.
     pub fn slope(&self) -> f64 {
-        let up = self.vertical().map_or(self.normal.y, |(up, _)| self.normal.dot(&up));
+        let normal = self.in_scene().1;
+        let up = self.vertical().map_or(normal.y, |(up, _)| normal.dot(&up));
         up.clamp(-1., 1.).acos().to_degrees()
     }
 }
@@ -281,6 +299,9 @@ enum Op {
     Wave { input: Box<Node>, shape: crate::patterns::Wave, frequency: f64, phase: f64, exponent: f64 },
     Checker { size: f64, plan: bool },
     Brick { size: Vector3<f64>, mortar: f64, style: crate::patterns::BrickStyle, seed: u64 },
+    /// The share of short rays about the hit that meet something within `radius`: from outside,
+    /// crevices and corners (`edges` false); from inside, convex edges (`edges` true).
+    Occlusion { radius: f64, rays: u32, edges: bool, default: f64 },
     /// `input` read at `inverse` (p - translate): moved, turned and stretched.
     Transform { input: Box<Node>, inverse: crate::na::Matrix3<f64>, normals: crate::na::Matrix3<f64>, translate: Vector3<f64>, shrink: f64 },
     Slope { from: f64, to: f64, breakup: Option<Box<Node>> },
@@ -415,18 +436,22 @@ impl Node {
                 let v = shape.filtered(t, w);
                 if *exponent == 1. { v } else { v.powf(*exponent) }
             },
+            Op::Occlusion { radius, rays, edges, default } => match c.scene {
+                Some(s) => occlusion(s, c, *radius, *rays, *edges),
+                None => *default,
+            },
             Op::Checker { size, plan } => crate::patterns::checker(c.p, *size, c.filter, *plan),
             Op::Brick { size, mortar, style, seed } => crate::patterns::brick(c.p, *size, *mortar, c.filter, *style, *seed),
             Op::Transform { input, inverse, normals, translate, shrink } => {
                 let n = (normals * c.normal).try_normalize(1e-12).unwrap_or(c.normal);
-                input.eval(&Context { p: inverse * (c.p - translate), normal: n, filter: c.filter * shrink, ..*c })
+                input.eval(&Context { p: inverse * (c.p - translate), normal: n, filter: c.filter * shrink, scene_frame: Some(c.in_scene()), ..*c })
             },
             Op::Slope { from, to, breakup } => {
                 let s = c.slope() + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, s)
             },
             Op::Altitude { from, to, breakup } => {
-                let h = c.vertical().map_or(c.p.y, |(_, h)| h) + breakup.as_ref().map_or(0., |b| b.eval(c));
+                let h = c.vertical().map_or(c.in_scene().0.y, |(_, h)| h) + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, h)
             },
             Op::Aspect { direction, from, to, breakup } => {
@@ -435,7 +460,7 @@ impl Node {
                     Some((up, _)) => (direction - up * direction.dot(&up)).try_normalize(1e-12).unwrap_or(*direction),
                     None => *direction,
                 };
-                let a = c.normal.dot(&facing) + breakup.as_ref().map_or(0., |b| b.eval(c));
+                let a = c.in_scene().1.dot(&facing) + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, a)
             },
             Op::Biome { of, default } => match c.fields.and_then(|f| f.biome(&c.p)) {
@@ -544,6 +569,7 @@ impl Op {
             Op::Rings { .. } | Op::Spherical { .. } => (0., f64::INFINITY),
             Op::Wave { exponent, .. } => if *exponent >= 0. { (0., 1.) } else { (0., f64::INFINITY) },
             Op::Checker { .. } | Op::Brick { .. } => (0., 1.),
+            Op::Occlusion { default, .. } => (default.min(0.), default.max(1.)),
             Op::Transform { input, .. } => input.range(),
             Op::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
             // Hardness lies in [0.175, 1].
@@ -606,6 +632,7 @@ impl Op {
             Op::Gabor { noise, .. } => return noise.finest(),
             Op::Gradient { .. } | Op::Rings { .. } | Op::Spherical { .. } => return f64::INFINITY,
             Op::Checker { size, .. } => return *size,
+            Op::Occlusion { radius, .. } => return *radius,
             Op::Brick { mortar, .. } => return *mortar,
             Op::Wave { input, frequency, .. } => {
                 // A cycle is 1 / frequency of the input; how far that is depends on the input.
@@ -728,6 +755,34 @@ fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, metric: Metric, ji
         },
     };
     v.clamp(0., 1.)
+}
+
+/// The share of `rays` short rays (cosine distributed about the normal, `radius` long) that meet
+/// something: cast outwards, how enclosed the point is, as dirt gathers in crevices and where
+/// objects meet (ambient occlusion within a radius, as renderers' "dirt" and "cavity" maps);
+/// cast inwards from just under the surface, how near it is to a convex edge, where the inward
+/// rays soon leave the object again (worn and chipped edges). The directions are hashed from the
+/// point, so they are the same wherever the point is evaluated (a bump's finite differences
+/// agree) and differ from point to point, so averaging over a pixel converges.
+fn occlusion(s: &crate::scene::Scene, c: &Context, radius: f64, rays: u32, edges: bool) -> f64 {
+    let (p, n) = c.in_scene();
+    let n = if edges { -n } else { n };
+    let (u, v) = tangents(&n);
+    let bits = |x: f64| (x * 4096.).floor() as i64;
+    let seed = (bits(p.x), bits(p.y), bits(p.z));
+    let start = p + n * (1e-4 * radius.max(1e-3)).max(1e-6);
+    let mut hits = 0;
+    for k in 0 .. rays {
+        let (a, b) = (hash01(seed.0, seed.1, seed.2, 2 * k), hash01(seed.0, seed.1, seed.2, 2 * k + 1));
+        // Cosine distributed (Malley's method).
+        let (r, phi) = (a.sqrt(), 2. * std::f64::consts::PI * b);
+        let d = u * (r * phi.cos()) + v * (r * phi.sin()) + n * (1. - a).max(0.).sqrt();
+        let ray = crate::ray::Ray { ro: start, rd: d };
+        if s.objects.occluded(&ray, radius, 0.) {
+            hits += 1;
+        }
+    }
+    hits as f64 / rays as f64
 }
 
 /// `v` stepped in `step`s, each riser `sharpness` of the way to vertical.
@@ -960,6 +1015,15 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             shape: crate::patterns::Wave::parse(o["shape"].as_str().unwrap_or("sine"))?,
             frequency: num(o, "frequency", 1.)?, phase: num(o, "phase", 0.)?, exponent: num(o, "exponent", 1.)?,
         },
+        "occlusion" => {
+            let edges = match o["style"].as_str().unwrap_or("cavity") {
+                "cavity" => false,
+                "edges" => true,
+                s => return Err(format!("unknown occlusion style \"{}\": cavity or edges", s)),
+            };
+            Op::Occlusion { radius: positive(o, "radius", 0.05)?, rays: num(o, "rays", 6.)?.clamp(1., 64.) as u32, edges,
+                default: num(o, "default", 0.)? }
+        },
         "checker" => Op::Checker { size: positive(o, "size", 1.)?, plan },
         "brick" => {
             let size = vec3(o, "size", Vector3::new(0.215, 0.065, 0.1025))?;
@@ -1054,6 +1118,38 @@ mod tests {
 
     fn graph(v: Value) -> Graph {
         Graph::parse(&v).unwrap()
+    }
+
+    #[test]
+    fn test_occlusion_finds_crevices_and_edges() {
+        let s = crate::scenefile::SceneFile::from_string(r#"{
+            "width": 4, "height": 2, "background": [0, 0, 0],
+            "camera": { "location": [0, 1, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": {}, "objects": [
+                { "type": "plane", "y": 0 },
+                { "type": "box", "min": [-1, 0, -1], "max": [1, 1, 1] } ] }"#.to_string());
+        let at = |p: Vector3<f64>, n: Vector3<f64>| Context { scene: Some(&s), ..Context::new(p, n, 0.) };
+        let cavity = graph(json!({"node": "occlusion", "radius": 0.3, "rays": 32}));
+        // On the floor beside the box, rays reach the box; far off, nothing.
+        assert!(cavity.eval(&at(Vector3::new(1.02, 0., 0.), Vector3::y())) > 0.2);
+        assert_eq!(cavity.eval(&at(Vector3::new(5., 0., 0.), Vector3::y())), 0.);
+        let edges = graph(json!({"node": "occlusion", "style": "edges", "radius": 0.2, "rays": 32}));
+        // On the box's top, near its edge, inward rays leave through its side.
+        assert!(edges.eval(&at(Vector3::new(0.97, 1., 0.), Vector3::y())) > 0.2);
+        assert_eq!(edges.eval(&at(Vector3::new(0., 1., 0.), Vector3::y())), 0.);
+        // Without a scene, the default.
+        assert_eq!(graph(json!({"node": "occlusion", "default": 0.4})).eval(&at(Vector3::zeros(), Vector3::y()).with_scene(None)), 0.4);
+    }
+
+    #[test]
+    fn test_slope_is_the_scenes_in_an_objects_frame() {
+        // An object turned on its side: its own up is the scene's x. A level face in the scene
+        // stays level for `slope`, though its normal in the object's frame is horizontal.
+        let turned = crate::na::Affine3::from_matrix_unchecked(crate::na::Rotation3::from_euler_angles(0., 0., -std::f64::consts::FRAC_PI_2).to_homogeneous());
+        let c = Context::new(Vector3::new(0., 1., 0.), Vector3::y(), 0.).in_frame(&turned);
+        assert!((c.normal - Vector3::y()).norm() > 0.5);
+        assert!(c.slope().abs() < 1e-9);
+        assert!((graph(json!({"node": "altitude", "from": 0, "to": 2})).eval(&c) - 0.5).abs() < 1e-9);
     }
 
     #[test]

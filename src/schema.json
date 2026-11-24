@@ -153,9 +153,14 @@
           "kind": "enum",
           "default": "perspective",
           "doc": "The kind of camera.",
-          "options": ["perspective", "orthographic", "spherical", "realistic"]
+          "options": ["perspective", "orthographic", "isometric", "spherical", "realistic"]
         },
-        {"name": "location", "kind": "vec3", "required": true, "doc": "Position of the camera."},
+        {
+          "name": "location",
+          "kind": "vec3",
+          "default": null,
+          "doc": "Position of the camera. Required, except by isometric, which takes only its distance from lookat."
+        },
         {
           "name": "lookat",
           "kind": "vec3",
@@ -206,7 +211,25 @@
           "name": "height",
           "kind": "number",
           "default": null,
-          "doc": "Orthographic: height of the rectangle seen, scene units; default what the perspective camera sees at lookat."
+          "doc": "Orthographic: height of the rectangle seen, scene units; default what the perspective camera sees at lookat. Required by isometric."
+        },
+        {
+          "name": "azimuth",
+          "kind": "number",
+          "default": 45,
+          "doc": "Isometric: the direction the camera looks from, degrees round up from x towards z."
+        },
+        {
+          "name": "elevation",
+          "kind": "number",
+          "default": 35.264389682754654,
+          "doc": "Isometric: the camera's angle above the ground, degrees; the default, atan(1/√2), is true isometric, 30 gives pixel art's 2:1 diamonds, 90 a plan."
+        },
+        {
+          "name": "distance",
+          "kind": "number",
+          "default": null,
+          "doc": "Isometric: how far back from lookat the view starts; default the distance of location, or twice the height. Nothing nearer is seen."
         },
         {
           "name": "mapping",

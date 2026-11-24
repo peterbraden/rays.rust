@@ -8,7 +8,7 @@
 //! - `ThinLensCamera`: perspective, through a thin lens of radius `aperture` focused at the
 //!   distance of the point looked at (PBR section 5.2.3); a pinhole when the aperture is zero.
 //! - `OrthographicCamera`: parallel rays from a rectangle (PBR section 5.2.1), for plans and
-//!   elevations.
+//!   elevations; and, looking along `isometric_direction`, isometric and dimetric views.
 //! - `SphericalCamera`: every direction round the camera, mapped to the image
 //!   equirectangularly or by an equal-area mapping (PBR section 5.3).
 //! - `lens::RealisticCamera`: rays traced through a real lens's elements (PBR section 5.3).
@@ -240,6 +240,25 @@ impl Camera for OrthographicCamera {
     }
 }
 
+/// The elevation of an isometric view, degrees: atan(1 / √2), at which the three axes are
+/// foreshortened alike and drawn 120° apart.
+pub const ISOMETRIC_ELEVATION: f64 = 35.264_389_682_754_654;
+
+/// The unit vector from the point looked at towards an axonometric camera, `elevation` degrees
+/// above the plane at right angles to `up` and `azimuth` degrees round `up` from the scene's x
+/// axis towards its z axis (for a y-up scene; for another `up`, from x as seen in that plane, or
+/// z if `up` is x). The defaults of the scene file's isometric camera, 45° and
+/// `ISOMETRIC_ELEVATION`, look along -(1, 1, 1) at a y-up scene. At 30° the plane's squares are
+/// drawn as diamonds twice as wide as high: the "isometric" of pixel art, strictly dimetric.
+pub fn isometric_direction(up: Vector3<f64>, azimuth: f64, elevation: f64) -> Vector3<f64> {
+    let up = up.normalize();
+    let flat = |a: Vector3<f64>| a - up * a.dot(&up);
+    let e1 = if flat(Vector3::x()).norm() > 1e-6 { flat(Vector3::x()) } else { flat(Vector3::z()) }.normalize();
+    let e2 = e1.cross(&up);
+    let (az, el) = (azimuth.to_radians(), elevation.to_radians());
+    (e1 * az.cos() + e2 * az.sin()) * el.cos() + up * el.sin()
+}
+
 /// How a spherical camera lays the sphere of directions out on the image.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SphereMapping {
@@ -422,6 +441,31 @@ mod tests {
         assert_eq!(a.rd, b.rd);
         // 8 wide and 4 high; looking down +z, the image's right is -x.
         assert!(((b.ro - a.ro) - Vector3::new(-8., 4., 0.)).norm() < 1e-12, "{}", b.ro - a.ro);
+    }
+
+    #[test]
+    fn test_isometric_views_foreshorten_the_axes_alike() {
+        let d = isometric_direction(Vector3::y(), 45., ISOMETRIC_ELEVATION);
+        assert!((d - Vector3::new(1., 1., 1.) / 3f64.sqrt()).norm() < 1e-12, "{}", d);
+        let f = Frame::look_at(d * 10., Vector3::zeros(), Vector3::y());
+        // Each axis drawn the same length, 120° from the others, y straight up.
+        let drawn = |a: Vector3<f64>| (a.dot(&f.camx), a.dot(&f.camy));
+        let axes = [drawn(Vector3::x()), drawn(Vector3::y()), drawn(Vector3::z())];
+        for (i, a) in axes.iter().enumerate() {
+            assert!(((a.0 * a.0 + a.1 * a.1).sqrt() - (2f64 / 3.).sqrt()).abs() < 1e-12);
+            let b = axes[(i + 1) % 3];
+            assert!((a.0 * b.0 + a.1 * b.1 + 1. / 3.).abs() < 1e-12, "cos 120° times 2/3");
+        }
+        assert!(axes[1].0.abs() < 1e-12 && axes[1].1 > 0.);
+        // At 30°, a square on the ground is drawn twice as wide as it is high.
+        let d = isometric_direction(Vector3::y(), 45., 30.);
+        let f = Frame::look_at(d, Vector3::zeros(), Vector3::y());
+        let diagonal = |a: Vector3<f64>| (a.dot(&f.camx).abs(), a.dot(&f.camy).abs());
+        let (w, h) = (diagonal(Vector3::new(1., 0., -1.)).0, diagonal(Vector3::new(1., 0., 1.)).1);
+        assert!((w / h - 2.).abs() < 1e-12, "{}", w / h);
+        // Another up: z.
+        let d = isometric_direction(Vector3::z(), 0., 90.);
+        assert!((d - Vector3::z()).norm() < 1e-12);
     }
 
     #[test]

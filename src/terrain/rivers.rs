@@ -530,9 +530,11 @@ pub fn fills(raw: &[f64]) -> Vec<f64> {
 pub const SHORE: f64 = 250.;
 
 /// Courses' levels: at each node the lowest of `raw` (the ground there and on its banks, less
-/// the freeboard), the level upstream, and what tributaries bring; except in lakes (`lake`),
-/// out of which the river starts afresh (and whose levels are meaningless).
-pub fn levels(courses: &[Course], raw: &[Vec<f64>], lake: &[Vec<bool>]) -> Vec<Vec<f64>> {
+/// the freeboard), the level upstream, and what tributaries bring; in lakes (`lake`, each
+/// node's lake level if it is in one) the lake's level. So a river leaves a lake no higher
+/// than the lake, and a river running into a lake is backed up to its level where its own
+/// ground is lower (water can't stand below the lake it runs into).
+pub fn levels(courses: &[Course], raw: &[Vec<f64>], lake: &[Vec<Option<f64>>]) -> Vec<Vec<f64>> {
     let mut arrivals: Arrivals = HashMap::new();
     let mut out = Vec::with_capacity(courses.len());
     for ((c, raw), lake) in courses.iter().zip(raw).zip(lake) {
@@ -540,9 +542,14 @@ pub fn levels(courses: &[Course], raw: &[Vec<f64>], lake: &[Vec<bool>]) -> Vec<V
         let joins: HashMap<usize, usize> = c.joins.iter().map(|&(cell, j)| (j, cell)).collect();
         let mut levels = Vec::with_capacity(raw.len());
         for (j, &r) in raw.iter().enumerate() {
-            if lake[j] {
-                running = f64::INFINITY;
-                levels.push(r);
+            if let Some(level) = lake[j] {
+                running = level;
+                levels.push(level);
+                // Backwater: the river before it stands at least at the lake's level.
+                for x in levels.iter_mut().rev().skip(1) {
+                    if *x >= level { break; }
+                    *x = level;
+                }
                 continue;
             }
             running = running.min(r);
@@ -916,7 +923,8 @@ impl Rivers {
         // The rivers cut their channels (their levels never rising downstream), but for
         // stretches where filling would stand deep: those are lakes.
         let deep: Vec<Vec<bool>> = raw.iter().map(|r| lakes(r)).collect();
-        let cut = levels(&self.courses, &raw, &deep);
+        let spills: Vec<Vec<Option<f64>>> = raw.iter().zip(&deep).map(|(r, k)| fills(r).into_iter().zip(k).map(|(f, &k)| k.then_some(f)).collect()).collect();
+        let cut = levels(&self.courses, &raw, &spills);
         // Where water stands on the ground as drawn, the rivers' channels breaching it.
         let channels: Vec<(Point, f64)> = self.courses.iter().zip(&cut).zip(&deep)
             .flat_map(|((c, l), k)| c.nodes.iter().zip(l).zip(k).filter(|x| !*x.1).map(|((n, &l), _)| (n.p, l - 1.5 * n.depth)))
@@ -925,12 +933,8 @@ impl Rivers {
         let basins = self.basins.get_or_init(|| crate::terrain::basins::Basins::build(self.extent, self.step, 8. * self.step, |q| ground(q, self.step), &channels));
         // The rivers' levels again, through the lakes the basins hold at the lakes' levels.
         let lake_levels: Vec<Vec<Option<f64>>> = self.courses.iter().map(|c| c.nodes.iter().map(|n| basins.lake(n.p)).collect()).collect();
-        let lake: Vec<Vec<bool>> = lake_levels.iter().map(|l| l.iter().map(|x| x.is_some()).collect()).collect();
-        let mut lv = levels(&self.courses, &raw, &lake);
-        for (l, k) in lv.iter_mut().zip(&lake_levels) {
-            for (x, f) in l.iter_mut().zip(k) { if let Some(f) = f { *x = *f; } }
-        }
-        let mut kind: Vec<Vec<Kind>> = lake.iter().map(|l| l.iter().map(|&k| if k { Kind::Lake } else { Kind::River }).collect()).collect();
+        let mut lv = levels(&self.courses, &raw, &lake_levels);
+        let mut kind: Vec<Vec<Kind>> = lake_levels.iter().map(|l| l.iter().map(|k| if k.is_some() { Kind::Lake } else { Kind::River }).collect()).collect();
         let found = falls(&self.courses, &mut lv, &mut kind);
         let _ = self.carve.set(Carve::new(&self.courses, &lv, &drawn, &kind, found));
     }
@@ -1058,7 +1062,7 @@ mod tests {
         let b = course(2, 9, 2., &[(0., 10.), (10., 10.), (20., 0.)]);
         let c = course(9, 20, 5., &[(20., 0.), (30., 0.), (40., 0.)]);
         let raw = vec![vec![10., 12., 8.], vec![9., 7., 11.], vec![15., 6., 9.]];
-        let none: Vec<Vec<bool>> = raw.iter().map(|r| vec![false; r.len()]).collect();
+        let none: Vec<Vec<Option<f64>>> = raw.iter().map(|r| vec![None; r.len()]).collect();
         let l = levels(&[a, b, c], &raw, &none);
         assert_eq!(l[0], vec![10., 10., 8.]);
         assert_eq!(l[1], vec![9., 7., 7.]);
@@ -1132,11 +1136,20 @@ mod tests {
         let raw = [110., 108., 90., 88., 95., 104., 103., 101., 103., 100.];
         let k = lakes(&raw);
         assert_eq!(k, vec![false, false, true, true, true, false, false, false, false, false]);
-        // Out of the lake the river starts afresh at its own ground.
+        // Out of the lake the river runs on down its own ground; the lake stands at its spill.
         let c = course(1, 2, 1., &(0..10).map(|x| (x as f64, 0.)).collect::<Vec<_>>());
-        let l = levels(&[c], &[raw.to_vec()], &[k]);
+        let spill: Vec<Option<f64>> = fills(&raw).into_iter().zip(&k).map(|(f, &k)| k.then_some(f)).collect();
+        let l = levels(std::slice::from_ref(&c), &[raw.to_vec()], &[spill]);
+        assert_eq!(&l[0][2..5], &[104., 104., 104.]);
         assert_eq!(&l[0][5..], &[104., 103., 101., 101., 100.]);
         assert_eq!(&l[0][..2], &[110., 108.]);
+        // A lake whose level the drawn ground knows better (the basins'), lower than the ground
+        // the river leaves it over: the river leaves no higher than the lake. And upstream,
+        // where the river's ground is below the lake's level, the lake backs it up.
+        let raw = [110., 99., 98., 97., 97., 106., 105., 103., 103., 100.];
+        let lake = [None, None, Some(101.), Some(101.), Some(101.), None, None, None, None, None];
+        let l = levels(&[c], &[raw.to_vec()], &[lake.to_vec()]);
+        assert_eq!(l[0], vec![110., 101., 101., 101., 101., 101., 101., 101., 101., 100.]);
     }
 
     #[test]

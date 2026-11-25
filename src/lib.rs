@@ -112,6 +112,8 @@ pub mod shapes {
     pub mod group;
 }
 pub mod bvh;
+#[cfg(test)]
+mod bvh_measure;
 pub mod scenegraph;
 pub mod scene;
 pub mod scenefile;

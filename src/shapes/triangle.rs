@@ -77,6 +77,14 @@ pub(crate) struct IntersectionPoint {
 /// watertight test (JCGT 2(1), 2013, <https://jcgt.org/published/0002/01/05/>): a near-parallel
 /// ray gives a large 1/det, and the u, v bounds then reject it unless it really grazes the triangle.
 pub(crate) fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray) -> Option<IntersectionPoint> {
+    intersects_t(v0, v1, v2, r).map(|t| IntersectionPoint { dist: t * r.rd.norm(), point: r.ro + (r.rd * t) })
+}
+
+/// `intersects_dist`'s test alone: where the ray hits the triangle, in multiples of its
+/// direction (`ro + t rd`), for containers of many triangles that find the nearest of several
+/// before working out where it is (`shapes::mesh`).
+#[inline]
+pub(crate) fn intersects_t(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray) -> Option<f64> {
         let v0v1 = v1 - v0; 
         let v0v2 = v2 - v0; 
         let pvec = r.rd.cross(&v0v2); 
@@ -97,14 +105,10 @@ pub(crate) fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f6
 
         if v < 0. || u + v > 1. { return None }; 
                 
-        // t is in multiples of rd; scale to a world-space distance.
+        // t is in multiples of rd; callers scale it to a world-space distance.
         let t = v0v2.dot(&qvec) * inv_det; 
                      
-        if t > 0. {
-            let point = r.ro + (r.rd * t);
-            return Some(IntersectionPoint { dist: t * r.rd.norm(), point })
-        }
-        None
+        (t > 0.).then_some(t)
 }
 
 

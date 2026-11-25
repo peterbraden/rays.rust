@@ -25,7 +25,7 @@ use crate::na::{Vector3};
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
-use crate::shapes::triangle::{Triangle, IntersectionPoint, intersects_dist, interpolate_normal, triangle_bounds};
+use crate::shapes::triangle::{Triangle, IntersectionPoint, intersects_dist, intersects_t, interpolate_normal, triangle_bounds};
 use std::vec::Vec;
 use std::sync::Arc;
 use crate::bvh::Bvh;
@@ -160,21 +160,38 @@ impl IndexedTriangles {
         self.triangles[i].map(|v| self.positions[v as usize])
     }
 
-    fn hit(&self, r: &Ray, i: usize) -> Option<IntersectionPoint> {
-        let [v0, v1, v2] = self.vertices(i);
-        intersects_dist(v0, v1, v2, r)
-    }
-
     /// The nearest hit in `[min, max)`: the triangle and where it is hit. A triangle is hit at
     /// most once, so its one hit is the nearest beyond any `min`.
+    ///
+    /// A leaf's triangles are tested for where along the ray they are hit alone; only the
+    /// nearest has its point worked out (as `intersects_dist` would, to the bit).
     fn nearest(&self, r: &Ray, min: f64, max: f64) -> Option<(usize, IntersectionPoint)> {
-        self.bvh.nearest(r, min, max, |i, _| self.hit(r, i).map(|x| RawIntersection { part: 0,
-            face: 0, dist: x.dist, point: x.point, normal: Vector3::zeros(),
-        })).map(|(i, x)| (i, IntersectionPoint { dist: x.dist, point: x.point }))
+        let len = r.rd.norm();
+        let mut t_best = 0.;
+        self.bvh.nearest_in_leaves(r, min, max, |items, best| {
+            let mut found = None;
+            let mut best = best;
+            for i in items {
+                let [v0, v1, v2] = self.vertices(i);
+                if let Some(t) = intersects_t(v0, v1, v2, r) {
+                    let dist = t * len;
+                    if dist >= min && dist < best {
+                        best = dist;
+                        t_best = t;
+                        found = Some(i);
+                    }
+                }
+            }
+            found.map(|i| (i, RawIntersection { part: 0, face: 0, dist: best, point: Vector3::zeros(), normal: Vector3::zeros() }))
+        }).map(|(i, x)| (i, IntersectionPoint { dist: x.dist, point: r.ro + (r.rd * t_best) }))
     }
 
     fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
-        self.bvh.any_hit(r, min, max, |i| self.hit(r, i).is_some_and(|x| x.dist >= min && x.dist < max))
+        let len = r.rd.norm();
+        self.bvh.any_hit(r, min, max, |i| {
+            let [v0, v1, v2] = self.vertices(i);
+            intersects_t(v0, v1, v2, r).is_some_and(|t| { let dist = t * len; dist >= min && dist < max })
+        })
     }
 
     /// The geometric normal of triangle `i`, from its winding.

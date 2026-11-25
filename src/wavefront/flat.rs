@@ -27,7 +27,7 @@
 //! scheduler is for (plan.md sections 12 and 13; `scheduler`'s "CPU queue"): the stages cover
 //! what has been ported, and the rest is a queue of its own served by the renderer's code.
 
-use crate::bvh::Bvh;
+use crate::bvh::BinaryBvh;
 use crate::color::Color;
 use crate::environment::Distribution1D;
 use crate::intersection::RawIntersection;
@@ -236,7 +236,7 @@ pub struct FlatScene {
     /// Bounded primitives, in the BVH's order, with their materials.
     pub prims: Vec<Prim>,
     pub prim_material: Vec<u32>,
-    pub bvh: Bvh,
+    pub bvh: BinaryBvh,
     /// Unbounded primitives (planes), and their materials.
     pub planes: Vec<(Prim, u32)>,
     pub materials: Vec<FlatMaterial>,
@@ -377,7 +377,7 @@ impl FlatScene {
         if !problems.is_empty() {
             return Err(problems.join("; "));
         }
-        let (bvh, bounded) = Bvh::build(bounded, |(p, _, _)| p.bounds());
+        let (bvh, bounded) = BinaryBvh::build(bounded, |(p, _, _)| p.bounds());
         let prim_face = if hosts.is_empty() { Vec::new() } else { bounded.iter().map(|b| b.2).collect() };
         let (prims, prim_material): (Vec<Prim>, Vec<u32>) = bounded.into_iter().map(|(p, m, _)| (p, m)).unzip();
         // Emitters, by power: luminance times area (times two if two-sided).

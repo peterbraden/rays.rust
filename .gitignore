@@ -34,4 +34,5 @@ Cargo.lock
 # The GPU shader, built from shaders/ by build.rs (scripts/build-shaders.sh)
 /src/gpu/pathtrace.spv
 /src/gpu/pathtrace.wgsl
+/src/gpu/pathtrace-rq.wgsl
 /src/gpu/pathtrace.spv.sources

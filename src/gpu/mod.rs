@@ -25,6 +25,9 @@
 //! lights chosen by power (not the light BVH); independent random numbers (a hash per pixel,
 //! pass and dimension), not Sobol'; point lights isotropic or spot.
 
+#[cfg(not(target_arch = "wasm32"))]
+mod rt;
+
 use crate::color::Color;
 use crate::rendercontext::RenderContext;
 use crate::scene::{PathTermination, Scene};
@@ -149,6 +152,9 @@ pub struct GpuRenderer {
     pub lanes: usize,
     block: Mutex<Block>,
     pub adapter_name: String,
+    /// Whether the kernels trace by the device's ray queries (`rt`), and what they trace through.
+    #[cfg(not(target_arch = "wasm32"))]
+    acceleration: Option<rt::Acceleration>,
     timers: Option<Timers>,
     /// What setting up took, part by part, in seconds: the render's start, which a short
     /// render is mostly made of (plan.md section 12).
@@ -237,7 +243,8 @@ impl GpuRenderer {
             setup.push((what, (now - clock).as_secs_f64()));
             clock = now;
         };
-        let Buffers { params, prims, nodes, materials, lights, tables, hosts: any_host, unported, origin, .. } = Buffers::build(s, flat)?;
+        #[allow(unused_mut)]
+        let Buffers { mut params, prims, prim_records, nodes, materials, lights, mut tables, hosts: any_host, unported, origin, .. } = Buffers::build(s, flat)?;
         // A kernel can't stop for the host in the midst of a shadow ray.
         if !unported.is_empty() {
             return Err(format!("shapes the kernels can't intersect yet: {}{}", unported.iter().take(4).cloned().collect::<Vec<_>>().join(", "), if unported.len() > 4 { " ..." } else { "" }));
@@ -280,12 +287,35 @@ impl GpuRenderer {
         limits.max_storage_buffer_binding_size = available.max_storage_buffer_binding_size;
         limits.max_buffer_size = available.max_buffer_size;
         let timed = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        // With ray queries, the hardware traces the bounded primitives (`rt`), found through a
+        // table in `tables`.
+        #[cfg(not(target_arch = "wasm32"))]
+        let ray_query = rt::wanted(&adapter) && params.counts.x > 0;
+        #[cfg(target_arch = "wasm32")]
+        let ray_query = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        if ray_query {
+            params.origin.w = rt::map_table(&prim_records[..params.counts.x as usize], &mut tables);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = &prim_records;
+        let mut required_features = if timed { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() };
+        if ray_query {
+            required_features |= wgpu::Features::EXPERIMENTAL_RAY_QUERY;
+            limits.max_acceleration_structures_per_shader_stage = available.max_acceleration_structures_per_shader_stage;
+            limits.max_tlas_instance_count = available.max_tlas_instance_count;
+            limits.max_blas_geometry_count = available.max_blas_geometry_count;
+            limits.max_blas_primitive_count = available.max_blas_primitive_count;
+        }
         let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("rays"),
-            required_features: if timed { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() },
+            required_features,
             required_limits: limits,
+            // (Ray queries are wgpu's experimental feature.)
+            experimental_features: if ray_query { unsafe { wgpu::ExperimentalFeatures::enabled() } } else { Default::default() },
             ..Default::default()
         }).await.map_err(|e| format!("can't open the GPU ({})", e))?;
+        let adapter_name = if ray_query { format!("{}, tracing by ray queries", adapter_name) } else { adapter_name };
 
         // The shader, written in Rust (`shaders/pathtrace`) and compiled to SPIR-V by rust-gpu
         // (`scripts/build-shaders.sh`); a browser takes the WGSL translation made with it.
@@ -293,8 +323,12 @@ impl GpuRenderer {
         // rewritten for naga's MSL and HLSL writers (`fold_continuing_blocks` in
         // shaders/builder: from SPIR-V, Metal's loops left one iteration early). RAYS_GPU_WGSL=1 runs the WGSL
         // on Vulkan too, to test the translation without a browser.
+        // The kernels that trace by ray queries are WGSL on every backend: wgpu reads SPIR-V with
+        // its own naga, which can't read ray queries (`shaders/builder`).
         #[cfg(not(target_arch = "wasm32"))]
-        let source = if info.backend != wgpu::Backend::Vulkan || std::env::var_os("RAYS_GPU_WGSL").is_some() {
+        let source = if ray_query {
+            wgpu::ShaderSource::Wgsl(include_str!("pathtrace-rq.wgsl").into())
+        } else if info.backend != wgpu::Backend::Vulkan || std::env::var_os("RAYS_GPU_WGSL").is_some() {
             wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into())
         } else {
             wgpu::util::make_spirv(include_bytes!("pathtrace.spv"))
@@ -329,11 +363,17 @@ impl GpuRenderer {
         // A round's kernels: the scene (read only), the paths, the queues and the sky queries.
         // WebGPU allows a kernel eight storage buffers, so the image has a layout of its own,
         // with the kernel that adds to it.
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("scene"),
-            entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, read), binding(3, read),
-                       binding(4, read), binding(5, read), binding(6, write), binding(7, write), binding(8, write)],
-        });
+        let mut scene_entries = vec![binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, read), binding(3, read),
+                                     binding(4, read), binding(5, read), binding(6, write), binding(7, write), binding(8, write)];
+        // And with ray queries, the acceleration structure (which isn't a storage buffer).
+        #[cfg(not(target_arch = "wasm32"))]
+        if ray_query {
+            scene_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: pathtrace::ray_query::BINDING, visibility: wgpu::ShaderStages::COMPUTE, count: None,
+                ty: wgpu::BindingType::AccelerationStructure { vertex_return: false },
+            });
+        }
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("scene"), entries: &scene_entries });
         let add_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("image"),
             entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, write)],
@@ -420,13 +460,22 @@ impl GpuRenderer {
             label: Some("readback"), size: pixels * 32 + rounds_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
-        let round_groups = [0, 1].map(|side| device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("scene"),
-            layout: &layout,
-            entries: &[entry(0, &params_buffers[side]), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
-                       entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &queue_buffer),
-                       entry(8, &queries_buffer)],
-        }));
+        #[cfg(not(target_arch = "wasm32"))]
+        let acceleration = ray_query.then(|| rt::build(&device, &queue, &prim_records[..params.counts.x as usize]));
+        if ray_query {
+            lap(&mut setup, "the acceleration structures");
+        }
+        let round_groups = [0, 1].map(|side| {
+            #[allow(unused_mut)]
+            let mut entries = vec![entry(0, &params_buffers[side]), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
+                                   entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &queue_buffer),
+                                   entry(8, &queries_buffer)];
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(a) = &acceleration {
+                entries.push(wgpu::BindGroupEntry { binding: pathtrace::ray_query::BINDING, resource: wgpu::BindingResource::AccelerationStructure(&a.tlas) });
+            }
+            device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("scene"), layout: &layout, entries: &entries })
+        });
         let host_queue = any_host.then(|| {
             let host_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("host"),
@@ -468,7 +517,10 @@ impl GpuRenderer {
         });
         Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline, start_group, rays_buffer,
             round_groups, add_group, params, params_buffers,
-            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name, timers, setup, origin })
+            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name,
+            #[cfg(not(target_arch = "wasm32"))]
+            acceleration,
+            timers, setup, origin })
     }
 
     /// Zero the image accumulated on the GPU.

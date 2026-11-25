@@ -4,6 +4,8 @@
 //! (`wavefront::integrator`): the same BSDFs, light sampling with the power heuristic, Russian
 //! roulette and regularisation, in f32.
 #![cfg_attr(target_arch = "spirv", no_std)]
+// Ray queries are spirv-std's inline assembly (`ray_query!`), unstable on the SPIR-V target.
+#![cfg_attr(all(target_arch = "spirv", feature = "ray_query"), feature(asm_experimental_arch))]
 #![allow(clippy::too_many_arguments)]
 
 // (Some are used only by the kernels' entry points, which the CPU build leaves out.)
@@ -13,6 +15,9 @@ use spirv_std::glam::{UVec3, UVec4, Vec2, Vec3, Vec4, Vec4Swizzles};
 use spirv_std::num_traits::Float;
 #[allow(unused_imports)]
 use spirv_std::spirv;
+
+/// The hardware's traversal, where the device has it (`ray_query`).
+pub mod ray_query;
 
 /// glam, as the shader sees it, for building its buffers on the CPU.
 pub use spirv_std::glam;
@@ -306,6 +311,9 @@ pub struct Scene<'a> {
     pub materials: &'a [Material],
     pub lights: &'a [Light],
     pub tables: &'a [f32],
+    /// The bounded primitives as the hardware traces them (`ray_query`).
+    #[cfg(all(target_arch = "spirv", feature = "ray_query"))]
+    pub acs: &'a spirv_std::ray_tracing::AccelerationStructure,
     /// On the CPU, the shapes the kernels have no test for (`PRIM_HOST`), for shadow rays.
     #[cfg(not(target_arch = "spirv"))]
     pub host: Option<&'a dyn HostShapes>,
@@ -1057,6 +1065,9 @@ fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> 
         stats::TRACE_NS.with(|c| c.set(c.get() + start.elapsed().as_nanos() as u64));
         return found;
     }
+    #[cfg(all(target_arch = "spirv", feature = "ray_query"))]
+    return ray_query::traverse(s, ro, rd, tmin, tmax, any_hit);
+    #[cfg(not(all(target_arch = "spirv", feature = "ray_query")))]
     traverse(s, ro, rd, tmin, tmax, any_hit)
 }
 
@@ -4393,12 +4404,14 @@ pub fn intersect_paths(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[cfg(feature = "ray_query")]
+    #[spirv(descriptor_set = 0, binding = 9)] acs: &spirv_std::ray_tracing::AccelerationStructure,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
 ) {
     let Some(pixel) = queue::take(queue, gid, params) else { return };
     let index = pixel as usize;
-    let s = Scene { params, prims, nodes, materials, lights, tables };
+    let s = Scene { params, prims, nodes, materials, lights, tables, #[cfg(feature = "ray_query")] acs };
     paths[index] = intersect::<NoMedia>(&s, &paths[index]);
 }
 
@@ -4416,6 +4429,8 @@ pub fn bounce_paths(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[cfg(feature = "ray_query")]
+    #[spirv(descriptor_set = 0, binding = 9)] acs: &spirv_std::ray_tracing::AccelerationStructure,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
@@ -4423,7 +4438,7 @@ pub fn bounce_paths(
     let Some(pixel) = queue::take(queue, gid, params) else { return };
     let index = pixel as usize;
     let p = paths[index];
-    let s = Scene { params, prims, nodes, materials, lights, tables };
+    let s = Scene { params, prims, nodes, materials, lights, tables, #[cfg(feature = "ray_query")] acs };
     let (next, q0, q1) = shade::<NoMedia>(&s, &p, pixel % (params.dims.x * params.dims.y));
     paths[index] = next;
     queries[2 * index] = q0;
@@ -4449,12 +4464,14 @@ pub fn intersect_paths_media(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[cfg(feature = "ray_query")]
+    #[spirv(descriptor_set = 0, binding = 9)] acs: &spirv_std::ray_tracing::AccelerationStructure,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
 ) {
     let Some(pixel) = queue::take(queue, gid, params) else { return };
     let index = pixel as usize;
-    let s = Scene { params, prims, nodes, materials, lights, tables };
+    let s = Scene { params, prims, nodes, materials, lights, tables, #[cfg(feature = "ray_query")] acs };
     paths[index] = intersect::<WithMedia>(&s, &paths[index]);
 }
 
@@ -4473,6 +4490,8 @@ pub fn bounce_paths_media(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[cfg(feature = "ray_query")]
+    #[spirv(descriptor_set = 0, binding = 9)] acs: &spirv_std::ray_tracing::AccelerationStructure,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
@@ -4480,7 +4499,7 @@ pub fn bounce_paths_media(
     let Some(pixel) = queue::take(queue, gid, params) else { return };
     let index = pixel as usize;
     let p = paths[index];
-    let s = Scene { params, prims, nodes, materials, lights, tables };
+    let s = Scene { params, prims, nodes, materials, lights, tables, #[cfg(feature = "ray_query")] acs };
     let (next, q0, q1) = shade::<WithMedia>(&s, &p, pixel % (params.dims.x * params.dims.y));
     paths[index] = next;
     queries[2 * index] = q0;
@@ -4506,13 +4525,15 @@ pub fn answer_sky(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[cfg(feature = "ray_query")]
+    #[spirv(descriptor_set = 0, binding = 9)] acs: &spirv_std::ray_tracing::AccelerationStructure,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
 ) {
     let Some(pixel) = queue::take(queue, gid, params) else { return };
     let index = pixel as usize;
-    let s = Scene { params, prims, nodes, materials, lights, tables };
+    let s = Scene { params, prims, nodes, materials, lights, tables, #[cfg(feature = "ray_query")] acs };
     let mut light = Vec3::ZERO;
     // Both slots, at one call site of `sky_light`.
     let mut k = 0;

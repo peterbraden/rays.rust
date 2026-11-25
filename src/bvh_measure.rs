@@ -343,7 +343,7 @@ fn measure_bvh() {
         let (bs, _) = time(&rays.shadow, |(r, max)| s.occluded_binary(r, 0., *max) as usize);
         println!("{:<14} {:>53} | {:>7.0}ns {:>7.0}ns {:>7.0}ns |  (binary)", "", "", bp, bd, bs);
         // Traversal alone: each ray cut off at its own hit, with leaves found but not searched.
-        let cut: Vec<(Ray, f64)> = rays.diffuse.iter().map(|r| (r.clone(), s.nearest(r, 0., f64::INFINITY).map_or(f64::INFINITY, |x| x.1))).collect();
+        let cut: Vec<(Ray, f64)> = rays.diffuse.iter().map(|r| (*r, s.nearest(r, 0., f64::INFINITY).map_or(f64::INFINITY, |x| x.1))).collect();
         let (tw, _) = time(&cut, |(r, t)| s.bvh.nearest_in_leaves(r, 0., *t, |_, _| None).is_some() as usize);
         let (tb, _) = time(&cut, |(r, t)| s.binary.nearest_in_leaves(r, 0., *t, |_, _| None).is_some() as usize);
         // And the triangles alone: those a search tests, tested again in a row.

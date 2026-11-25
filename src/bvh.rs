@@ -433,6 +433,7 @@ impl BinaryBvh {
 
     /// Where to split a node of at most `SWEEP` items (`order`), if anywhere: every split of the
     /// items sorted along each axis is tried, and `order` left in the best one's order.
+    #[allow(clippy::needless_range_loop)] // (the axis, used in the sort's closure)
     fn sweep(bounds: &[BBox], centroids: &[Vector3<f64>], order: &mut [usize], node_bounds: &BBox) -> Option<usize> {
         let n = order.len();
         // (cost, items in the first child, the items in order)

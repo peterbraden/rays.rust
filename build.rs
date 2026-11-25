@@ -1,6 +1,7 @@
 //! With `--features gpu`, builds the GPU path tracer's shader (`shaders/pathtrace`) before the
 //! renderer that includes it: `scripts/build-shaders.sh` writes `src/gpu/pathtrace.spv` and
-//! `.wgsl` with rust-gpu, on the nightly the shaders' workspace pins (rustup installs it on
+//! `.wgsl`, and `pathtrace-rq.wgsl` (traced by ray queries, for devices with ray tracing
+//! hardware) with rust-gpu, on the nightly the shaders' workspace pins (rustup installs it on
 //! first use; the first build of rust-gpu's codegen backend takes a few minutes, later ones
 //! seconds). These outputs aren't committed: each is rebuilt when the sources they were built
 //! from (`scripts/shader-sources.sh`, kept as `src/gpu/pathtrace.spv.sources`) change.
@@ -22,6 +23,7 @@ fn main() {
         "shaders/rust-toolchain.toml",
         "scripts/build-shaders.sh",
         "scripts/shader-sources.sh",
+        "vendor/naga-ray-query.patch",
     ] {
         println!("cargo:rerun-if-changed={}", path);
     }
@@ -31,6 +33,7 @@ fn main() {
     if built == sources
         && Path::new("src/gpu/pathtrace.spv").exists()
         && Path::new("src/gpu/pathtrace.wgsl").exists()
+        && Path::new("src/gpu/pathtrace-rq.wgsl").exists()
     {
         return;
     }

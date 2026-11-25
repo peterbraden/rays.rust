@@ -3,8 +3,13 @@
 //! browsers (which take only WGSL) and for native backends other than Vulkan. The translation
 //! is validated with WebGPU's baseline capabilities, so a shader a browser would reject fails
 //! here.
+//!
+//! Then again with the crate's `ray_query` feature, tracing by ray queries rather than the BVH,
+//! to WGSL alone (`src/gpu/pathtrace-rq.wgsl`), for native devices that have them: Vulkan's
+//! SPIR-V goes through wgpu's own naga, whose SPIR-V reader can't read ray queries, so every
+//! backend takes this one as WGSL.
 use naga::{Block, Span, Statement};
-use spirv_builder::{ShaderPanicStrategy, SpirvBuilder};
+use spirv_builder::{Capability, ShaderPanicStrategy, SpirvBuilder};
 use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -48,6 +53,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     webgpu().validate(&naga::front::wgsl::parse_str(&wgsl)?)?;
     let out = here.join("../../src/gpu/pathtrace.wgsl");
     std::fs::write(&out, &wgsl)?;
+    println!("wrote {} ({} KB, {} loops folded)", out.display(), wgsl.len() / 1024, folded);
+
+    let result = SpirvBuilder::new(here.join("../pathtrace"), "spirv-unknown-vulkan1.2")
+        .shader_panic_strategy(ShaderPanicStrategy::SilentExit)
+        .capability(Capability::RayQueryKHR)
+        .extension("SPV_KHR_ray_query")
+        .shader_crate_features(["ray_query".to_string()])
+        .build()?;
+    let bytes = std::fs::read(result.module.unwrap_single())?;
+    let mut module = naga::front::spv::parse_u8_slice(&bytes, &naga::front::spv::Options::default())?;
+    let folded = fold_continuing_blocks(&mut module)?;
+    let native = || naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::RAY_QUERY);
+    let info = native().validate(&module).map_err(|e| {
+        // The expression an error names, which it gives as a handle alone.
+        if let naga::valid::ValidationError::Function { handle, source: naga::valid::FunctionError::Expression { handle: expr, .. }, .. } = e.as_inner() {
+            let f = &module.functions[*handle];
+            eprintln!("in {:?}: {:?} = {:?}", f.name, expr, f.expressions[*expr]);
+        }
+        format!("{:?}", e)
+    })?;
+    let wgsl = naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())?;
+    let out = here.join("../../src/gpu/pathtrace-rq.wgsl");
+    std::fs::write(&out, &wgsl)?;
+    native().validate(&naga::front::wgsl::parse_str(&wgsl).map_err(|e| e.emit_to_string(&wgsl))?)
+        .map_err(|e| format!("{} (written to {}, which the error's spans are in)", e.emit_to_string(&wgsl), out.display()))?;
     println!("wrote {} ({} KB, {} loops folded)", out.display(), wgsl.len() / 1024, folded);
     Ok(())
 }

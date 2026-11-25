@@ -89,7 +89,7 @@ dependencies = [
 name = "builder"
 version = "0.1.0"
 dependencies = [
- "naga",
+ "naga 30.0.2",
  "spirv-builder",
 ]
 
@@ -649,6 +649,31 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "30.0.2"
+dependencies = [
+ "arrayvec",
+ "bit-set",
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "codespan-reporting",
+ "half",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "libm",
+ "log",
+ "naga-types 30.0.2",
+ "num-traits",
+ "once_cell",
+ "petgraph",
+ "rustc-hash 1.1.0",
+ "spirv",
+ "thiserror",
+ "unicode-ident",
+]
+
+[[package]]
+name = "naga"
+version = "30.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd0dd362bf26c0ffdd143df6da66a25d287e196eff482f117771010b207ad163"
 dependencies = [
@@ -663,14 +688,23 @@ dependencies = [
  "indexmap",
  "libm",
  "log",
- "naga-types",
+ "naga-types 30.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-traits",
  "once_cell",
  "petgraph",
  "rustc-hash 1.1.0",
  "spirv",
  "thiserror",
- "unicode-ident",
+]
+
+[[package]]
+name = "naga-types"
+version = "30.0.2"
+dependencies = [
+ "hashbrown 0.17.1",
+ "indexmap",
+ "rustc-hash 1.1.0",
+ "thiserror",
 ]
 
 [[package]]
@@ -930,7 +964,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "naga",
+ "naga 30.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "object",
  "regex",
  "rspirv",

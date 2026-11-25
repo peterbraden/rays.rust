@@ -1,56 +1,11 @@
-From 46a6474ff27b85cc7bdd8829d5d28800b4f90539 Mon Sep 17 00:00:00 2001
-From: Claude <noreply@anthropic.com>
-Date: Wed, 25 Nov 2026 10:56:41 +0000
-Subject: [PATCH] naga: read ray queries from SPIR-V, and write them as WGSL
+naga's ray query support, for wgpu v30.0.2 (vendor/wgpu): the commits of the submodule's branch
+rays-spv-ray-query, as one diff, which scripts/build-shaders.sh applies to the submodule:
 
-The SPIR-V front end reads `SPV_KHR_ray_query`: the acceleration structure
-and ray query types, and the `OpRayQuery*KHR` instructions into
-`Statement::RayQuery` and `Expression::RayQueryGetIntersection` (one field of
-it per getter; a candidate's kind renumbered from SPIR-V's; signed results
-bitcast). Instructions reading the ray itself (origin, direction, tmin,
-flags), which Naga has no expressions for, are still unsupported.
-
-The WGSL back end writes ray queries (it was `unreachable!`), enables
-`wgpu_ray_query` for them, and no longer declares the predeclared `RayDesc`
-and `RayIntersection` structs.
-
-Tests: `tests/in/spv/ray-query.spvasm`, written as rust-gpu writes a query
-(a local variable, its operations inline), to WGSL and MSL; the WGSL ray
-query tests now also write WGSL.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
----
- naga/src/back/wgsl/writer.rs                  |  64 +++-
- naga/src/front/spv/error.rs                   |   2 +
- naga/src/front/spv/mod.rs                     |   6 +
- naga/src/front/spv/next_block.rs              |  24 +-
- naga/src/front/spv/ray_query.rs               | 310 ++++++++++++++++++
- naga/tests/in/spv/ray-query.spvasm            | 114 +++++++
- naga/tests/in/spv/ray-query.toml              |   8 +
- naga/tests/in/wgsl/aliased-ray-query.toml     |   2 +-
- naga/tests/in/wgsl/overrides-ray-query.toml   |   2 +-
- .../in/wgsl/ray-query-no-init-tracking.toml   |   2 +-
- naga/tests/in/wgsl/ray-query.toml             |   2 +-
- naga/tests/out/msl/spv-ray-query.metal        | 176 ++++++++++
- naga/tests/out/wgsl/spv-ray-query.wgsl        |  49 +++
- .../out/wgsl/wgsl-aliased-ray-query.wgsl      |  26 ++
- .../out/wgsl/wgsl-overrides-ray-query.wgsl    |  24 ++
- .../wgsl/wgsl-ray-query-no-init-tracking.wgsl |  67 ++++
- naga/tests/out/wgsl/wgsl-ray-query.wgsl       |  67 ++++
- .../out/wgsl/wgsl-ray-tracing-pipeline.wgsl   |   9 -
- 18 files changed, 933 insertions(+), 21 deletions(-)
- create mode 100644 naga/src/front/spv/ray_query.rs
- create mode 100644 naga/tests/in/spv/ray-query.spvasm
- create mode 100644 naga/tests/in/spv/ray-query.toml
- create mode 100644 naga/tests/out/msl/spv-ray-query.metal
- create mode 100644 naga/tests/out/wgsl/spv-ray-query.wgsl
- create mode 100644 naga/tests/out/wgsl/wgsl-aliased-ray-query.wgsl
- create mode 100644 naga/tests/out/wgsl/wgsl-overrides-ray-query.wgsl
- create mode 100644 naga/tests/out/wgsl/wgsl-ray-query-no-init-tracking.wgsl
- create mode 100644 naga/tests/out/wgsl/wgsl-ray-query.wgsl
+  - naga: read ray queries from SPIR-V, and write them as WGSL
+  - naga: emit a ray query statement's arguments before it, in WGSL
 
 diff --git a/naga/src/back/wgsl/writer.rs b/naga/src/back/wgsl/writer.rs
-index 643a8a0..43f3c53 100644
+index 643a8a0..7645e20 100644
 --- a/naga/src/back/wgsl/writer.rs
 +++ b/naga/src/back/wgsl/writer.rs
 @@ -136,6 +136,8 @@ impl<W: Write> Writer<W> {
@@ -97,7 +52,7 @@ index 643a8a0..43f3c53 100644
              writeln!(self.out, "enable wgpu_ray_tracing_pipeline;")?;
              any_written = true;
          }
-@@ -1063,7 +1075,44 @@ impl<W: Write> Writer<W> {
+@@ -1063,7 +1075,57 @@ impl<W: Write> Writer<W> {
                      writeln!(self.out, "{level}textureBarrier();")?;
                  }
              }
@@ -124,6 +79,19 @@ index 643a8a0..43f3c53 100644
 +                        self.write_expr(module, query, func_ctx)?;
 +                    }
 +                    crate::RayQueryFunction::GenerateIntersection { hit_t } => {
++                        // Named first, so that the call's argument is a name: Naga's WGSL
++                        // front end up to v30.0.2 doesn't emit an argument it has to build
++                        // before this statement.
++                        if !self.named_expressions.contains_key(&hit_t)
++                            && !func_ctx.expressions[hit_t].needs_pre_emit()
++                        {
++                            let name = Baked(hit_t).to_string();
++                            self.start_named_expr(module, hit_t, func_ctx, &name)?;
++                            self.write_expr(module, hit_t, func_ctx)?;
++                            self.named_expressions.insert(hit_t, name);
++                            writeln!(self.out, ";")?;
++                            write!(self.out, "{level}")?;
++                        }
 +                        write!(self.out, "rayQueryGenerateIntersection(")?;
 +                        self.write_expr(module, query, func_ctx)?;
 +                        write!(self.out, ", ")?;
@@ -143,7 +111,7 @@ index 643a8a0..43f3c53 100644
              Statement::SubgroupBallot { result, predicate } => {
                  write!(self.out, "{level}")?;
                  let res_name = Baked(result).to_string();
-@@ -1932,9 +1981,14 @@ impl<W: Write> Writer<W> {
+@@ -1932,9 +1994,14 @@ impl<W: Write> Writer<W> {
  
                  write!(self.out, ")")?
              }
@@ -255,10 +223,10 @@ index 698ed37..afc94aa 100644
                  }
 diff --git a/naga/src/front/spv/ray_query.rs b/naga/src/front/spv/ray_query.rs
 new file mode 100644
-index 0000000..78fca51
+index 0000000..b5e6ab6
 --- /dev/null
 +++ b/naga/src/front/spv/ray_query.rs
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,353 @@
 +//! Parsing of ray queries (`SPV_KHR_ray_query`): the acceleration structure and ray query
 +//! types, and the `OpRayQuery*KHR` instructions, into Naga's [`RayQuery`] statement and
 +//! [`RayQueryGetIntersection`] expression.
@@ -569,6 +537,86 @@ index 0000000..78fca51
 +        })
 +    }
 +}
++
++#[cfg(all(test, feature = "wgsl-in", feature = "wgsl-out"))]
++mod tests {
++    use crate::valid::{Capabilities, ValidationFlags, Validator};
++
++    /// A hit generated at a distance computed just before (not a constant, as in Naga's own
++    /// tests), read from WGSL, and written to WGSL and read again: the argument must be emitted
++    /// before the statement that uses it.
++    #[test]
++    fn a_generated_hit_at_a_computed_distance_is_in_scope() {
++        let source = r#"
++            enable wgpu_ray_query;
++            @group(0) @binding(0) var acs: acceleration_structure;
++            @group(0) @binding(1) var<storage, read_write> out: f32;
++            @compute @workgroup_size(1)
++            fn main() {
++                var rq: ray_query;
++                rayQueryInitialize(&rq, acs, RayDesc(0u, 0xFFu, 0.001, 1000.0, vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0)));
++                while (rayQueryProceed(&rq)) {
++                    let c = rayQueryGetCandidateIntersection(&rq);
++                    if (c.kind == 3u) {
++                        rayQueryGenerateIntersection(&rq, out * 2.0 + 1.0);
++                    }
++                }
++                out = rayQueryGetCommittedIntersection(&rq).t;
++            }
++        "#;
++        let validate = |module: &crate::Module| {
++            Validator::new(ValidationFlags::all(), Capabilities::RAY_QUERY)
++                .validate(module)
++                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)))
++        };
++        let module = crate::front::wgsl::parse_str(source).unwrap();
++        let info = validate(&module);
++        let wgsl = crate::back::wgsl::write_string(
++            &module,
++            &info,
++            crate::back::wgsl::WriterFlags::empty(),
++        )
++        .unwrap();
++        validate(&crate::front::wgsl::parse_str(&wgsl).unwrap());
++    }
++}
+diff --git a/naga/src/front/wgsl/lower/mod.rs b/naga/src/front/wgsl/lower/mod.rs
+index 0d65416..ef9dd07 100644
+--- a/naga/src/front/wgsl/lower/mod.rs
++++ b/naga/src/front/wgsl/lower/mod.rs
+@@ -3618,6 +3618,10 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
+ 
+                     let fun = ir::RayQueryFunction::GenerateIntersection { hit_t };
+                     let rctx = ctx.runtime_expression_ctx(function_span)?;
++                    // The arguments' expressions are emitted before the statement uses them.
++                    rctx.block
++                        .extend(rctx.emitter.finish(&rctx.function.expressions));
++                    rctx.emitter.start(&rctx.function.expressions);
+                     rctx.block
+                         .push(ir::Statement::RayQuery { query, fun }, function_span);
+                     return Ok(None);
+@@ -3629,6 +3633,10 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
+ 
+                     let fun = ir::RayQueryFunction::ConfirmIntersection;
+                     let rctx = ctx.runtime_expression_ctx(function_span)?;
++                    // The arguments' expressions are emitted before the statement uses them.
++                    rctx.block
++                        .extend(rctx.emitter.finish(&rctx.function.expressions));
++                    rctx.emitter.start(&rctx.function.expressions);
+                     rctx.block
+                         .push(ir::Statement::RayQuery { query, fun }, function_span);
+                     return Ok(None);
+@@ -3640,6 +3648,10 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
+ 
+                     let fun = ir::RayQueryFunction::Terminate;
+                     let rctx = ctx.runtime_expression_ctx(function_span)?;
++                    // The arguments' expressions are emitted before the statement uses them.
++                    rctx.block
++                        .extend(rctx.emitter.finish(&rctx.function.expressions));
++                    rctx.emitter.start(&rctx.function.expressions);
+                     rctx.block
+                         .push(ir::Statement::RayQuery { query, fun }, function_span);
+                     return Ok(None);
 diff --git a/naga/tests/in/spv/ray-query.spvasm b/naga/tests/in/spv/ray-query.spvasm
 new file mode 100644
 index 0000000..d55beed
@@ -1213,6 +1261,3 @@ index ed58d24..9e1e6b7 100644
  var<ray_payload> hit_num: HitCounters;
  @group(0) @binding(0) 
  var acc_struct: acceleration_structure;
--- 
-2.43.0
-

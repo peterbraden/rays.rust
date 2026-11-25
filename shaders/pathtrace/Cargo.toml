@@ -20,6 +20,9 @@ glam = { version = "0.34", default-features = false, features = ["bytemuck", "st
 [features]
 # Counters of the traversal's work, for the renderer's tests (`stats`).
 stats = []
+# Traversal by ray queries (`ray_query`), for devices with ray tracing hardware; the builder
+# builds the shader with it as well as without.
+ray_query = []
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_arch, values("spirv"))'] }

@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 sources() {
     find shaders/pathtrace shaders/builder shaders/shared -type f \( -name '*.rs' -o -name Cargo.toml \) -not -path '*/target/*' | LC_ALL=C sort |
         xargs sha256sum
-    sha256sum shaders/Cargo.toml shaders/Cargo.lock shaders/rust-toolchain.toml
+    sha256sum shaders/Cargo.toml shaders/Cargo.lock shaders/rust-toolchain.toml vendor/naga-ray-query.patch
 }
 if [ "$1" = "--check" ]; then
     if ! sources | diff -u src/gpu/pathtrace.spv.sources -; then

@@ -5,5 +5,6 @@ edition = "2021"
 
 [dependencies]
 spirv-builder = "0.11"
-# The same naga as wgpu 30's.
-naga = { version = "30", features = ["spv-in", "wgsl-in", "wgsl-out"] }
+# wgpu 30's naga (v30.0.2, from the submodule), with ray queries added to its SPIR-V reader
+# and WGSL writer (vendor/naga-ray-query.patch, which scripts/build-shaders.sh applies).
+naga = { path = "../../vendor/wgpu/naga", features = ["spv-in", "wgsl-in", "wgsl-out"] }

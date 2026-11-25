@@ -35,11 +35,14 @@
 //!   (`"edges"`: convex edges); needs the scene (in textures and layers' masks), `default`
 //!   without one.
 //! - `bombing`: sprites scattered over the plane x-z by texture bombing (`patterns::Bombing`):
-//!   `shape` `"leaf"` (a lens with a midrib) or `"disc"` (an ellipse), on a grid of `cell`
+//!   `shape` `"leaf"` (a lens with a midrib), `"disc"` (an ellipse) or `"stone"` (an irregular
+//!   convex polygon of 5 to 8 corners: broken, angular stones), on a grid of `cell`
 //!   (metres, default 0.05), `density` a cell on average, each its own angle, length from
 //!   `size` [smallest, largest] (at most four cells) and `width` over length; overlapping, the
 //!   topmost kept. `output` `"mask"` (coverage), `"id"` (the topmost's random value), `"vein"`
-//!   (its midrib) or `"height"` (stacked, rounded at the edge), each in [0, 1]; `seed`.
+//!   (its midrib), `"height"` (stacked, rounded at the edge), `"edge"` (1 at its outline,
+//!   fading a fifth of the way in: the dark rim where stones meet) or `"facet"` (a slope of
+//!   shade across it, each its own way, 0.5 off the sprites), each in [0, 1]; `seed`.
 //! - `checker` (`size`, `plan`) and `brick` (`size` [x, y, z], `mortar`, `style` `"mortar"` or
 //!   `"id"`, `seed`): POV-Ray's, in [0, 1], box filtered.
 //! - `talus`: fallen blocks and scree, angular and fractured, many small to few large, sorted
@@ -1098,14 +1101,17 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             let shape = match o["shape"].as_str().unwrap_or("leaf") {
                 "leaf" => SpriteShape::Leaf,
                 "disc" => SpriteShape::Disc,
-                s => return Err(format!("unknown bombing shape \"{}\": leaf or disc", s)),
+                "stone" => SpriteShape::Stone,
+                s => return Err(format!("unknown bombing shape \"{}\": leaf, disc or stone", s)),
             };
             let output = match o["output"].as_str().unwrap_or("mask") {
                 "mask" => BombingOutput::Mask,
                 "id" => BombingOutput::Id,
                 "vein" => BombingOutput::Vein,
                 "height" => BombingOutput::Height,
-                s => return Err(format!("unknown bombing output \"{}\": mask, id, vein or height", s)),
+                "edge" => BombingOutput::Edge,
+                "facet" => BombingOutput::Facet,
+                s => return Err(format!("unknown bombing output \"{}\": mask, id, vein, height, edge or facet", s)),
             };
             let cell = positive(o, "cell", 0.05)?;
             let size = pair(o, "size", (0.6 * cell, 1.5 * cell))?;

@@ -387,7 +387,13 @@ pub enum SpriteShape {
     Leaf,
     /// An ellipse (a circle at `width` 1): pebbles, petals, flakes.
     Disc,
+    /// An irregular convex polygon of 5 to 8 corners at random radii, stretched to `width`:
+    /// broken, angular stones lying on one another.
+    Stone,
 }
+
+/// The most corners a `SpriteShape::Stone` has.
+const STONE_CORNERS: usize = 8;
 
 /// What `Bombing` gives at a point.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -401,6 +407,12 @@ pub enum BombingOutput {
     Vein,
     /// The topmost sprite's height: higher sprites lie on lower ones, each rounded at its edge.
     Height,
+    /// 1 at the topmost sprite's outline, falling to 0 a fifth of the way in (0 where there is
+    /// none): the dark rim where one stone meets the next or the ground below.
+    Edge,
+    /// A slope of shade across the topmost sprite, 0 on one side and 1 on the other, each its
+    /// own way: the faces of broken stones, catching more light or less. 0.5 where there is none.
+    Facet,
 }
 
 /// Texture bombing (Glanville, "Texture Bombing", GPU Gems, 2004): sprites scattered over the
@@ -430,7 +442,8 @@ impl Bombing {
         // How many cells away a sprite's centre can be and still reach the point.
         let reach = (0.5 * self.size.1 / self.cell).ceil().max(1.) as i64;
         let soft = 0.5 * filter;
-        let (mut cover, mut top) = (0f64, None::<(f64, f64, f64, f64, f64)>); // (layer, id, d, across, half width)
+        // (layer, id, d, across, half width, facet)
+        let (mut cover, mut top) = (0f64, None::<(f64, f64, f64, f64, f64, f64)>);
         for i in ci - reach ..= ci + reach {
             for j in cj - reach ..= cj + reach {
                 let mut rng = CellRng::new(i, 0, j, self.seed);
@@ -447,17 +460,47 @@ impl Bombing {
                     if t.abs() >= 1. {
                         continue;
                     }
-                    let w = self.width * half * match self.shape {
-                        SpriteShape::Leaf => 1. - t * t,
-                        SpriteShape::Disc => (1. - t * t).sqrt(),
+                    let mut facet = 0.5;
+                    let (w, d) = match self.shape {
+                        SpriteShape::Leaf | SpriteShape::Disc => {
+                            let w = self.width * half * if self.shape == SpriteShape::Leaf { 1. - t * t } else { (1. - t * t).sqrt() };
+                            // How far inside its edge, metres (across the sprite, which is near
+                            // enough for a narrow one).
+                            (w, w - across.abs())
+                        },
+                        SpriteShape::Stone => {
+                            // Drawn after the leaf's and disc's numbers, so those are unchanged.
+                            let w = self.width * half;
+                            let corners = 5 + (rng.uniform() * 4.) as usize;
+                            let turn = rng.uniform();
+                            let mut at = [(0f64, 0f64); STONE_CORNERS];
+                            for (k, c) in at.iter_mut().enumerate().take(corners) {
+                                let a = 2. * PI * (k as f64 + turn + 0.35 * (rng.uniform() - 0.5)) / corners as f64;
+                                let r = 0.7 + 0.3 * rng.uniform();
+                                *c = (r * half * a.cos(), r * w * a.sin());
+                            }
+                            let tilt = 2. * PI * rng.uniform();
+                            let (ts, tc) = tilt.sin_cos();
+                            facet = (0.5 + 0.5 * (along * tc / half + across * ts / w.max(1e-12))).clamp(0., 1.);
+                            if across.abs() >= w {
+                                continue;
+                            }
+                            // Inside a convex polygon, the distance to its outline is the least
+                            // distance to its edges' lines.
+                            let mut d = f64::INFINITY;
+                            for k in 0 .. corners {
+                                let (a, b) = (at[k], at[(k + 1) % corners]);
+                                let (ex, ez) = (b.0 - a.0, b.1 - a.1);
+                                let len = (ex * ex + ez * ez).sqrt().max(1e-12);
+                                d = d.min((ex * (across - a.1) - ez * (along - a.0)) / len);
+                            }
+                            (w, d)
+                        },
                     };
-                    // How far inside its edge, metres (across the sprite, which is near
-                    // enough for a narrow one).
-                    let d = w - across.abs();
                     let m = if soft > 0. { smoothstep(-soft, soft, d) } else if d > 0. { 1. } else { 0. };
                     cover = cover.max(m);
                     if d > 0. && top.is_none_or(|(l, ..)| layer > l) {
-                        top = Some((layer, id, d, across, self.width * half));
+                        top = Some((layer, id, d, across, if self.shape == SpriteShape::Stone { w } else { self.width * half }, facet));
                     }
                 }
             }
@@ -465,11 +508,13 @@ impl Bombing {
         match self.output {
             BombingOutput::Mask => cover,
             BombingOutput::Id => top.map_or(0., |(_, id, ..)| id),
-            BombingOutput::Vein => top.map_or(0., |(_, _, _, across, w)| {
+            BombingOutput::Vein => top.map_or(0., |(_, _, _, across, w, _)| {
                 let rib = (0.06 * w).max(soft);
                 1. - smoothstep(0., rib, across.abs())
             }),
-            BombingOutput::Height => top.map_or(0., |(layer, _, d, _, w)| (0.5 + 0.5 * layer) * (d / (0.3 * w)).min(1.).sqrt()),
+            BombingOutput::Height => top.map_or(0., |(layer, _, d, _, w, _)| (0.5 + 0.5 * layer) * (d / (0.3 * w)).min(1.).sqrt()),
+            BombingOutput::Edge => top.map_or(0., |(_, _, d, _, w, _)| 1. - smoothstep(0., (0.2 * w).max(soft), d)),
+            BombingOutput::Facet => top.map_or(0.5, |(.., f)| f),
         }
     }
 
@@ -592,6 +637,49 @@ mod tests {
             for out in [BombingOutput::Mask, BombingOutput::Id, BombingOutput::Vein, BombingOutput::Height] {
                 let v = leaves(2., out).eval(*x, *z, 0.002);
                 assert!((0. ..= 1.).contains(&v), "{:?} {}", out, v);
+            }
+        }
+    }
+
+    fn stones(output: BombingOutput) -> Bombing {
+        Bombing { shape: SpriteShape::Stone, cell: 0.05, size: (0.04, 0.09), width: 0.8, density: 2., seed: 3, output }
+    }
+
+    #[test]
+    fn test_stones_are_angular_with_dark_rims_and_faces() {
+        let points: Vec<(f64, f64)> = samples(4000).map(|p| (p.x, p.z)).collect();
+        let (mask, edge, facet, id) = (stones(BombingOutput::Mask), stones(BombingOutput::Edge),
+                                       stones(BombingOutput::Facet), stones(BombingOutput::Id));
+        let cover = points.iter().filter(|(x, z)| mask.eval(*x, *z, 0.) > 0.5).count() as f64 / points.len() as f64;
+        assert!(cover > 0.3 && cover < 0.99, "{}", cover);
+        let (mut rims, mut faces) = (0, (f64::INFINITY, f64::NEG_INFINITY));
+        for (x, z) in &points {
+            for out in [BombingOutput::Mask, BombingOutput::Id, BombingOutput::Height, BombingOutput::Edge, BombingOutput::Facet] {
+                let v = stones(out).eval(*x, *z, 0.002);
+                assert!((0. ..= 1.).contains(&v), "{:?} {}", out, v);
+            }
+            if id.eval(*x, *z, 0.) > 0. {
+                if edge.eval(*x, *z, 0.) > 0.5 { rims += 1 }
+                let f = facet.eval(*x, *z, 0.);
+                faces = (faces.0.min(f), faces.1.max(f));
+            } else {
+                assert_eq!(edge.eval(*x, *z, 0.), 0.);
+                assert_eq!(facet.eval(*x, *z, 0.), 0.5);
+            }
+        }
+        assert!(rims > 40, "{}", rims);
+        assert!(faces.0 < 0.2 && faces.1 > 0.8, "{:?}", faces);
+        // A polygon, not an ellipse: along a line through a stone, its edge comes in straight
+        // runs, so the distance inside changes at a constant rate between corners. Checked by
+        // the coverage of a lone stone staying convex: the midpoint of two covered points is
+        // covered.
+        let lone = Bombing { density: 0.05, ..stones(BombingOutput::Mask) };
+        let inside: Vec<_> = points.iter().filter(|(x, z)| lone.eval(*x, *z, 0.) > 0.5).take(200).collect();
+        let near = |a: &(f64, f64), b: &(f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() < 0.02;
+        for a in &inside {
+            for b in inside.iter().filter(|b| near(a, b)) {
+                let m = (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1));
+                assert!(lone.eval(m.0, m.1, 0.) > 0.5, "{:?} {:?}", a, b);
             }
         }
     }

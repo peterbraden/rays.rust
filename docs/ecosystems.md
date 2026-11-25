@@ -110,6 +110,14 @@ the landscape draws forest floor under them (`scenery::Ground::cover`): humus an
 brown needles under conifers and browner leaves under broadleaves, moss where it isn't dry,
 shaded with the soil material's `forest_floor`; only cliffs stay bare. Materials and placement
 rules after the ecosystem read the same as a field, `canopy` (0 to 1). The ground's relief
-doesn't: its displaced cells' bounds are found before the trees are planted. Nothing grows within `"clear"` metres of the camera (12 with
+doesn't: its displaced cells' bounds are found before the trees are planted.
+
+Beyond the trees planted about the camera, the landscape draws woods of its own from the same
+communities (`flora::Regions::woods`: how much of the ground their trees' crowns cover, and how
+much of that is conifers'), so the forests carry on to the horizon: a canopy material of crowns
+(`Bare::Woods`, `Bare::Conifers`: `cells` domes 8 m apart for broadleaves, 5 m for conifers,
+lit by their relief, dark in the gaps between), thinner and thicker from place to place, below
+the treeline and off cliffs. Within the planted trees' reach the ground between them is open,
+and the two fade into each other as the trees thin out towards it (`canopy::Slot::planted`). Nothing grows within `"clear"` metres of the camera (12 with
 a flora, 0 otherwise), so it doesn't stand inside a tree. The flora's trees grow `reach` metres
 out (shrubs half as far), thinning out over the last third of it.

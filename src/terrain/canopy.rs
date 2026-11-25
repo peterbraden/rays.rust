@@ -8,6 +8,10 @@
 //! alone would show, and graphs read the same as a field, `canopy`: how much of the ground a
 //! crown covers, 0 to 1.
 //!
+//! Beyond the trees planted about the camera the ground cover draws woods of its own, from the
+//! flora's communities (`flora::Regions::woods`), as crowns in a canopy material; the slot
+//! notes how far the planted trees reach (`planted`), so the two meet without a seam.
+//!
 //! The ground's relief (`terrain::detail`) doesn't read it: the displaced cells' bounds are
 //! found when the landscape is built, before any trees are planted, and taking the rock's
 //! relief away under them would move the surface outside those bounds.
@@ -67,7 +71,7 @@ impl Canopy {
 /// The crowns over a landscape, added to as ecosystems are placed on it, before the render
 /// reads them.
 #[derive(Debug, Default)]
-pub struct Slot(RwLock<Option<Arc<Canopy>>>, RwLock<Vec<Crown>>);
+pub struct Slot(RwLock<Option<Arc<Canopy>>>, RwLock<Vec<Crown>>, RwLock<Vec<(f64, f64, f64)>>);
 
 impl Slot {
     /// Add `crowns`, rebuilding the grid.
@@ -76,6 +80,22 @@ impl Slot {
         let mut all = self.1.write().unwrap();
         all.extend_from_slice(crowns);
         *self.0.write().unwrap() = Some(Arc::new(Canopy::new(&all)));
+    }
+
+    /// Note that trees were planted about (`x`, `z`) out to `reach` metres, thinning out over
+    /// the last third of it (as an ecosystem's forests about the camera do): there the ground
+    /// cover draws no woods of its own (`planted`).
+    pub fn planted_about(&self, x: f64, z: f64, reach: f64) {
+        self.2.write().unwrap().push((x, z, reach));
+    }
+
+    /// How fully trees were planted at (`x`, `z`), 0 to 1: 1 well within an ecosystem's
+    /// reach, fading to 0 as its trees thin out towards its edge.
+    pub fn planted(&self, x: f64, z: f64) -> f64 {
+        self.2.read().unwrap().iter().map(|&(cx, cz, r)| {
+            let t = ((r - (x - cx).hypot(z - cz)) / (0.3 * r)).clamp(0., 1.);
+            t * t * (3. - 2. * t)
+        }).fold(0., f64::max)
     }
 
     /// As `Canopy::under`; (0, 0) with no crowns.
@@ -104,5 +124,11 @@ mod tests {
         assert!(edge > 0. && edge < 1., "{}", edge);
         assert_eq!(slot.under(10., 0.).0, 0.);
         assert_eq!(slot.under(-100., 50.).0, 0.);
+        // Where trees were planted, fading out over the last third of the reach.
+        assert_eq!(slot.planted(0., 0.), 0.);
+        slot.planted_about(0., 0., 300.);
+        assert_eq!(slot.planted(100., 100.), 1.);
+        assert!(slot.planted(260., 0.) > 0. && slot.planted(260., 0.) < 1.);
+        assert_eq!(slot.planted(301., 0.), 0.);
     }
 }

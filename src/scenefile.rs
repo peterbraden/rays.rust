@@ -1626,8 +1626,10 @@ impl SceneFile {
             occupancy.extend([Claim { x: camera.x, z: camera.z, base: clear, shade_radius: 0., shade: 0. }]);
         }
         let mut objects: Vec<Arc<SceneObject>> = vec![];
-        // The trees' crowns, for the landscape to draw forest floor under (`terrain::canopy`).
+        // The trees' crowns, for the landscape to draw forest floor under (`terrain::canopy`), and
+        // how far out they were planted about the camera.
         let mut crowns: Vec<crate::terrain::canopy::Crown> = vec![];
+        let mut planted: f64 = 0.;
         for (k, p) in populations.iter().enumerate() {
             let (kind, spec) = ["forest", "scatter", "grass"].iter().find_map(|kind| p.get(*kind).map(|s| (*kind, s)))
                 .unwrap_or_else(|| panic!("an ecosystem's population is a \"forest\", \"scatter\" or \"grass\": {}", p));
@@ -1657,9 +1659,9 @@ impl SceneFile {
                     spec["area"] = area;
                     let (made, placed) = SceneFile::forest_in(&spec, materials, media, geometries, landscape, Some(&room));
                     let (base, canopy, shade) = (num("base", 0.25), num("canopy", 1.3), num("shade", 0.6));
+                    if about { planted = planted.max(reach); }
                     // Conifers drop needles; whether this forest's trees are conifers, by its first species.
-                    let needles = spec["species"][0]["species"].as_str().and_then(crate::procedural::tree::species)
-                        .is_some_and(|t| t.leaf_shape == crate::procedural::tree::LeafShape::Needles);
+                    let needles = spec["species"][0]["species"].as_str().is_some_and(crate::terrain::flora::conifer);
                     crowns.extend(placed.iter().map(|(p, r)| crate::terrain::canopy::Crown { x: p.x, z: p.z, radius: canopy * r, needles }));
                     (made, placed.iter().map(|(p, r)| Claim { x: p.x, z: p.z, base: base * r, shade_radius: canopy * r, shade }).collect())
                 },
@@ -1681,6 +1683,7 @@ impl SceneFile {
         }
         if o["surface"].as_str() == Some("landscape") && let Some(slot) = landscape.and_then(|l| l.medium.fields()).and_then(|f| f.canopy()) {
             slot.add(&crowns);
+            if planted > 0. { slot.planted_about(camera.x, camera.z, planted); }
         }
         objects
     }

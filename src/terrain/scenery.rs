@@ -836,6 +836,8 @@ pub struct Ground {
     materials: Vec<Option<Box<dyn MaterialModel + Sync + Send>>>,
     /// The crowns of the trees ecosystems planted on it: forest floor under them.
     canopy: crate::terrain::canopy::Slot,
+    /// Where the flora's communities grow, for the woods beyond those trees.
+    regions: crate::terrain::flora::Regions,
 }
 
 /// What lies bare on the ground at a point, under any snow or ice: plants and soil (the
@@ -862,15 +864,18 @@ pub enum Bare {
     Mossy, Lichened,
     /// Forest floor under trees (`terrain::canopy`): humus, fallen leaves and needles, moss.
     Floor,
+    /// Woods seen from afar, beyond the trees planted about the camera: a canopy of crowns,
+    /// broadleaved and conifers (`flora::Regions::woods`).
+    Woods, Conifers,
     Rock(Rock),
 }
 
 impl Bare {
     /// The kinds that aren't a rock of their own, in the order of their indices.
-    const LOOSE: [Bare; 15] = [
+    const LOOSE: [Bare; 17] = [
         Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel, Bare::Pebbles, Bare::Shingle, Bare::Rubble,
         Bare::Laterite, Bare::Dirt, Bare::Crust, Bare::Bedded, Bare::Foliated, Bare::Mossy, Bare::Lichened,
-        Bare::Floor,
+        Bare::Floor, Bare::Woods, Bare::Conifers,
     ];
     const COUNT: usize = Bare::LOOSE.len() + 9;
 
@@ -903,7 +908,7 @@ impl Bare {
             Bare::Foliated => "foliated_rock",
             Bare::Mossy => "mossy_slab",
             Bare::Lichened => "lichened_ironstone",
-            Bare::Floor => return None,
+            Bare::Floor | Bare::Woods | Bare::Conifers => return None,
             Bare::Rock(r) => match r {
                 Rock::Sediment => "scree",
                 Rock::Shale => "slate",
@@ -974,6 +979,20 @@ const MEADOW: [f64; 3] = [0.11, 0.11, 0.06];
 const LEAF_LITTER: [f64; 3] = [0.16, 0.11, 0.06];
 const NEEDLE_LITTER: [f64; 3] = [0.14, 0.08, 0.045];
 const MOSS: [f64; 3] = [0.05, 0.08, 0.025];
+/// Woods from afar, broadleaved and conifers: their canopy materials' mean albedos.
+const BROADLEAF_CANOPY: [f64; 3] = [0.04, 0.065, 0.025];
+const CONIFER_CANOPY: [f64; 3] = [0.025, 0.04, 0.02];
+
+/// A canopy seen from afar (`Bare::Woods`): crowns `spacing` metres apart, each a dome of
+/// leaves (the `cells` node's `stones`: random heights, rounded, gaps between), lit on the side
+/// facing the sun by its relief (4 m tall), its colour from `gap` deep between crowns through
+/// `mid` to `top` on their tops.
+fn canopy_material(spacing: f64, gap: [f64; 3], mid: [f64; 3], top: [f64; 3], seed: u64) -> serde_json::Value {
+    let crowns = serde_json::json!({"node": "cells", "style": "stones", "plan": true, "scale": spacing, "seed": seed % 100_000});
+    serde_json::json!({"type": "lambertian",
+        "albedo": {"pattern": crowns, "color_map": [[0, gap], [0.3, mid], [1, top]], "interpolation": "smooth"},
+        "normal": {"graph": crowns, "amount": 4}})
+}
 const FIELDS: [f64; 3] = [0.13, 0.13, 0.07];
 const GRAVEL: [f64; 3] = [0.24, 0.23, 0.21];
 const SAND: [f64; 3] = [0.32, 0.28, 0.21];
@@ -1002,11 +1021,14 @@ impl Ground {
                 // Forest floor is the soil material's (`material::soil`); the rest the library's.
                 let (definition, name) = match s {
                     Bare::Floor => (serde_json::json!({"type": "soil", "preset": "forest_floor", "seed": salt}), "forest_floor"),
+                    Bare::Woods => (canopy_material(8., [0.012, 0.02, 0.008], [0.03, 0.05, 0.02], [0.075, 0.12, 0.04], salt), "woods"),
+                    Bare::Conifers => (canopy_material(5., [0.008, 0.012, 0.007], [0.02, 0.032, 0.016], [0.045, 0.07, 0.035], salt), "conifers"),
                     s => { let name = s.library()?; (serde_json::json!({"type": "library", "name": name, "seed": salt}), name) },
                 };
                 Some(crate::scenefile::SceneFile::parse_material_definition(&definition, name, &serde_json::Map::new()))
             }).collect(),
             canopy: Default::default(),
+            regions: Default::default(),
         }
     }
 
@@ -1204,38 +1226,47 @@ impl Ground {
         let tree = treeline + (n(1500., 0.3) - 0.5) * 400.;
         // What grows here: by the climate's biome, its edges wandering with the weather from
         // year to year (noise in temperature and rain); without a climate, forest and grass.
-        // And whether it is dry, tropical, and wooded (moss and lichen on its rock).
-        let (mut ground, dry, tropical, wooded) = match &self.climate {
+        // And whether it is dry, tropical, and wooded (moss and lichen on its rock); and the
+        // woods: how much of the ground their crowns cover, and how much of that conifers'.
+        // Where trees were planted about the camera (`canopy::Slot::planted`) they are the
+        // woods, and the ground between them is open.
+        let planted = self.canopy.planted(p.x, p.z);
+        let below = (1. - smoothstep(tree - 150., tree + 50., h)) * smoothstep(0.7, 0.8, flat);
+        let (mut ground, dry, tropical, wooded, trees, needles) = match &self.climate {
             Some(_) => {
                 let local = self.wandering_climate(&d, h).expect("a climate");
                 let biome = Biome::of(&local);
-                let mut g = match biome {
-                    Biome::Ice => colour(SCREE),
-                    b => colour(b.albedo()),
-                };
-                if biome.forest() {
-                    // Clearings and meadows among the trees.
-                    let open = colour(if biome == Biome::Rainforest { Biome::Savanna.albedo() } else { GRASS });
-                    let cover = smoothstep(0.3, 0.45, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat));
-                    g = mix(open, g, cover);
-                } else if matches!(biome, Biome::HotDesert | Biome::ColdDesert) {
+                // The open ground: grass in clearings of the forests, the biome's own else.
+                let mut g = colour(match biome {
+                    Biome::Ice => SCREE,
+                    Biome::Rainforest => Biome::Savanna.albedo(),
+                    b if b.forest() => GRASS,
+                    b => b.albedo(),
+                });
+                if matches!(biome, Biome::HotDesert | Biome::ColdDesert) {
                     // Dunes, pans and darker stony desert.
                     g = g * (0.75 + 0.5 * n(3000., 0.8) + 0.15 * n(150., 0.3));
-                } else {
-                    // Grass, scrub and the odd copse.
-                    g = mix(g, colour(FOREST), 0.5 * smoothstep(0.6, 0.75, n(800., 0.5)));
                 }
-                (g, local.precipitation < local.dry_threshold(), matches!(biome, Biome::Rainforest | Biome::Savanna), biome.forest())
+                // The woods of the communities that grow here (`flora`), as the trees about the
+                // camera are planted, thinner and thicker from place to place.
+                let at = crate::graph::Context::new(*p, *normal, 0.).with_fields(Some(self as &dyn crate::graph::Fields));
+                let (woods, needles) = self.regions.woods(biome, &at);
+                let trees = (woods * (0.6 + 0.8 * n(400., 0.5))).clamp(0., 1.) * below * (1. - planted);
+                g = mix(g, mix(colour(BROADLEAF_CANOPY), colour(CONIFER_CANOPY), needles), trees);
+                (g, local.precipitation < local.dry_threshold(), matches!(biome, Biome::Rainforest | Biome::Savanna), biome.forest(), trees, needles)
             }
             None => {
-                let forest = smoothstep(0.38, 0.55, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat)) * (1. - smoothstep(tree - 150., tree + 50., h));
-                (mix(colour(GRASS), colour(FOREST), forest), false, false, forest > 0.5)
+                let forest = smoothstep(0.38, 0.55, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat)) * below * (1. - planted);
+                (mix(colour(GRASS), colour(FOREST), forest), false, false, forest > 0.5, forest, 0.3)
             }
         };
         // Alpine meadow from the treeline up.
         ground = mix(ground, colour(MEADOW), smoothstep(tree - 100., tree + 200., h));
-        // The kinds of bare ground, blended as their colours are.
+        // The kinds of bare ground, blended as their colours are: the woods' canopy first.
         let mut shares = Shares::of(Bare::Plain);
+        let mut canopy = Shares::of(Bare::Woods);
+        canopy.mix(Shares::of(Bare::Conifers), needles);
+        shares.mix(canopy, trees);
         if class == TILL {
             // Till and moraines: unsorted rubble, boulders in a grey matrix of rock flour,
             // thinly grown over where it is warm enough (moraines left by the last glaciers

@@ -229,6 +229,12 @@ const REGION: f64 = 4000.;
 /// ecotone between them, a few percent of a region across.
 const ECOTONE: f64 = 0.04;
 
+/// Whether `species` is a conifer, dropping needles (some are drawn with oval leaves).
+pub fn conifer(species: &str) -> bool {
+    matches!(species, "norway-spruce" | "balsam-fir" | "scots-pine" | "european-larch" | "ponderosa-pine" | "pinyon-pine"
+        | "stone-pine" | "utah-juniper" | "mountain-pine" | "juniper" | "italian-cypress" | "cedar-of-lebanon")
+}
+
 /// The plant `species` (`PLANTS`).
 pub fn plant_named(species: &str) -> Option<&'static Plant> {
     PLANTS.iter().find(|p| p.species == species)
@@ -267,6 +273,65 @@ pub fn weight(c: &Community) -> Value {
     let share = json!({"node": "expr", "expr": "a / b", "range": [0, 1], "inputs": {
         "a": lead(c.biome, k, n), "b": {"node": "add", "inputs": (0..n).map(|j| lead(c.biome, j, n)).collect::<Vec<_>>()}}});
     json!({"node": "multiply", "inputs": [biome, share]})
+}
+
+/// The woods of community `c`, seen from afar: how much of the ground its trees' crowns cover
+/// (the sum of its trees' abundances, at most 1; not its trees of wet ground, which line the
+/// rivers, nor the desert's saguaros and Joshua trees, which make no canopy), and how much of
+/// that is conifers'.
+pub fn woods(c: &Community) -> (f64, f64) {
+    let trees: Vec<(&Plant, f64)> = c.plants.iter()
+        .filter_map(|(s, a)| plant_named(s).map(|p| (p, *a)))
+        .filter(|(p, _)| p.stratum == Tree && !p.wet && !matches!(p.species, "saguaro" | "joshua-tree"))
+        .collect();
+    let total: f64 = trees.iter().map(|(_, a)| a).sum();
+    let needles: f64 = trees.iter().filter(|(p, _)| conifer(p.species)).map(|(_, a)| a).sum();
+    (total.min(1.), if total > 0. { needles / total } else { 0. })
+}
+
+/// The communities' region noises (`region_noise`), parsed once, for their weights at many
+/// points: as `weight` without its biome, each noise evaluated once rather than in every
+/// community's graph.
+pub struct Regions {
+    noises: Vec<(Biome, Vec<crate::graph::Graph>)>,
+}
+
+impl Default for Regions {
+    fn default() -> Regions {
+        Regions { noises: Biome::ALL.iter().map(|&b| {
+            let n = communities(b).len();
+            (b, (0..n).map(|k| crate::graph::Graph::parse(&region_noise(b, k)).expect("a region's noise")).collect())
+        }).collect() }
+    }
+}
+
+impl Regions {
+    /// The weight of each community of `biome` at `c`'s point, given that the biome is there.
+    pub fn weights(&self, biome: Biome, c: &crate::graph::Context) -> Vec<(&'static Community, f64)> {
+        let all = communities(biome);
+        if all.len() < 2 { return all.into_iter().map(|x| (x, 1.)).collect(); }
+        let graphs = &self.noises.iter().find(|(b, _)| *b == biome).expect("every biome's noises").1;
+        let f: Vec<f64> = graphs.iter().map(|g| g.eval(c)).collect();
+        let lead = |k: usize| {
+            let rivals = (0..f.len()).filter(|&j| j != k).map(|j| f[j]).fold(f64::NEG_INFINITY, f64::max);
+            let t = ((f[k] - rivals + ECOTONE) / (2. * ECOTONE)).clamp(0., 1.);
+            t * t * (3. - 2. * t)
+        };
+        let leads: Vec<f64> = (0..f.len()).map(lead).collect();
+        let total: f64 = leads.iter().sum();
+        all.into_iter().zip(leads).map(|(x, l)| (x, l / total)).collect()
+    }
+
+    /// The woods at `c`'s point, given its `biome`: their communities' `woods`, by weight.
+    pub fn woods(&self, biome: Biome, c: &crate::graph::Context) -> (f64, f64) {
+        let (mut cover, mut needles) = (0., 0.);
+        for (x, w) in self.weights(biome, c) {
+            let (v, n) = woods(x);
+            cover += w * v;
+            needles += w * v * n;
+        }
+        (cover, if cover > 0. { needles / cover } else { 0. })
+    }
 }
 
 /// The share of each community among the weights found at points about the camera (each
@@ -439,6 +504,31 @@ mod tests {
         let elsewhere = All(Biome::Taiga);
         let c = Context::new(Vector3::zeros(), Vector3::y(), 0.).with_fields(Some(&elsewhere));
         assert!(graphs.iter().all(|g| g.eval(&c) == 0.));
+    }
+
+    /// The fast weights are the graphs' (as the trees are placed by), and the woods follow
+    /// the communities: thick in a beech wood, conifers in a spruce-fir forest, open on a
+    /// meadow, none in a desert of cacti.
+    #[test]
+    fn test_regions_are_the_weights_graphs() {
+        let regions = Regions::default();
+        for b in [Biome::Taiga, Biome::Savanna, Biome::Tundra] {
+            let fields = All(b);
+            let graphs: Vec<(&Community, Graph)> = communities(b).into_iter().map(|c| (c, Graph::parse(&weight(c)).unwrap())).collect();
+            for i in 0..200 {
+                let p = Vector3::new(i as f64 * 317.3, 0., (i * i) as f64 * 41.7 % 30000.);
+                let c = Context::new(p, Vector3::y(), 0.).with_fields(Some(&fields));
+                for ((x, w), (y, g)) in regions.weights(b, &c).iter().zip(&graphs) {
+                    assert_eq!(x.name, y.name);
+                    assert!((w - g.eval(&c)).abs() < 1e-9, "{} at {:?}", x.name, p);
+                }
+            }
+        }
+        let named = |n: &str| COMMUNITIES.iter().find(|c| c.name == n).unwrap();
+        assert!(woods(named("beech wood")).0 >= 0.8 && woods(named("beech wood")).1 == 0.);
+        assert!(woods(named("spruce-fir forest")).0 == 1. && woods(named("spruce-fir forest")).1 > 0.8);
+        assert!(woods(named("flower meadow")).0 < 0.1);
+        assert_eq!(woods(named("saguaro desert")).0, 0.);
     }
 
     /// The populations are those of the communities present only, trees before shrubs before

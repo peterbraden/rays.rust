@@ -22,12 +22,15 @@ use rayon::prelude::*;
 /// The distance to the nearest hit through each pixel's centre, row by row from the top.
 pub fn depth(s: &Scene) -> Vec<Option<f64>> {
     let (w, h) = (s.image.width, s.image.height);
+    let (fw, fh) = (s.image.frame.width, s.image.frame.height);
     (0 .. w * h).into_par_iter().map(|i| {
-        // Image rows run from the top; the camera's y runs from the bottom.
-        let (x, y) = (i % w, h - 1 - i / w);
-        // Only the aperture draws random numbers; seed per pixel so depth is reproducible.
-        seed_rand(s.render.seed, i as u64);
-        let r = s.camera.get_ray(x as f64 / w as f64, y as f64 / h as f64, 0.5 / w as f64, 0.5 / h as f64);
+        // Image rows run from the top; the camera's y runs from the bottom. Where in the whole
+        // frame, if the image is cropped from it.
+        let (x, y, _) = s.image.in_frame(i % w, h - 1 - i / w);
+        // Only the aperture draws random numbers; seed per pixel (by its place in the frame's
+        // image) so depth is reproducible.
+        seed_rand(s.render.seed, ((fh - 1 - y) * fw + x) as u64);
+        let r = s.camera.get_ray(x as f64 / fw as f64, y as f64 / fh as f64, 0.5 / fw as f64, 0.5 / fh as f64);
         s.objects.nearest_intersection(&r, f64::INFINITY, 0.).map(|hit| hit.dist)
     }).collect()
 }

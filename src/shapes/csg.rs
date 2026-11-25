@@ -60,7 +60,7 @@ pub struct Csg {
     parts: Vec<(Arc<Item>, BBox)>,
     bounds: BBox,
     /// For unions, which show every part's nearest hit: the parts in a BVH.
-    tree: Option<GeometrySet<Item>>,
+    tree: Option<GeometrySet<Arc<Item>>>,
 }
 
 impl Csg {
@@ -74,7 +74,8 @@ impl Csg {
             Op::Difference => parts[0].1,
         };
         let tree = (op == Op::Union).then(|| {
-            let items: Vec<Arc<Item>> = parts.iter().map(|(p, _)| p.clone()).collect();
+            // Shared with `parts`: the set keeps the Arcs (cloned), not the parts.
+            let items: Vec<Arc<Arc<Item>>> = parts.iter().map(|(p, _)| Arc::new(p.clone())).collect();
             GeometrySet::new(&items)
         });
         Csg { op, parts, bounds, tree }

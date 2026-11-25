@@ -5960,6 +5960,12 @@
           "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
         },
         {
+          "name": "equiangular",
+          "kind": "boolean",
+          "default": false,
+          "doc": "Sample the area and point lights' glow along each camera ray by equi-angular sampling, combined with the medium's collisions by MIS (Kulla and Fajardo 2012): far less noise about lamps in fog. Path tracer only; not for chromatic media or the diffusion approximation."
+        },
+        {
           "name": "diffraction",
           "kind": "object",
           "default": null,
@@ -7774,6 +7780,12 @@
           "kind": "number",
           "default": 35,
           "doc": "Steepest ground trees stand on, degrees."
+        },
+        {
+          "name": "where",
+          "kind": "json",
+          "default": null,
+          "doc": "A graph from 0 to 1 of where trees grow and how thickly, read on the ground (slope, altitude, aspect, noise, an expression of x, y and z; on a landscape its fields and biome); everywhere by default."
         },
         {
           "name": "favour",

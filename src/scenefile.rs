@@ -2301,6 +2301,7 @@ impl SceneFile {
             emission: None,
             extinction: None,
             sun_probes: o["sun_probes"].as_bool().unwrap_or(crate::volume::SUN_PROBES),
+            equiangular: o["equiangular"].as_bool().unwrap_or(false),
         }
     }
 
@@ -4780,7 +4781,7 @@ impl SceneFile {
         let height =SceneFile::parse_int(&s.height, 480);
 
         let mut scene = Scene {
-            image: ImageOpts { width, height },
+            image: ImageOpts::whole(width, height),
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
                 background: SceneFile::parse_background(&s.background, pixel_angle,
@@ -5339,7 +5340,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transformed_emitters_are_area_lights_when_uniformly_scaled() {
+    fn test_transformed_emitters_are_area_lights() {
         let s = SceneFile::from_string(r#"{
             "camera": { "location": [0, 0, -10], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
             "materials": { "L": { "type": "diffuse-light", "color": [1, 1, 1] } },
@@ -5350,7 +5351,8 @@ mod tests {
                   "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 } }
             ]
         }"#.to_string());
-        assert_eq!(s.area_lights.len(), 1);
+        // Stretched ones too (`Transform::sample_from`).
+        assert_eq!(s.area_lights.len(), 2);
     }
 
     fn hit(g: &dyn Geometry, ro: [f64; 3], rd: [f64; 3]) -> Option<Vector3<f64>> {

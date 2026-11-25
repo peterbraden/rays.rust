@@ -89,21 +89,50 @@ impl SceneGraph {
         }
         // Solid objects first: if one blocks the ray, the media needn't be tracked. (Most block
         // it or don't; transparent water lets some through, by colour.)
-        let (media, solid): (Vec<_>, Vec<_>) = self.infinite_items.iter().partition(|o| o.is_stochastic());
+        // (Two passes over the few unbounded items rather than partitioning them into vectors,
+        // which allocated on every shadow ray.)
         let mut t = Color::white();
-        for o in solid {
+        for o in self.infinite_items.iter().filter(|o| !o.is_stochastic()) {
             t = t * o.transmittance_color(r, min, max);
             if t.rgb.max() <= 0. {
                 return Color::black();
             }
         }
-        for o in media {
+        for o in self.infinite_items.iter().filter(|o| o.is_stochastic()) {
             t = t * o.transmittance_color(r, min, max);
             if t.rgb.max() <= 0. {
                 break;
             }
         }
         t
+    }
+
+    /// The transmittance of the participating media alone along the ray between `min` and
+    /// `max`, where it is known that no surface is in the way.
+    pub fn media_transmittance(&self, r: &Ray, max: f64, min: f64) -> Color {
+        let mut t = Color::white();
+        for o in self.infinite_items.iter().filter(|o| o.is_stochastic()) {
+            t = t * o.transmittance_color(r, min, max);
+            if t.rgb.max() <= 0. {
+                break;
+            }
+        }
+        t
+    }
+
+    /// The distance along the ray to the nearest surface beyond `min`, passing through
+    /// participating media (infinite where there is none).
+    pub fn nearest_surface(&self, r: &Ray, min: f64) -> f64 {
+        let mut best = f64::INFINITY;
+        for o in self.infinite_items.iter().filter(|o| !o.is_stochastic()) {
+            if let Some(x) = o.intersects_beyond(r, min).filter(|x| x.dist >= min && x.dist < best) {
+                best = x.dist;
+            }
+        }
+        match self.bvh.nearest(r, min, best, |i, b| self.items[i].intersects_range(r, min, b)) {
+            Some((_, x)) => best.min(x.dist),
+            None => best,
+        }
     }
 
     pub fn nearest_raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(&SceneObject, RawIntersection)> {

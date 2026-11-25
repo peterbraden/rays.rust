@@ -41,6 +41,7 @@ pub const PART_SHIFT: u32 = 22;
 /// A whole forest is one object of such parts, the bark and leaves of every placed tree, so a
 /// ray searches one acceleration structure and stops at the first tree it meets. As separate
 /// objects, one per tree part, each spanning the whole forest, every ray searched them all.
+#[derive(Clone)]
 pub struct PartOf<T: Geometry> {
     pub item: T,
     pub part: u32,

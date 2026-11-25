@@ -834,6 +834,8 @@ pub struct Ground {
     ice: [Ice; 2],
     /// The library's materials for each kind of bare ground (`Bare::index`), if used.
     materials: Vec<Option<Box<dyn MaterialModel + Sync + Send>>>,
+    /// The crowns of the trees ecosystems planted on it: forest floor under them.
+    canopy: crate::terrain::canopy::Slot,
 }
 
 /// What lies bare on the ground at a point, under any snow or ice: plants and soil (the
@@ -858,14 +860,17 @@ pub enum Bare {
     /// Rock in humid, wooded country: slabs grown over with moss and lichen, and dark rock
     /// speckled with lichen.
     Mossy, Lichened,
+    /// Forest floor under trees (`terrain::canopy`): humus, fallen leaves and needles, moss.
+    Floor,
     Rock(Rock),
 }
 
 impl Bare {
     /// The kinds that aren't a rock of their own, in the order of their indices.
-    const LOOSE: [Bare; 14] = [
+    const LOOSE: [Bare; 15] = [
         Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel, Bare::Pebbles, Bare::Shingle, Bare::Rubble,
         Bare::Laterite, Bare::Dirt, Bare::Crust, Bare::Bedded, Bare::Foliated, Bare::Mossy, Bare::Lichened,
+        Bare::Floor,
     ];
     const COUNT: usize = Bare::LOOSE.len() + 9;
 
@@ -898,6 +903,7 @@ impl Bare {
             Bare::Foliated => "foliated_rock",
             Bare::Mossy => "mossy_slab",
             Bare::Lichened => "lichened_ironstone",
+            Bare::Floor => return None,
             Bare::Rock(r) => match r {
                 Rock::Sediment => "scree",
                 Rock::Shale => "slate",
@@ -964,6 +970,10 @@ const SCREE: [f64; 3] = [0.26, 0.25, 0.23];
 const FOREST: [f64; 3] = [0.028, 0.042, 0.022];
 const GRASS: [f64; 3] = [0.07, 0.10, 0.04];
 const MEADOW: [f64; 3] = [0.11, 0.11, 0.06];
+/// The forest floor's litter: fallen leaves, browner, and needles, redder; and its moss.
+const LEAF_LITTER: [f64; 3] = [0.16, 0.11, 0.06];
+const NEEDLE_LITTER: [f64; 3] = [0.14, 0.08, 0.045];
+const MOSS: [f64; 3] = [0.05, 0.08, 0.025];
 const FIELDS: [f64; 3] = [0.13, 0.13, 0.07];
 const GRAVEL: [f64; 3] = [0.24, 0.23, 0.21];
 const SAND: [f64; 3] = [0.32, 0.28, 0.21];
@@ -987,10 +997,16 @@ impl Ground {
             ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
             materials: (0..Bare::COUNT).map(|k| {
                 let s = Bare::from_index(k);
-                let name = s.library().filter(|_| p.ground_materials)?;
-                let definition = serde_json::json!({"type": "library", "name": name, "seed": seed.wrapping_mul(31).wrapping_add(k as u64)});
+                if !p.ground_materials { return None; }
+                let salt = seed.wrapping_mul(31).wrapping_add(k as u64);
+                // Forest floor is the soil material's (`material::soil`); the rest the library's.
+                let (definition, name) = match s {
+                    Bare::Floor => (serde_json::json!({"type": "soil", "preset": "forest_floor", "seed": salt}), "forest_floor"),
+                    s => { let name = s.library()?; (serde_json::json!({"type": "library", "name": name, "seed": salt}), name) },
+                };
                 Some(crate::scenefile::SceneFile::parse_material_definition(&definition, name, &serde_json::Map::new()))
             }).collect(),
+            canopy: Default::default(),
         }
     }
 
@@ -1319,6 +1335,17 @@ impl Ground {
             bare.mix(Shares::of(Bare::Scree), loose);
             shares.mix(bare, rock);
         }
+        // Forest floor under the trees planted on it (`terrain::canopy`): humus and litter,
+        // red-brown needles under conifers, browner leaves under broadleaves, and moss where it
+        // isn't dry; soil holds under trees on all but cliffs, which stay bare.
+        let (under, needles) = self.canopy.under(p.x, p.z);
+        if under > 0. {
+            let litter = mix(colour(LEAF_LITTER), colour(NEEDLE_LITTER), needles) * (0.8 + 0.4 * n(2., 0.6));
+            let moss = if dry { 0. } else { 0.6 * smoothstep(0.5, 0.7, n(5., 0.8)) };
+            let hold = under * smoothstep(0.3, 0.5, flat);
+            ground = mix(ground, mix(litter, colour(MOSS), moss) * grain, hold);
+            shares.mix(Shares::of(Bare::Floor), hold);
+        }
         // Snow lies above the snowline where slopes are gentle enough to hold it, and drifts
         // lower in sheltered places.
         let line = snowline + (n(900., 0.1) - 0.5) * 500.;
@@ -1342,6 +1369,8 @@ impl crate::graph::Fields for Ground {
         self.wandering_climate(&d, h).map(|l| Biome::of(&l))
     }
 
+    fn canopy(&self) -> Option<&crate::terrain::canopy::Slot> { Some(&self.canopy) }
+
     fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
         use crate::graph::Field;
         let (d, h) = self.frame.on_planet(p);
@@ -1358,6 +1387,7 @@ impl crate::graph::Fields for Ground {
             Field::Bedrock => return self.layers.iter().find(|l| l.weight(&d) > 0.5).or(self.layers.last())
                 .map(|l| l.fields.bedrock(&l.domain, &d, h).index() as f64),
             Field::Hardness => return self.rock(&d, h).map(|r| -r.scores().0),
+            Field::Canopy => return Some(self.canopy.under(p.x, p.z).0),
             _ => {},
         }
         let (mut sum, mut left) = (0., 1.);

@@ -103,6 +103,13 @@ Flora: oak and hazel (temperate_forest) 71%, beech wood (temperate_forest) 29% a
 
 `"flora"` can also be `{"strata": ["trees", "shrubs", "ground"], "reach": 300, "samples": 12}`,
 to grow only some layers, or survey further. Populations the ecosystem lists itself (rocks,
-say) are placed after the flora's. Nothing grows within `"clear"` metres of the camera (12 with
+say) are placed after the flora's.
+
+An ecosystem on a landscape hands it the crowns of the trees it placed (`terrain::canopy`), and
+the landscape draws forest floor under them (`scenery::Ground::cover`): humus and litter, red-
+brown needles under conifers and browner leaves under broadleaves, moss where it isn't dry,
+shaded with the soil material's `forest_floor`; only cliffs stay bare. Materials and placement
+rules after the ecosystem read the same as a field, `canopy` (0 to 1). The ground's relief
+doesn't: its displaced cells' bounds are found before the trees are planted. Nothing grows within `"clear"` metres of the camera (12 with
 a flora, 0 otherwise), so it doesn't stand inside a tree. The flora's trees grow `reach` metres
 out (shrubs half as far), thinning out over the last third of it.

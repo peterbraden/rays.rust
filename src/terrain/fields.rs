@@ -165,7 +165,7 @@ impl SimFields {
             Field::Playa => s(&self.playa).clamp(0., 1.),
             Field::Till => s(&self.till).max(0.),
             Field::Sand => s(&self.sand).max(0.),
-            Field::Temperature => return None,
+            Field::Temperature | Field::Canopy => return None,
         })
     }
 }

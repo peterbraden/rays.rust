@@ -151,6 +151,10 @@ pub enum Field {
     /// The bedrock (`terrain::geology::Rock`, by number as `rock`) at the point's height,
     /// beneath any sediment or lava over it: what the scree there broke from.
     Bedrock,
+    /// How much of the ground the crowns of the trees an ecosystem planted on the landscape
+    /// cover, 0 to 1 (`terrain::canopy`): for materials and placement rules after the
+    /// ecosystem, not for displacement, whose bounds are found before any trees are planted.
+    Canopy,
 }
 
 impl Field {
@@ -173,7 +177,8 @@ impl Field {
             "till" => Field::Till,
             "sand" => Field::Sand,
             "bedrock" => Field::Bedrock,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, bedrock, hardness, playa, till or sand", s)),
+            "canopy" => Field::Canopy,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, bedrock, hardness, playa, till, sand or canopy", s)),
         })
     }
 }
@@ -189,6 +194,9 @@ pub trait Fields: Sync + Send {
 
     /// The climate's biome at `p` (`biome` nodes); None where there is no climate.
     fn biome(&self, _p: &Vector3<f64>) -> Option<crate::terrain::climate::Biome> { None }
+    /// The crowns of the trees planted on the surface, for ecosystems to add to (`canopy`
+    /// fields read them); None where the surface keeps none.
+    fn canopy(&self) -> Option<&crate::terrain::canopy::Slot> { None }
 }
 
 /// Where a graph is evaluated: the point on the surface (before any displacement), the

@@ -9,6 +9,7 @@ pub mod tectonics;
 pub mod geology;
 pub mod isostasy;
 pub mod climate;
+pub mod canopy;
 pub mod flora;
 pub mod orographic;
 pub mod aeolian;

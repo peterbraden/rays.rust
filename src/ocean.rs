@@ -1291,19 +1291,59 @@ pub fn breaking_fraction(hrms: f64, depth: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
+/// The wavenumber (rad/m) of waves of angular frequency `omega` (rad/s) in water `depth`
+/// metres deep, by linear theory's dispersion relation ω² = g k tanh(k h).
+pub fn wavenumber(omega: f64, depth: f64) -> f64 {
+    let g = 9.81;
+    let deep = omega * omega / g;
+    if depth <= 0. { return f64::INFINITY; }
+    // g k tanh(k h) rises with k. Both the deep-water k (tanh < 1) and the shallow-water
+    // ω / √(g h) (tanh(kh) < kh) are below the root: bisect from the larger, doubling for a
+    // bound above it.
+    let lo0 = deep.max(omega / (g * depth).sqrt());
+    let mut hi = 2. * lo0;
+    while g * hi * (hi * depth).tanh() < omega * omega { hi *= 2.; }
+    let mut lo = lo0;
+    for _ in 0..100 {
+        let mid = 0.5 * (lo + hi);
+        if g * mid * (mid * depth).tanh() < omega * omega { lo = mid } else { hi = mid }
+    }
+    0.5 * (lo + hi)
+}
+
+/// How much taller waves of angular frequency `omega` are in water `depth` metres deep than in
+/// deep water, coming straight in, by conservation of their energy flux: K_s = √(c_g0 / c_g),
+/// the group velocity c_g = n c, n = ½ (1 + 2kh / sinh 2kh), in deep water half the phase
+/// speed g / ω (linear theory; e.g. Dean and Dalrymple, "Water Wave Mechanics for Engineers
+/// and Scientists", 1991). A little below 1 at intermediate depths, rising without bound in
+/// the shallows (where the waves break first).
+pub fn shoaling(omega: f64, depth: f64) -> f64 {
+    let g = 9.81;
+    let k = wavenumber(omega, depth);
+    if !k.is_finite() { return f64::INFINITY; }
+    let kh = k * depth;
+    if kh > 20. { return 1.; }
+    let n = 0.5 * (1. + 2. * kh / (2. * kh).sinh());
+    let cg = n * omega / k;
+    let cg0 = 0.5 * g / omega;
+    (cg0 / cg).sqrt()
+}
+
 /// The surf: the water's depth under the sea's surface near the land (a function of a point
-/// on the surface, None where it doesn't know, as far out at sea), and the waves' root-mean-
-/// square height as they arrive (the open sea's, before they feel the bottom).
+/// on the surface, None where it doesn't know, as far out at sea), the waves' root-mean-square
+/// height out at sea, and their angular frequency (the spectrum's peak), by which they grow as
+/// they come into the shallows (`shoaling`).
 #[derive(Clone)]
 pub struct Surf {
     pub depth: std::sync::Arc<dyn Fn(&Vector3<f64>) -> Option<f64> + Send + Sync>,
     pub hrms: f64,
+    pub omega: f64,
 }
 
 impl Surf {
-    /// The fraction of waves breaking at `p`.
+    /// The fraction of waves breaking at `p`: the waves there as tall as shoaling makes them.
     pub fn breaking(&self, p: &Vector3<f64>) -> f64 {
-        (self.depth)(p).map_or(0., |d| breaking_fraction(self.hrms, d))
+        (self.depth)(p).map_or(0., |d| breaking_fraction(self.hrms * shoaling(self.omega, d), d))
     }
 }
 
@@ -1831,9 +1871,13 @@ pub fn create_ocean_over(opts: &Value, ground: Option<std::sync::Arc<crate::scen
             // its surface's standard deviation; H_rms = H_s / √2 for Rayleigh-distributed waves.
             let (_, sd) = waves.height_exceeded(0.5);
             let hrms = 4. * sd / 2f64.sqrt();
+            // Their period: the spectrum's peak, the fully developed sea's or a younger one's
+            // over the fetch (`jonswap_peak`), as deep-water waves: ω² = 2π g / λ.
+            let fetch = SceneFile::parse_number(&opts["fetch"], f64::INFINITY);
+            let omega = (2. * std::f64::consts::PI * 9.81 / jonswap_peak(wind.norm(), fetch.min(1e12))).sqrt();
             let centre = planet_radius.map(|r| Vector3::new(0., -r, 0.));
             let (above, reach) = (200., 2000.);
-            m.surf = Some(Surf { hrms, depth: std::sync::Arc::new(move |p: &Vector3<f64>| {
+            m.surf = Some(Surf { hrms, omega, depth: std::sync::Arc::new(move |p: &Vector3<f64>| {
                 // Sea level under `p`, and the ground below it.
                 let (up, level) = match centre {
                     Some(c) => { let u = (p - c).normalize(); (u, c + u * (-c.y)) },
@@ -1979,6 +2023,23 @@ mod curved_tests {
         let covered = (0..n * n).map(|i| foam.at((i % n) as f64 * 2.31, (i / n) as f64 * 2.17)).sum::<f64>() / (n * n) as f64;
         let w = whitecap_coverage(wind.norm());
         assert!((covered - w).abs() < 0.4 * w, "{} vs {}", covered, w);
+    }
+
+    #[test]
+    fn test_waves_grow_as_they_come_into_the_shallows() {
+        let omega = 2. * std::f64::consts::PI / 5.3;
+        // The dispersion relation holds; in deep water k = ω² / g, and no change of height.
+        let k = wavenumber(omega, 3.);
+        assert!((9.81 * k * (k * 3.).tanh() - omega * omega).abs() < 1e-9);
+        assert!((wavenumber(omega, 500.) - omega * omega / 9.81).abs() < 1e-9);
+        assert!((shoaling(omega, 500.) - 1.).abs() < 1e-6);
+        // At intermediate depths a little lower, least about 0.913 (at kh near 1.2).
+        let least = (1..400).map(|i| shoaling(omega, 0.1 * i as f64)).fold(f64::MAX, f64::min);
+        assert!((least - 0.913).abs() < 0.002, "{}", least);
+        // In shallow water, Green's law: c_g → √(g h), so K_s → √(g / (2ω) / √(g h)).
+        let h: f64 = 0.05;
+        let green = (9.81 / (2. * omega) / (9.81 * h).sqrt()).sqrt();
+        assert!((shoaling(omega, h) / green - 1.).abs() < 0.02, "{} vs {}", shoaling(omega, h), green);
     }
 
     #[test]

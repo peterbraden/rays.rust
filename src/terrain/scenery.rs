@@ -372,7 +372,7 @@ pub fn dean_a(d50: f64) -> f64 { 0.21 * d50.max(0.01).powf(0.48) }
 
 /// The beach's median grain, mm: a medium sand (a model choice, until the coast's sediment is
 /// known).
-const BEACH_SAND: f64 = 0.3;
+pub const BEACH_SAND: f64 = 0.3;
 
 /// The depth below which waves no longer reshape the sea floor, metres: a typical depth of
 /// closure for moderate coasts (6-10 m; a model choice for Hallermeier's, which needs the

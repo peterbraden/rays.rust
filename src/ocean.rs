@@ -1341,9 +1341,14 @@ pub struct Surf {
     pub depth: Depth,
     pub hrms: f64,
     pub omega: f64,
-    /// The sea's waves (as its surface has them), whose crests break where they are too high
-    /// for the water under them.
-    pub waves: Option<std::sync::Arc<WaveField>>,
+    /// The way the waves travel out at sea (unit, scene x and z): the wind's.
+    pub heading: Vector2<f64>,
+    /// The shoreface's Dean parameter, m^(1/3) (`terrain::scenery::dean_a`), by which the
+    /// distance from the shore follows from the depth.
+    pub dean_a: f64,
+    /// Each wave's height about the root-mean-square, varying along its crest and from wave to
+    /// wave (wave groups).
+    pub noise: crate::noise::PerlinNoise,
 }
 
 impl Surf {
@@ -1352,19 +1357,56 @@ impl Surf {
         (self.depth)(p).map_or(0., |d| breaking_fraction(self.hrms * shoaling(self.omega, d), d))
     }
 
-    /// The white water at `p`, 0 to 1, and the fraction of waves breaking there: where the sea's
-    /// own crest there, grown by shoaling, is too high for the water under it (a wave twice
-    /// the crest's height, at least McCowan's 0.78 of the depth), so it lies along the crests
-    /// that are breaking, as a surf zone does; softened over a tenth of that either side. In
-    /// the shallowest water every crest breaks. Without the waves, the fraction breaking.
+    /// The white water at `p`, 0 to 1, and the fraction of waves breaking there. In the surf
+    /// zone the waves are refracted: their crests swing round towards the depth contours, as the
+    /// part in deeper water outruns the part in shallower (Snell's law, sin θ / c the same
+    /// all the way in, over contours taken as straight and parallel), and their heights change
+    /// by K_r = √(cos θ₀ / cos θ) as the crests spread or bunch, as well as by shoaling. The
+    /// crests are laid out by their phase: across the shore, on Dean's profile (y = (d / A)^1.5
+    /// from the shore) in shallow water, S = ∫ k dy = 1.5 ω y^(2/3) / √(g A); along it, k₀ sin
+    /// θ₀ (Snell's constant). A wave, its height varying about the root-mean-square from wave
+    /// to wave and along its crest, breaks where that height reaches 0.78 of the depth, and is
+    /// white on its front and behind it with the foam it leaves, fading as it ages. Waves travelling away from the shore (an offshore wind's) never reach it:
+    /// none break.
     pub fn white(&self, p: &Vector3<f64>) -> (f64, f64) {
+        let g = 9.81;
         let Some(d) = (self.depth)(p) else { return (0., 0.) };
-        let ks = shoaling(self.omega, d);
-        let breaking = breaking_fraction(self.hrms * ks, d);
+        if d <= 0. { return (1., 1.); }
+        // Out to sea where the depth increases, from its slope across a couple of metres.
+        let e = 2.;
+        let at = |dx: f64, dz: f64| (self.depth)(&(p + Vector3::new(dx, 0., dz)));
+        let (Some(xp), Some(xm), Some(zp), Some(zm)) = (at(e, 0.), at(-e, 0.), at(0., e), at(0., -e)) else { return (0., 0.) };
+        let gradient = Vector2::new(xp - xm, zp - zm) / (2. * e);
+        if gradient.norm() < 1e-6 { return (0., 0.); }
+        let offshore = gradient.normalize();
+        let along = Vector2::new(-offshore.y, offshore.x);
+        // The angle the waves come in at, out at sea, from the shore's normal.
+        let cos0 = self.heading.dot(&-offshore);
+        if cos0 <= 0.05 { return (0., 0.); }
+        let sin0 = self.heading.dot(&along);
+        let k0 = self.omega * self.omega / g;
+        let k = wavenumber(self.omega, d);
+        let sin = (sin0 * k0 / k).clamp(-1., 1.);
+        let refraction = (cos0 / (1. - sin * sin).sqrt().max(1e-3)).sqrt();
+        let grow = shoaling(self.omega, d) * refraction;
+        let breaking = breaking_fraction(self.hrms * grow, d);
         if breaking <= 0. { return (0., 0.); }
-        let Some(waves) = &self.waves else { return (breaking, breaking) };
-        let crest = ks * waves.full_height(p.x, p.z);
-        (crate::math::smoothstep(0.9, 1.1, 2. * crest / (BREAKING_INDEX * d.max(1e-3))), breaking)
+        // The phase of the crests here.
+        let y = (d / self.dean_a).powf(1.5);
+        let t = p.x * along.x + p.z * along.y;
+        let phase = 1.5 * self.omega * y.powf(2. / 3.) / (g * self.dean_a).sqrt() + k0 * sin0 * t;
+        let wave = (phase / std::f64::consts::TAU).floor();
+        // This wave's height here, about the root-mean-square.
+        let n = 0.5 + 0.5 * self.noise.noise(t / 40., wave * 0.37, 0.5);
+        let height = self.hrms * (0.4 + 1.2 * n) * grow;
+        // A broken wave's foam: the roller on its front, and behind it (seaward: the phase grows
+        // out to sea) the foam it left as it passed, as old as the phase since its crest over
+        // ω, fading as the whitecaps' does (`FOAM_DECAY`); so the inner surf zone, where every
+        // wave breaks, stays about half white between them.
+        let age = (phase / std::f64::consts::TAU).rem_euclid(1.) * std::f64::consts::TAU / self.omega;
+        let foam = (-age / FOAM_DECAY).exp();
+        let white = crate::math::smoothstep(0.95, 1.05, height / (BREAKING_INDEX * d)) * foam;
+        (white, breaking)
     }
 }
 
@@ -1898,7 +1940,8 @@ pub fn create_ocean_over(opts: &Value, ground: Option<std::sync::Arc<crate::scen
             let omega = (2. * std::f64::consts::PI * 9.81 / jonswap_peak(wind.norm(), fetch.min(1e12))).sqrt();
             let centre = planet_radius.map(|r| Vector3::new(0., -r, 0.));
             let (above, reach) = (200., 2000.);
-            m.surf = Some(Surf { hrms, omega, waves: Some(std::sync::Arc::new(waves_of(opts))), depth: std::sync::Arc::new(move |p: &Vector3<f64>| {
+            m.surf = Some(Surf { hrms, omega, heading: wind.normalize(), dean_a: crate::terrain::scenery::dean_a(crate::terrain::scenery::BEACH_SAND),
+                noise: crate::noise::PerlinNoise::shuffled(0x5afe), depth: std::sync::Arc::new(move |p: &Vector3<f64>| {
                 // Sea level under `p`, and the ground below it.
                 let (up, level) = match centre {
                     Some(c) => { let u = (p - c).normalize(); (u, c + u * (-c.y)) },
@@ -2064,24 +2107,39 @@ mod curved_tests {
     }
 
     #[test]
-    fn test_crests_break_where_too_high_for_the_water() {
-        // The sea of a 7 m/s wind over water of a constant depth: white along the crests where
-        // twice their height (shoaled) reaches 0.78 of the depth; none out at sea, more the
-        // shallower it gets, and in water as deep as the waves are high, only the crests (not
-        // the troughs, about half the sea).
-        let wind = Vector2::new(7., 2.);
-        let waves = std::sync::Arc::new(WaveField::sea(wind, 0., 1, SeaState::default()));
-        let (_, sd) = waves.height_exceeded(0.5);
-        let omega = (2. * std::f64::consts::PI * 9.81 / jonswap_peak(wind.norm(), 1e12)).sqrt();
-        let white = |depth: f64| {
-            let surf = Surf { depth: std::sync::Arc::new(move |_| Some(depth)), hrms: 4. * sd / 2f64.sqrt(), omega, waves: Some(waves.clone()) };
-            let n = 4000;
-            (0..n).map(|i| surf.white(&Vector3::new(1.37 * i as f64, 0., 0.71 * (i % 97) as f64)).0).sum::<f64>() / n as f64
+    fn test_breakers_line_up_with_the_shore() {
+        // A straight beach of Dean's profile, the sea out along +x, waves of 0.84 m rms and
+        // 5.3 s coming in obliquely.
+        let a = crate::terrain::scenery::dean_a(0.3);
+        let surf = |heading: Vector2<f64>| Surf {
+            depth: std::sync::Arc::new(move |p: &Vector3<f64>| Some(a * p.x.max(0.).powf(2. / 3.))),
+            hrms: 0.84, omega: 2. * std::f64::consts::PI / 5.3, heading: heading.normalize(), dean_a: a,
+            noise: crate::noise::PerlinNoise::shuffled(1),
         };
-        let shares: Vec<f64> = [20., 3., 1.5, 0.8, 0.3].iter().map(|&d| white(d)).collect();
-        assert_eq!(shares[0], 0.);
-        assert!(shares.windows(2).all(|w| w[0] <= w[1]), "{:?}", shares);
-        assert!(shares[4] > 0.3 && shares[4] < 0.7, "{:?}", shares);
+        let s = surf(Vector2::new(-1., 0.4));
+        let white = |x: f64, z: f64| s.white(&Vector3::new(x, 0., z)).0;
+        // Out where it is deep, none break.
+        assert!((0..50).all(|z| white(400., z as f64) == 0.));
+        // In the surf zone the white water comes in lines along the shore: alike a metre apart
+        // along it, crest and trough across it.
+        let mut along = 0.;
+        let mut across: f64 = 0.;
+        for i in 0..200 {
+            let (x, z) = (5. + 0.2 * i as f64, 3. * i as f64);
+            along += (white(x, z) - white(x, z + 1.)).abs();
+            across = across.max((white(x, z) - white(x + 3., z)).abs());
+        }
+        assert!(along / 200. < 0.1, "{}", along / 200.);
+        assert!(across > 0.5, "{}", across);
+        // Where every wave breaks, the foam each leaves fades over FOAM_DECAY before the next
+        // comes: white on average (τ / T)(1 - e^(-T / τ)) of the time, about half.
+        let (t, tau) = (5.3, FOAM_DECAY);
+        let expect = tau / t * (1. - (-t / tau).exp());
+        let inner = (0..2000).map(|i| white(1. + 0.003 * i as f64, 7.3 * i as f64)).sum::<f64>() / 2000.;
+        assert!((inner - expect).abs() < 0.1, "{} vs {}", inner, expect);
+        // Waves heading out to sea (an offshore wind's) don't reach the shore.
+        let off = surf(Vector2::new(1., 0.2));
+        assert!((0..100).all(|i| off.white(&Vector3::new(2. + 0.3 * i as f64, 0., i as f64)).0 == 0.));
     }
 
     #[test]

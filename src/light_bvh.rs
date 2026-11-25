@@ -53,11 +53,15 @@ impl LightBounds {
     /// How much light these lights could deliver to `p`, up to a constant (pbrt's
     /// `LightBounds::Importance`, without the receiver's normal), scattered by `lobe` if given.
     pub fn importance(&self, p: &Vector3<f64>, lobe: Option<&Lobe>) -> f64 {
+        self.importance_in(&Sphere::of(self), p, lobe)
+    }
+
+    /// `importance`, given the bounds' sphere, which the tree keeps with each node.
+    fn importance_in(&self, sphere: &Sphere, p: &Vector3<f64>, lobe: Option<&Lobe>) -> f64 {
         if self.phi <= 0. {
             return 0.;
         }
-        let centre = (self.bounds.min.coords + self.bounds.max.coords) / 2.;
-        let radius = (self.bounds.max - self.bounds.min).norm() / 2.;
+        let (centre, radius) = (sphere.centre, sphere.radius);
         let to = p - centre;
         // Never nearer than half the bounds' diagonal: a point among the lights mustn't make
         // the estimate blow up.
@@ -78,7 +82,7 @@ impl LightBounds {
         let cos_o = self.cos_theta_o.clamp(-1., 1.);
         // cos max(0, θ_w - θ_o - θ_b): first θ_x = max(0, θ_w - θ_o), then less θ_b.
         let (cos_x, sin_x) = if cos_w >= cos_o { (1., 0.) } else {
-            let c = cos_w * cos_o + sin_of(cos_w) * sin_of(cos_o);
+            let c = cos_w * cos_o + sin_of(cos_w) * sphere.sin_o;
             (c, sin_of(c))
         };
         let cos = if cos_x >= cos_b { 1. } else { cos_x * cos_b + sin_x * sin_b };
@@ -155,9 +159,30 @@ pub struct Lobe {
     pub phase: PhaseFunction,
 }
 
+/// What `LightBounds::importance` needs of the bounds that doesn't depend on the point: the
+/// sphere about their box, and the sine of the cone of normals' half-angle.
+#[derive(Clone, Debug)]
+struct Sphere {
+    centre: Vector3<f64>,
+    radius: f64,
+    sin_o: f64,
+}
+
+impl Sphere {
+    fn of(b: &LightBounds) -> Sphere {
+        let cos_o = b.cos_theta_o.clamp(-1., 1.);
+        Sphere {
+            centre: (b.bounds.min.coords + b.bounds.max.coords) / 2.,
+            radius: (b.bounds.max - b.bounds.min).norm() / 2.,
+            sin_o: (1. - cos_o * cos_o).max(0.).sqrt(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Node {
     bounds: LightBounds,
+    sphere: Sphere,
     /// A light's index, or the index of the second child (the first follows the node).
     leaf: bool,
     index: usize,
@@ -190,7 +215,7 @@ impl LightBvh {
     /// Build the subtree over `items`, reached by `trail` at `depth`; returns its bounds.
     fn build(&mut self, lights: &[LightBounds], items: &mut [usize], trail: u64, depth: u32) -> LightBounds {
         if items.len() == 1 {
-            self.nodes.push(Node { bounds: lights[items[0]], leaf: true, index: items[0] });
+            self.nodes.push(Node { bounds: lights[items[0]], sphere: Sphere::of(&lights[items[0]]), leaf: true, index: items[0] });
             self.trails[items[0]] = trail;
             return lights[items[0]];
         }
@@ -203,13 +228,14 @@ impl LightBvh {
         let mid = items.len() / 2;
         items.select_nth_unstable_by(mid, |&a, &b| centre(a)[axis].total_cmp(&centre(b)[axis]));
         let at = self.nodes.len();
-        self.nodes.push(Node { bounds: lights[items[0]], leaf: false, index: 0 });
+        self.nodes.push(Node { bounds: lights[items[0]], sphere: Sphere::of(&lights[items[0]]), leaf: false, index: 0 });
         let (first, second) = items.split_at_mut(mid);
         let a = self.build(lights, first, trail, depth + 1);
         self.nodes[at].index = self.nodes.len();
         let b = self.build(lights, second, trail | (1 << depth), depth + 1);
         let bounds = a.union(&b);
         self.nodes[at].bounds = bounds;
+        self.nodes[at].sphere = Sphere::of(&bounds);
         bounds
     }
 
@@ -229,8 +255,9 @@ impl LightBvh {
                 return Some((n.index, pmf));
             }
             let (c0, c1) = (node + 1, n.index);
-            let i0 = self.nodes[c0].bounds.importance(p, lobe);
-            let i1 = self.nodes[c1].bounds.importance(p, lobe);
+            let (n0, n1) = (&self.nodes[c0], &self.nodes[c1]);
+            let i0 = n0.bounds.importance_in(&n0.sphere, p, lobe);
+            let i1 = n1.bounds.importance_in(&n1.sphere, p, lobe);
             if i0 + i1 <= 0. {
                 return None;
             }
@@ -267,8 +294,9 @@ impl LightBvh {
                 return if n.index == light { pmf } else { 0. };
             }
             let (c0, c1) = (node + 1, n.index);
-            let i0 = self.nodes[c0].bounds.importance(p, lobe);
-            let i1 = self.nodes[c1].bounds.importance(p, lobe);
+            let (n0, n1) = (&self.nodes[c0], &self.nodes[c1]);
+            let i0 = n0.bounds.importance_in(&n0.sphere, p, lobe);
+            let i1 = n1.bounds.importance_in(&n1.sphere, p, lobe);
             if i0 + i1 <= 0. {
                 return 0.;
             }

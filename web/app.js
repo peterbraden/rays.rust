@@ -6,6 +6,7 @@
 // WebAssembly and run in web workers (see worker.js): each holds its own copy of the scene and
 // renders different layers, which are added up here and drawn as they arrive.
 import { instantiate } from './rays.js';
+import { Raycaster } from './raycaster.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('canvas');
@@ -100,13 +101,11 @@ const STRIDE = workerCount + MAX_SERVERS;
 const CLIENT = Math.random().toString(36).slice(2);   // tells this page's requests from another's
 let servers = [];               // { url, threads, slot, sceneJson, sceneId, abort }
 
-// While the camera is being moved, quick draft frames stand in for the path-traced image.
-const DRAFT_SCALE = 0.5;        // draft size, as a fraction of the preview's
+// While the camera is being moved, the realtime raycaster's frames stand in for the
+// path-traced image (raycaster.js). `?shading=` chooses how they are shaded.
+const raycaster = new Raycaster({ scale: 0.5, shading: new URLSearchParams(location.search).get('shading') ?? '' });
 let interacting = false;        // the camera is being moved
-let draft = null;               // the draft frame being gathered from the workers
-let draftQueued = false;        // the camera moved again while that one was being made
 let idleTimer = 0;
-const draftCanvas = document.createElement('canvas');
 let pickId = 0;
 const picks = new Map();
 
@@ -121,7 +120,41 @@ function previewSize() {
 // The scene as the workers render it: at preview size, one sample per pixel per layer.
 function previewDoc() {
     const [w, h] = previewSize();
-    return { ...doc, width: w, height: h, samples_per_chunk: 1 };
+    const objects = Array.isArray(doc.objects) ? doc.objects.map(o => previewSky(previewLandscape(o))) : doc.objects;
+    return { ...doc, width: w, height: h, samples_per_chunk: 1, objects };
+}
+
+// The preview needs less precision than the full render, and is built at every page load.
+//
+// A full-scale landscape is meshed for it no finer than this many vertices along each ring of
+// its clipmap (its `resolution`, 384 unless the scene says), and its globe half as finely: at
+// 64, a twentieth of the triangles, built in a quarter of the time of 128, with the same
+// shapes and the ridgelines a little softer. The world (its cache, src/world.rs) doesn't
+// depend on the mesh, so it is shared with the full render. `?landscape_resolution=` changes
+// it.
+const PREVIEW_LANDSCAPE_RESOLUTION = Number(new URLSearchParams(location.search).get('landscape_resolution')) || 64;
+// Nor is its ground displaced, or strewn with its own boulders, about the camera (a landscape
+// near the ground does both unless the scene says not to): nested grids of up to 512 by 512
+// to displace (40 to 80 s to build in the browser), finer than the raycaster sees anyway (it
+// takes displaced ground at its heightmap's cells). `?landscape_detail=1` keeps them.
+const PREVIEW_LANDSCAPE_DETAIL = new URLSearchParams(location.search).get('landscape_detail') === '1';
+function previewLandscape(o) {
+    if (o?.type !== 'landscape' || o.scale !== undefined) { return o; }
+    if (o.resolution !== undefined && typeof o.resolution !== 'number') { return o; }   // a variable
+    const resolution = Math.min(o.resolution ?? 384, PREVIEW_LANDSCAPE_RESOLUTION);
+    const globe = typeof o.globe === 'number' ? Math.min(o.globe, Math.max(16, Math.round(resolution / 2))) : Math.max(16, Math.round(resolution / 2));
+    const detail = PREVIEW_LANDSCAPE_DETAIL ? {} : { displacement: false, boulders: false };
+    return { ...o, resolution, globe, ...detail };
+}
+
+// A sky's view table is built for the preview a quarter of the size each way (`lut_size`, 256
+// by 128 unless the scene says): a sixteenth of the work (0.34 s rather than 4.6 s on one
+// thread natively), and within 0.4% of the full table's sky everywhere (0.12% on average; the
+// table is smooth, the sun's glow being added after it). The full-size table kept in a cache
+// (19 MB) is then not fetched either: the preview's is a table of its own, built here.
+function previewSky(o) {
+    if (o?.type !== 'skysphere' || o.lut_size !== undefined || o.lut === false) { return o; }
+    return { ...o, lut_size: [64, 32] };
 }
 
 // Paths of files the scene refers to, wherever they appear.
@@ -132,6 +165,69 @@ function assetPaths(value, found = new Set()) {
         for (const v of Object.values(value)) { assetPaths(v, found); }
     }
     return found;
+}
+
+// The files the scene keeps in `cache` directories, as the command line keeps them: its
+// landscapes' worlds (each world's manifest names a file for each of its stages,
+// src/world.rs), given which the workers read a world rather than simulate it, which takes
+// minutes; and its skies' tables (src/skysphere.rs), seconds to build. A world that hasn't
+// been built (no manifest) is simulated in the browser, and `worldNote` says so; tables not
+// yet made are built.
+let worldNote = '';
+async function worldFiles(json) {
+    let tables = [];
+    try {
+        tables = encoder.cachedFiles(json);
+    } catch (e) {
+        return spent([]);
+    }
+    // Tables are fetched with the rest; one not there yet is left out.
+    const files = (await Promise.all(tables.map(p => fetchAsset(p).then(() => p, () => null)))).filter(Boolean);
+    // A world can be named only once another is read (a camera `above_ground`, put above the
+    // ground of a first world: see `SceneFile::world_manifests`), so ask again with each
+    // round's files given to the renderer here, until nothing new is named.
+    const seen = new Set();
+    const missing = [];
+    for (let round = 0; round < 4; round++) {
+        let manifests;
+        try {
+            manifests = encoder.worldManifests(json).filter(m => !seen.has(m));
+        } catch (e) {
+            return spent(files);
+        }
+        if (!manifests.length) { break; }
+        for (const path of manifests) {
+            seen.add(path);
+            let bytes, manifest;
+            try {
+                bytes = await fetchAsset(path);
+                manifest = JSON.parse(new TextDecoder().decode(bytes));
+            } catch (e) {
+                missing.push(path);
+                continue;
+            }
+            encoder.addAsset(path, bytes);
+            const dir = path.slice(0, path.lastIndexOf('/') + 1);
+            for (const stage of manifest.stages ?? []) {
+                if (!stage.file) { continue; }
+                const file = dir + stage.file;
+                files.push(file);
+                try { encoder.addAsset(file, await fetchAsset(file)); } catch (e) { /* the build says what is missing */ }
+            }
+        }
+    }
+    worldNote = missing.length
+        ? `simulating the landscape's world here (slow): render the scene once with the command line to keep it in ${missing.map(p => p.slice(0, p.lastIndexOf('/'))).join(', ')}`
+        : '';
+    return files;
+}
+
+// The renderer on this thread panicked (on a scene the workers' build will say what is wrong
+// with): start another, and carry on with what was found.
+function spent(files) {
+    encoder = null;
+    instantiate().then(r => { encoder = r; });
+    return files;
 }
 
 function fetchAsset(path) {
@@ -164,7 +260,7 @@ async function restartScene() {
     const mine = ++gen;
     gpu = null;
     showError(null);
-    interacting = false; draft = null; draftQueued = false;
+    interacting = false; raycaster.cancel();
     stats.built = 0; stats.buildMs = 0; stats.rendering = false;
     // A worker still building the scene this one replaces can't hear about it until it has
     // finished: a build is one long call. A worker that has been at it for a while is
@@ -183,7 +279,8 @@ async function restartScene() {
     });
     const json = JSON.stringify(previewDoc());
     try {
-        const paths = [...assetPaths(doc)];
+        const paths = [...assetPaths(doc), ...(encoder ? await worldFiles(json) : [])];
+        if (mine !== gen) { return; }
         // A file that can't be fetched is left out: the scan above also finds paths in parts
         // of the file the renderer ignores, and if the file is needed the renderer says so.
         const files = await Promise.all(paths.map(p => fetchAsset(p).catch(() => null)));
@@ -200,7 +297,7 @@ async function restartScene() {
         return;
     }
     resetAccumulation();
-    // The workers build the scene whoever renders it (they answer clicks and draw drafts),
+    // The workers build the scene whoever renders it (they answer clicks and raycast while the camera moves),
     // and start rendering it at once; the GPU takes over if and when it is ready.
     for (const w of workers) {
         if (!w.building) { w.buildStart = performance.now(); }
@@ -244,7 +341,7 @@ let sceneFiles = [];     // the current scene's assets, by path, as fetched
 // the simpler materials: `rays::wavefront::flat`), the GPU path tracer renders the picture,
 // in a worker of its own (gpu-worker.js). The render workers and servers always start on a
 // scene, so there is a picture while the GPU's copy is made; when the GPU worker says it is
-// ready they stop (the workers keep the scene, for picking and drafts) and its pictures
+// ready they stop (the workers keep the scene, for picking and raycasting) and its pictures
 // replace theirs. If the GPU can't take the scene, or "CPU" is chosen, they simply carry on,
 // and the status line says why the GPU didn't.
 
@@ -309,59 +406,49 @@ function onGpuMessage({ data: m }) {
 
 const cameraIsPlain = () => doc.camera && typeof doc.camera === 'object' && !JSON.stringify(doc.camera).includes('"$');
 
-// The camera is being moved by hand: follow it with drafts until the move ends.
+// The camera is being moved by hand: follow it with the raycaster until the move ends.
 function moveCamera() {
     if (!cameraIsPlain() || stats.built < workers.length) { restartCamera(); return; }
     interacting = true;
     dirty = false;
-    requestDraft();
+    requestRaycast();
     // A drag ends when the pointer is released; the wheel and the keys, when they go quiet.
     clearTimeout(idleTimer);
     if (!drag) { idleTimer = setTimeout(endInteraction, 300); }
 }
 
-// Ask every worker for its part of a draft from the current camera. One at a time: a camera
-// move during a draft asks again when it is done, so drafts never queue up behind the pointer.
-function requestDraft() {
-    if (draft) { draftQueued = true; return; }
-    draftQueued = false;
+// A raycast frame from the current camera. While one is being made, this only asks for
+// another once it is done (see raycaster.js).
+function requestRaycast() {
+    if (raycaster.busy) { raycaster.queue(); return; }
     const mine = ++gen;
     gpu = null;
     gpuWorker?.postMessage({ type: 'stop' });
-    const cols = Math.max(8, Math.round(pw * DRAFT_SCALE)), rows = Math.max(8, Math.round(ph * DRAFT_SCALE));
-    draft = { gen: mine, cols, rows, values: new Float32Array(cols * rows * 3), got: 0 };
-    const json = JSON.stringify(doc.camera);
-    for (const w of workers) { w.postMessage({ type: 'draft', gen: mine, json, cols, rows }); }
+    raycaster.request(mine, workers, doc.camera, pw, ph);
 }
 
-function onDraft(m) {
-    if (!draft || m.gen !== draft.gen) { return; }
-    draft.values.set(m.values, m.y0 * draft.cols * 3);
-    draft.got += m.y1 - m.y0;
-    if (draft.got < draft.rows) { return; }
-    drawDraft(draft);
-    draft = null;
-    if (draftQueued) { requestDraft(); } else if (!interacting) { restartCamera(); }
+function onRaycast(m) {
+    const frame = raycaster.receive(m);
+    if (!frame) { return; }
+    drawRaycast(frame);
+    if (raycaster.takeQueued()) { requestRaycast(); } else if (!interacting) { restartCamera(); }
 }
 
-// Show a draft, scaled up to the preview. It also becomes the picture the path-traced rows
-// replace as they arrive.
-function drawDraft({ cols, rows, values }) {
+// Show a raycast frame, scaled up to the preview. It also becomes the picture the
+// path-traced rows replace as they arrive.
+function drawRaycast(frame) {
     if (!encoder) { return; }
     let rgba;
     try {
-        rgba = encoder.encode(values, 1, doc.output && typeof doc.output === 'object' ? doc.output : null);
+        rgba = encoder.encode(frame.values, 1, doc.output && typeof doc.output === 'object' ? doc.output : null);
     } catch (e) {
         encoder = null;
         instantiate().then(r => { encoder = r; });
         return;
     }
-    draftCanvas.width = cols; draftCanvas.height = rows;
-    draftCanvas.getContext('2d').putImageData(new ImageData(rgba, cols, rows), 0, 0);
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(draftCanvas, 0, 0, pw, ph);
+    raycaster.draw(ctx, rgba, frame, pw, ph);
     image = ctx.getImageData(0, 0, pw, ph);
-    $('status').textContent = `${pw}×${ph} · moving (draft)`;
+    $('status').textContent = `${pw}×${ph} · moving (raycast)`;
 }
 
 // The move is over: path trace from where the camera now is.
@@ -369,7 +456,7 @@ function endInteraction() {
     clearTimeout(idleTimer);
     if (!interacting) { return; }
     interacting = false;
-    if (!draft) { restartCamera(); }
+    if (!raycaster.busy) { restartCamera(); }
 }
 
 let sceneTimer = 0;
@@ -476,8 +563,8 @@ function onWorkerMessage({ data: m, target }) {
         return;
     }
     if (m.gen !== gen) { return; }
-    if (m.type === 'draft') {
-        onDraft(m);
+    if (m.type === 'raycast') {
+        onRaycast(m);
     } else if (m.type === 'built') {
         stats.built += 1;
         stats.buildMs = Math.max(stats.buildMs, m.ms);
@@ -492,6 +579,8 @@ function onWorkerMessage({ data: m, target }) {
         dirty = true;
     } else if (m.type === 'error') {
         showError(m.message);
+        // A frame a worker couldn't make won't be finished: let the next move ask afresh.
+        if (raycaster.busy) { raycaster.cancel(); if (!interacting) { restartCamera(); } }
     }
 }
 
@@ -530,7 +619,7 @@ function draw() {
 function updateStatus() {
     let text;
     if (stats.built < workers.length && !stats.rendering) {
-        text = `Building scene… (${stats.built}/${workers.length} workers)`;
+        text = `Building scene… (${stats.built}/${workers.length} workers)${worldNote ? ' · ' + worldNote : ''}`;
     } else {
         let samples = Infinity;
         for (const n of rowSamples) { samples = Math.min(samples, n); }
@@ -1376,6 +1465,6 @@ async function start() {
 }
 
 // For debugging and tests.
-window.rays = { get doc() { return doc; }, get gpu() { return gpu; }, get gpuWhyNot() { return gpuWhyNot; }, get servers() { return servers; }, get schema() { return schema; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
+window.rays = { get doc() { return doc; }, get gpu() { return gpu; }, get gpuWhyNot() { return gpuWhyNot; }, get servers() { return servers; }, get schema() { return schema; }, get interacting() { return interacting || raycaster.busy; }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
 
 start();

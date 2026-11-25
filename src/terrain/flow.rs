@@ -120,6 +120,48 @@ pub fn route(domain: &Domain, surface: &[f64], outlet: &[bool], rain: &[f64]) ->
     Flow { receiver, receiver_dist, stack, area, filled }
 }
 
+/// Send cell `i`'s water to its neighbour `to` instead, `dist` metres away, which must stand
+/// lower on the filled surface (so the stack, ordered by it, stays valid). Call `accumulate`
+/// after redirecting.
+pub fn redirect(flow: &mut Flow, i: usize, to: usize, dist: f64) {
+    debug_assert!(flow.filled[to] < flow.filled[i]);
+    flow.receiver[i] = to;
+    flow.receiver_dist[i] = dist;
+}
+
+/// Order the cells again so that every cell comes after its receiver, after receivers have
+/// changed in ways `redirect` doesn't allow (eg. across a lake's flat filled surface).
+pub fn restack(flow: &mut Flow) {
+    let n = flow.receiver.len();
+    let mut donors: Vec<Vec<usize>> = vec![vec![]; n];
+    for i in 0..n {
+        let r = flow.receiver[i];
+        if r != i { donors[r].push(i); }
+    }
+    let mut stack = Vec::with_capacity(n);
+    let mut todo: Vec<usize> = vec![];
+    for root in 0..n {
+        if flow.receiver[root] != root { continue; }
+        todo.push(root);
+        while let Some(c) = todo.pop() {
+            stack.push(c);
+            todo.extend(donors[c].iter().rev());
+        }
+    }
+    debug_assert_eq!(stack.len(), n, "receivers form a cycle");
+    flow.stack = stack;
+}
+
+/// Work out the drainage area again after receivers have changed (`redirect`).
+pub fn accumulate(domain: &Domain, flow: &mut Flow, rain: &[f64]) {
+    let mut area: Vec<f64> = (0..domain.len()).map(|i| domain.area[i] * rain[i]).collect();
+    for &i in flow.stack.iter().rev() {
+        let r = flow.receiver[i];
+        if r != i { area[r] += area[i]; }
+    }
+    flow.area = area;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

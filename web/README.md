@@ -24,8 +24,9 @@ own test page, which renders one scene: see `scripts/build-web.sh`.)
   sun or a sky to be seen (clouds) brings what the scene lacks.
 - The scene file as text in the sidebar's other tab, editable, kept in step both ways.
 - Preview: drag to orbit, shift-drag to pan, scroll to zoom, click an object to select it.
-  While the camera moves the preview shows quick drafts (one unbounced ray per pixel, at half
-  size); path tracing starts again when it stops.
+  While the camera moves the preview shows the realtime raycaster's frames (one unbounced
+  ray per pixel, at half size; `raycaster.js`, `src/raycaster.rs`); path tracing starts
+  again when it stops. `?shading=<name>` chooses how they are shaded (`Shading::NAMES`).
 - The preview keeps adding samples, up to 4096 per pixel from each worker's share.
 - Loads the repository's demo scenes. "Save scene" downloads the edited scene as JSON, which
   the command line renders unchanged; "Save image" downloads the preview as it stands, as PNG.
@@ -38,7 +39,7 @@ flattened for it: triangles, spheres, boxes, planes and the simpler materials (s
 `src/wavefront/flat.rs`). It runs in a worker of its own (`gpu-worker.js`), so making its copy
 of the scene doesn't hold the page up. The render workers and servers start on every scene as
 usual, so there is a picture meanwhile; when the GPU is ready they stop (the workers keep the
-scene, to answer clicks and draw drafts while the camera moves) and its pictures replace
+scene, to answer clicks and raycast while the camera moves) and its pictures replace
 theirs. Otherwise the status line says why not (no WebGPU; what couldn't be flattened) and
 the CPU carries on, as it does when "CPU" is chosen. The GPU's copy is remade for every edit
 and kept for a camera move (`Renderer::set_camera`), and render servers are not used while
@@ -92,6 +93,21 @@ integer, boolean, string, path, vec2, vec3, color, enum (with `options`), materi
 - `worker.js`: each web worker builds its own copy of the scene and renders different layers
   (one sample per pixel each), in bands of rows.
 - `app.js` adds the bands up, encodes them with the scene's `output` settings, and draws.
+- A full-scale `landscape` reads its world from its `cache` directory, as the command line
+  keeps it: the page asks the renderer for each world's manifest (`world_manifests`), fetches
+  it and the stage files it lists, and provides them with the scene's other files, so a
+  world rendered once on the command line builds in seconds here (terrain-alpine.json: 15 s,
+  rather than 376 s simulating it). The preview needs less precision than a render: it
+  meshes landscapes at a `resolution` of 64 (`?landscape_resolution=`; the world doesn't
+  depend on it), leaves out the displacement and boulders a landscape gives itself near the
+  ground (`?landscape_detail=1` keeps them), and builds skies' view tables at 64 by 32
+  (`lut_size`, within 0.4% of the full table's sky). A sky's full-size tables are kept and fetched like a world
+  (`cached_files`), for a preview of a scene that names its own `lut_size`. Build progress,
+  and what each part took, is on the browser's console.
+- `raycaster.js` gathers the realtime raycaster's frames from the workers while the camera
+  moves (each worker raycasts its share of the rows, `Preview::raycast`) and scales them up
+  onto the preview. How a frame is shaded is `rays::raycaster::Shading`: a new view (normals,
+  depth...) is a variant there, and needs nothing new here.
 - A camera move replaces only the camera. Any other edit rebuilds the scene in every worker,
   but only what changed: built objects are kept and reused when their description, and the
   materials, media and geometries they refer to, are the same; so are the sky's tables.
@@ -100,6 +116,13 @@ integer, boolean, string, path, vec2, vec3, color, enum (with `options`), materi
   unless it is on its first build (which is mostly filling the caches the next would need).
 
 ## Known limits
+
+- A landscape whose world hasn't been built on the command line is simulated in every
+  worker, which takes minutes (the status line says so). Its world is keyed by the camera
+  when the landscape has no `focus`: an edit after moving the camera far rebuilds from the
+  new camera, and may find no world kept for it. The GitHub Pages site has no worlds.
+- The raycaster sees displaced terrain as its heightmap's cells, without the relief diced
+  finer, and the sky softened between every fourth pixel.
 
 - The preview is the CPU renderer, on one thread per worker: complete, but slow for heavy
   scenes (grass, clouds, large oceans). The GPU renders only scenes that flatten.

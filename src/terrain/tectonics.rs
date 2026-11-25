@@ -14,10 +14,10 @@
 //!   step (2 Myr by default) carries every plate's crust forward: a cell takes its crust from
 //!   where each plate's rotation brings it from (semi-Lagrangian advection, nearest cell).
 //! - **Divergence.** Where no plate arrives, the plates have pulled apart: new oceanic crust
-//!   forms at a mid-ocean ridge. Oceanic crust sinks as it cools and ages, by half-space cooling,
-//!   depth = 2500 m + 350 m √(age / Myr) (Parsons and Sclater, "An analysis of the variation of
-//!   ocean floor bathymetry and heat flow with age", JGR 82(5), 1977,
-//!   doi:10.1029/JB082i005p00803), flattening at about 6 km.
+//!   forms at a mid-ocean ridge. Oceanic crust sinks as it cools and ages, by half-space cooling
+//!   while young (Parsons and Sclater, "An analysis of the variation of ocean floor bathymetry
+//!   and heat flow with age", JGR 82(5), 1977, doi:10.1029/JB082i005p00803), flattening towards
+//!   5.65 km as the plate model has it, with pelagic sediment on it (`ocean_depth`).
 //! - **Convergence.** Where several plates arrive, one goes under. Continental crust is too
 //!   buoyant to subduct, and of two oceanic crusts the older, colder and denser sinks. Where
 //!   oceanic crust subducts, a trench forms along the front, and the overriding plate is uplifted
@@ -99,9 +99,20 @@ const SUTURE_TIME: f64 = 30.;
 /// Reach of collision uplift from the front, metres.
 const COLLISION_REACH: f64 = 700e3;
 
-/// Depth of oceanic crust of `age` million years, metres (negative: below sea level).
+/// Depth of the sea floor on oceanic crust of `age` million years, metres (negative: below sea
+/// level). Young floor sinks as half-space cooling has it, d = 2600 + 365 √t; from 20 Myr the
+/// cooling plate's base holds it up and the depth flattens towards 5.65 km, as Stein and Stein's
+/// fit to the ocean floor has it (GDH1: d = 5651 - 2473 exp(-0.0278 t); "A model for the global
+/// variation in oceanic depth and heat flow with lithospheric age", Nature 359, 1992). (Half-space
+/// cooling alone, capped at 6 km, made the ocean a kilometre deeper on average than the Earth's.)
+/// On it settles pelagic sediment, about 5 m a million years up to half a kilometre, which
+/// raises the floor by what it adds less the mantle it displaces under water, 0.57 of its
+/// thickness.
 pub fn ocean_depth(age: f64) -> f64 {
-    -(RIDGE_DEPTH + 350. * age.max(0.).sqrt()).min(6000.)
+    let t = age.max(0.);
+    let cooled = if t < 20. { 2600. + 365. * t.sqrt() } else { 5651. - 2473. * (-0.0278 * t).exp() };
+    let sediment = (5. * t).min(500.);
+    -(cooled - 0.57 * sediment)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -613,9 +624,14 @@ mod tests {
 
     #[test]
     fn test_ocean_floor_deepens_with_age() {
-        assert_eq!(ocean_depth(0.), -2500.);
-        assert!(ocean_depth(25.) < -4000. && ocean_depth(25.) > -4300.);
-        assert_eq!(ocean_depth(1000.), -6000.);
+        assert_eq!(ocean_depth(0.), -2600.);
+        // Deeper with age, a little less fast once the plate model takes over at 20 Myr, where
+        // the two curves meet; flattening at 5.65 km less the sediment's half kilometre.
+        let depths: Vec<f64> = (0..300).map(|t| ocean_depth(t as f64)).collect();
+        assert!(depths.windows(2).all(|w| w[1] < w[0]), "not deepening");
+        assert!((ocean_depth(19.999) - ocean_depth(20.001)).abs() < 5.);
+        assert!(ocean_depth(25.) < -4200. && ocean_depth(25.) > -4500., "{}", ocean_depth(25.));
+        assert!((ocean_depth(1000.) + 5651. - 285.).abs() < 1.);
     }
 
     #[test]

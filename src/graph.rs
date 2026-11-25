@@ -137,6 +137,26 @@ pub enum Field {
     Temperature,
     /// Precipitation, mm a year (from the climate model).
     Precipitation,
+    /// The rock exposed (`terrain::geology::Rock`), by number: 0 sediment, 1 shale,
+    /// 2 sandstone, 3 limestone, 4 quartzite, 5 schist, 6 gneiss, 7 granite, 8 basalt. The
+    /// bedrock is that at the point's own height, so beds show as bands across slopes.
+    Rock,
+    /// How hard the exposed rock is to rivers: its score from -1.5 (basalt, hardest) to 1.4
+    /// (sediment) negated, so positive is harder (`Rock::scores`).
+    Hardness,
+    /// How much of the ground is a playa, 0 to 1: the dry, flat floor of a closed basin, salt
+    /// and clay where its terminal lake comes and goes (`terrain::simulation`'s "Closed
+    /// basins").
+    Playa,
+    /// Glacial sediment, metres thick: till lodged beneath the ice and moraines heaped at its
+    /// margins (`terrain::glacier`'s "Debris"), part of `sediment`.
+    Till,
+    /// Wind-blown sand, metres thick: sand sheets and dune fields (`terrain::aeolian`), part
+    /// of `sediment`.
+    Sand,
+    /// The bedrock (`terrain::geology::Rock`, by number as `rock`) at the point's height,
+    /// beneath any sediment or lava over it: what the scree there broke from.
+    Bedrock,
 }
 
 impl Field {
@@ -153,7 +173,13 @@ impl Field {
             "treeline" => Field::Treeline,
             "temperature" => Field::Temperature,
             "precipitation" => Field::Precipitation,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature or precipitation", s)),
+            "rock" => Field::Rock,
+            "hardness" => Field::Hardness,
+            "playa" => Field::Playa,
+            "till" => Field::Till,
+            "sand" => Field::Sand,
+            "bedrock" => Field::Bedrock,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, bedrock, hardness, playa, till or sand", s)),
         })
     }
 }
@@ -280,16 +306,16 @@ impl<'a> Context<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum FractalStyle { Perlin, Ridged, Billow }
+pub(crate) enum FractalStyle { Perlin, Ridged, Billow }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum CellStyle { F1, F2, Edges, Stones, Id }
+pub(crate) enum CellStyle { F1, F2, Edges, Stones, Id }
 
 /// How distance is measured between a point and cells' feature points (Worley, "A cellular
 /// texture basis function", SIGGRAPH 1996, section 4): Euclidean cells are rounded, Manhattan
 /// ones diamond-faceted, Chebyshev ones square, like crystals or paving.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Metric { Euclidean, Manhattan, Chebyshev }
+pub(crate) enum Metric { Euclidean, Manhattan, Chebyshev }
 
 #[derive(Clone)]
 enum Op {
@@ -325,6 +351,8 @@ enum Op {
     Biome { of: Vec<crate::terrain::climate::Biome>, default: f64 },
     Strata { step: f64, sharpness: f64, amplitude: f64, breakup: Option<Box<Node>> },
     CrossBeds { noise: Box<SeededNoise>, scale: f64, set: f64, amplitude: f64 },
+    /// A landscape's own detail, from what its simulation left (`terrain::detail`).
+    Ground { noise: Box<SeededNoise>, seed: u32, amplitude: f64 },
     Expr { expr: Expr, inputs: Vec<Node>, range: (f64, f64) },
     Add(Vec<Node>),
     Multiply(Vec<Node>),
@@ -504,6 +532,7 @@ impl Node {
                     keep * amplitude * (l.hardness - CROSS_BED_MEAN)
                 }
             },
+            Op::Ground { noise, seed, amplitude } => crate::terrain::detail::ground(c, noise, *seed, *amplitude),
             Op::Expr { expr, inputs, .. } => {
                 // On the stack, unless there are many inputs.
                 let mut vars = [0.; 16];
@@ -594,6 +623,10 @@ impl Op {
             Op::Field { band: Some(_), .. } => (0., 1.),
             Op::Biome { default, .. } => (default.min(0.), default.max(1.)),
             Op::Field { band: None, .. } => (f64::NEG_INFINITY, f64::INFINITY),
+            Op::Ground { amplitude, .. } => {
+                let a = amplitude.abs() * crate::terrain::detail::REACH;
+                (-a, a)
+            },
             Op::Expr { range, .. } => *range,
             Op::Add(v) => v.iter().map(Node::range).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1)),
             Op::Multiply(v) => v.iter().map(Node::range).fold((1., 1.), mul_range),
@@ -656,6 +689,8 @@ impl Op {
             Op::Talus(t) => return t.smallest,
             Op::Const(_) | Op::Biome { .. } => return f64::INFINITY,
             Op::CrossBeds { scale, set, .. } => return crate::material::rock::LAMINA_FINEST * set * scale,
+            // Limestone's flutes and playas' cracks.
+            Op::Ground { .. } => return 0.03,
             Op::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
             Op::Slope { breakup, .. } | Op::Altitude { breakup, .. } | Op::Aspect { breakup, .. }
                 | Op::Field { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
@@ -674,7 +709,7 @@ impl Op {
 /// A fractal's value at the context's point, filtered (see the module documentation): in
 /// [-1, 1] for Perlin, [0, 1] for ridged and billowed.
 #[allow(clippy::too_many_arguments)]
-fn fractal(noise: &SeededNoise, style: FractalStyle, scale: f64, smallest: f64, roughness: f64, lacunarity: f64, plan: bool, c: &Context) -> f64 {
+pub(crate) fn fractal(noise: &SeededNoise, style: FractalStyle, scale: f64, smallest: f64, roughness: f64, lacunarity: f64, plan: bool, c: &Context) -> f64 {
     let p = if plan { Vector3::new(c.p.x, 0., c.p.z) } else { c.p } / scale;
     let (ridged_mean, billow_mean) = *OCTAVE_MEANS;
     let mean = match style { FractalStyle::Perlin => 0., FractalStyle::Ridged => ridged_mean, FractalStyle::Billow => billow_mean };
@@ -717,7 +752,7 @@ fn fractal(noise: &SeededNoise, style: FractalStyle, scale: f64, smallest: f64, 
 
 /// Cellular noise at the context's point: one feature point jittered in each cell of a lattice
 /// `scale` across.
-fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, metric: Metric, jitter: f64, c: &Context) -> f64 {
+pub(crate) fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, metric: Metric, jitter: f64, c: &Context) -> f64 {
     let p = c.p / scale;
     let (cx, cy, cz) = (p.x.floor() as i64, if plan { 0 } else { p.y.floor() as i64 }, p.z.floor() as i64);
     let ys: &[i64] = if plan { &[0] } else { &[-1, 0, 1] };
@@ -818,6 +853,24 @@ impl Graph {
         let root = parse_node(v)?;
         let range = root.range();
         Ok(Graph { root, range })
+    }
+
+    /// Bounds on the graph's value near `c` (within a few metres), on ground no steeper than
+    /// `slope` degrees: tighter than `range` where a node knows its local bounds (`ground`,
+    /// from the fields there); `range` otherwise.
+    ///
+    /// For a cell `half` metres across either way whose base rises and falls by `heights` about
+    /// `c`, the `ground` node bounds itself by its value at `c` and how far it can change
+    /// (`terrain::detail::local_bound`) where that is tighter.
+    pub fn range_near(&self, c: &Context, slope: f64, half: f64, heights: (f64, f64)) -> (f64, f64) {
+        match &self.root.op {
+            Op::Ground { noise, seed, amplitude } => {
+                let b = crate::terrain::detail::bound(c, slope, *amplitude).min(self.range.1);
+                let (lo, hi) = crate::terrain::detail::local_bound(c, slope, half, heights, noise, *seed, *amplitude);
+                (lo.max(-b), hi.min(b))
+            },
+            _ => self.range,
+        }
     }
 
     pub fn eval(&self, c: &Context) -> f64 {
@@ -984,6 +1037,7 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             Op::Strata { step, sharpness: num(o, "sharpness", 0.8)?, amplitude: num(o, "amplitude", 0.5 * step)?,
                 breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
         },
+        "ground" => Op::Ground { noise: Box::new(SeededNoise::new(seed()?)), seed: seed()? as u32, amplitude: num(o, "amplitude", 1.)? },
         "cross_beds" => {
             let (scale, set) = (num(o, "scale", 1.)?, num(o, "set", 0.4)?);
             if scale <= 0. || set <= 0. {

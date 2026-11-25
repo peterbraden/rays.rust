@@ -5704,6 +5704,276 @@
       }
     }
   },
+  "sandstone": {
+    "show": "landscape",
+    "doc": "Sandstone as it stands in desert cliffs and ledges: buff to orange, in laminae a few centimetres thick that waver across the face, sugary with grains, stained red with iron in patches and streaked dark with desert varnish down its steep faces; relief of laminae and gently rounded weathering.",
+    "variables": {
+      "laminae": {
+        "node": "warp",
+        "amount": 0.08,
+        "scale": 0.6,
+        "seed": 701,
+        "octaves": 2,
+        "input": {
+          "node": "gradient",
+          "direction": [
+            0.05,
+            1,
+            0.08
+          ],
+          "scale": 0.05
+        }
+      },
+      "beds": {
+        "node": "warp",
+        "amount": 0.4,
+        "scale": 4,
+        "seed": 702,
+        "octaves": 2,
+        "input": {
+          "node": "gradient",
+          "direction": [
+            0.03,
+            1,
+            0.05
+          ],
+          "scale": 0.7
+        }
+      },
+      "grains": {
+        "node": "cells",
+        "style": "id",
+        "scale": 0.0004,
+        "seed": 703
+      },
+      "mottle": {
+        "node": "fractal",
+        "scale": 5,
+        "seed": 704,
+        "smallest": 0.02,
+        "roughness": 0.55
+      },
+      "relief": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 2.5,
+            "seed": 705,
+            "style": "billow",
+            "smallest": 0.005,
+            "amplitude": 0.04,
+            "roughness": 0.55
+          },
+          {
+            "node": "multiply",
+            "inputs": [
+              0.006,
+              {
+                "node": "wave",
+                "shape": "sine",
+                "input": "$laminae"
+              }
+            ]
+          },
+          {
+            "node": "fractal",
+            "scale": 0.01,
+            "seed": 706,
+            "smallest": 0.0008,
+            "amplitude": 0.0008
+          }
+        ]
+      },
+      "stains": {
+        "node": "smoothstep",
+        "from": 0.1,
+        "to": 0.4,
+        "input": {
+          "node": "fractal",
+          "scale": 12,
+          "seed": 707,
+          "smallest": 0.1,
+          "roughness": 0.6
+        }
+      },
+      "varnish": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "slope",
+            "from": 50,
+            "to": 75,
+            "breakup": {
+              "node": "fractal",
+              "scale": 5,
+              "seed": 708,
+              "amplitude": 10
+            }
+          },
+          {
+            "node": "smoothstep",
+            "from": 0.0,
+            "to": 0.35,
+            "input": {
+              "node": "fractal",
+              "scale": 2,
+              "seed": 709,
+              "plan": true,
+              "smallest": 0.01,
+              "roughness": 0.6
+            }
+          }
+        ]
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": "$mottle",
+              "color_map": [
+                [
+                  -0.6,
+                  {
+                    "pattern": {
+                      "node": "wave",
+                      "shape": "triangle",
+                      "input": "$laminae"
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        [
+                          0.36,
+                          0.25,
+                          0.15
+                        ]
+                      ],
+                      [
+                        0.5,
+                        [
+                          0.47,
+                          0.34,
+                          0.21
+                        ]
+                      ],
+                      [
+                        1,
+                        [
+                          0.52,
+                          0.4,
+                          0.27
+                        ]
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  0.6,
+                  {
+                    "pattern": {
+                      "node": "wave",
+                      "shape": "triangle",
+                      "input": "$beds"
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        [
+                          0.5,
+                          0.36,
+                          0.22
+                        ]
+                      ],
+                      [
+                        0.6,
+                        [
+                          0.58,
+                          0.45,
+                          0.3
+                        ]
+                      ],
+                      [
+                        1,
+                        [
+                          0.62,
+                          0.52,
+                          0.38
+                        ]
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            },
+            "normal": {
+              "graph": "$relief",
+              "amount": 1
+            }
+          }
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 1.5,
+                "seed": 710
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.4,
+                    0.18,
+                    0.08
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.5,
+                    0.25,
+                    0.12
+                  ]
+                ]
+              ]
+            }
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              0.7,
+              "$stains"
+            ]
+          }
+        },
+        {
+          "material": {
+            "type": "plastic",
+            "albedo": [
+              0.07,
+              0.05,
+              0.04
+            ],
+            "roughness": 0.35
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              0.85,
+              "$varnish"
+            ]
+          }
+        }
+      ]
+    }
+  },
   "scree": {
     "show": "landscape",
     "doc": "Scree: angular stones from fist-sized to a few centimetres, each its own shade, lying on each other with dark gaps between, older stones grown with lichen.",

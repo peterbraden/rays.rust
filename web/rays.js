@@ -25,12 +25,14 @@ export async function instantiate() {
     let dead = false;
     let preview = null;
 
-    // Run a call into the module, turning a trap into an error with the panic's message.
+    // Run a call into the module, turning a trap into an error with the panic's message. A
+    // call that returns an `Err` throws its message as a string: the instance is still fine.
     function guard(f) {
         if (dead) { throw new RaysError('This renderer instance has stopped after an error.'); }
         try {
             return f();
         } catch (e) {
+            if (typeof e === 'string') { throw new Error(e); }
             dead = true;
             let message = '';
             try { message = glue.last_error(); } catch (again) { /* too broken to say */ }
@@ -44,6 +46,16 @@ export async function instantiate() {
         /** What scene files may contain: the renderer's schema (see src/schema.rs). */
         schema() {
             return JSON.parse(guard(() => glue.schema()));
+        },
+
+        /** The world manifests of the scene's full-scale landscapes (see web/src/lib.rs). */
+        worldManifests(json) {
+            return guard(() => glue.world_manifests(json));
+        },
+
+        /** Files of tables the scene keeps in a `cache`, such as its sky's (see web/src/lib.rs). */
+        cachedFiles(json) {
+            return guard(() => glue.cached_files(json));
         },
 
         /** Give the contents of a file that scenes name by `path`. */
@@ -74,9 +86,13 @@ export async function instantiate() {
             });
         },
 
-        /** Rows y0..y1 of a quick draft image, cols by rows pixels: three floats per pixel. */
-        renderDraft(cols, rows, y0, y1) {
-            return guard(() => preview.render_draft(cols, rows, y0, y1));
+        /**
+         * Rows y0..y1 of a quick image from the realtime raycaster, cols by rows pixels: three
+         * floats per pixel. `shading` names how it shades (see src/raycaster.rs; '' for the
+         * default). An unknown name throws, without stopping the instance.
+         */
+        raycast(shading, cols, rows, y0, y1) {
+            return guard(() => preview.raycast(shading ?? '', cols, rows, y0, y1));
         },
 
         /** The index in the scene's `objects` of what is seen at a pixel, or -1. */

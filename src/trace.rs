@@ -49,6 +49,19 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
         },
         _ => Vector3::zeros(),
     };
+    // The lights' glow in media sampled equi-angularly, along every ray of the path up to the
+    // surface it reaches, past any collision (`volume::equiangular_inscattering`): the glow
+    // the camera sees, and the glow seen in mirrors, through glass and lighting surfaces.
+    let glow = if crate::volume::any_equiangular(s) {
+        let surface = match &closest {
+            Some(x) if x.object.geometry.is_stochastic() => s.objects.nearest_surface(r, x.dist),
+            Some(x) => x.dist,
+            None => f64::INFINITY,
+        };
+        crate::volume::equiangular_inscattering(r, surface, s) * mis
+    } else {
+        Color::black()
+    };
 
     let (cast, color) = match closest {
         Some(x) => {
@@ -74,6 +87,7 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
     // (Not clamped at nothing: a sample can be less, where its shadow sample stands for more
     // light than this path found, and the mean is only right if it stays so.)
     let color = Color { rgb: color.rgb - shadowed.component_mul(&mis.rgb) };
+    let color = color + glow;
     match &s.sun {
         Some(sun) if reaches_sky => {
             let d = r.rd.normalize();
@@ -113,33 +127,6 @@ fn continuation_weight(attenuate: &Color, depth: u64, s: &Scene) -> Option<f64> 
 /// The intersection with the normal its medium shades with (tilted by bump mapping, if any). A
 /// tilt that would put the ray on the other side of the surface is dropped: dielectrics tell
 /// entering from leaving by the normal's side, and a grazing ray mustn't change that.
-/// A quick stand-in for `trace`, for showing the scene while it is being moved around: one
-/// ray, no bounces. The surface's own answer is kept (emission, direct light it sampled, and
-/// anything that ends the path, such as the sky), and the light a bounce would have gathered
-/// is replaced by a headlight: brighter where the surface faces the viewer.
-pub fn draft(r: &Ray, s: &Scene) -> Color {
-    // As `trace` begins a path: nothing carried over from the last one.
-    crate::volume::begin_path();
-    crate::material::ggx::begin_path();
-    let Some(hit) = s.objects.nearest_intersection(r, f64::INFINITY, 0f64) else {
-        return s.render.background.radiance(&r.rd);
-    };
-    let facing = hit.facing_normal(r);
-    let mut biased = hit;
-    biased.point = hit.point + facing * s.render.shadow_bias;
-    let medium = &hit.object.medium;
-    let medium = medium.part(hit.part).unwrap_or(&**medium);
-    let shaded = shading(r, medium, &biased, s);
-    let interaction = medium.material_at(biased.point).scatter(r, &shaded, s);
-    match interaction.ray {
-        None => interaction.emit + interaction.attenuate,
-        Some(_) => {
-            let towards_viewer = shaded.normal.dot(&r.rd.normalize()).abs();
-            interaction.emit + interaction.attenuate * (0.15 + 0.35 * towards_viewer)
-        },
-    }
-}
-
 pub(crate) fn shading<'a>(r: &Ray, medium: &(dyn Medium + Sync + Send), intersection: &Intersection<'a>, s: &Scene) -> Intersection<'a> {
     let n = medium.normal_at_hit(intersection, s);
     let n = match medium.material_at(intersection.point).shading_normal(&Intersection { normal: n, ..*intersection }, s) {
@@ -422,6 +409,86 @@ mod tests {
         let s = many_lights("bvh");
         let near = s.light_bvh.as_ref().unwrap().pmf(&Vector3::new(1.6, 0., 1.4), 64 + 36);
         assert!(near > 0.1, "{}", near);
+    }
+
+    /// Fog in a box, lit by small lamps (two glowing spheres and a point light), the light BVH
+    /// choosing among them; equi-angular sampling on or off.
+    fn lamps_in_fog(equiangular: bool, sampler: &str) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 0, "light_sampler": "{}",
+            "camera": {{ "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "L": {{ "type": "diffuse-light", "color": [1, 0.6, 0.3], "intensity": 50 }} }},
+            "lights": [ {{ "location": [0.4, -0.3, 1], "intensity": 0.5 }} ],
+            "objects": [
+                {{ "type": "volume", "min": [-3, -3, -3], "max": [3, 3, 3], "density": 0.3, "g": 0.7,
+                   "equiangular": {} }},
+                {{ "type": "sphere", "location": [0.2, 0.15, 0], "radius": 0.02, "material": "L" }},
+                {{ "type": "sphere", "location": [-0.5, 0.1, 0.6], "radius": 0.03, "material": "L" }}
+            ]
+        }}"#, sampler, equiangular))
+    }
+
+    #[test]
+    fn test_equiangular_sampling_agrees_with_collisions_with_less_noise() {
+        crate::geometry::seed_rand(11, 1);
+        // Through the fog past the lamps, a little off each: their glow is most of what it sees.
+        let r = Ray { ro: Vector3::new(0., 0., -4.), rd: Vector3::new(0.02, 0.04, 1.).normalize() };
+        let stats = |s: &Scene, n: usize| {
+            let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, s).1.rgb.x).collect();
+            let mean = v.iter().sum::<f64>() / n as f64;
+            (mean, (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt())
+        };
+        for sampler in ["bvh", "power"] {
+            let (collisions, collisions_sd) = stats(&lamps_in_fog(false, sampler), 200_000);
+            let (mis, mis_sd) = stats(&lamps_in_fog(true, sampler), 200_000);
+            assert!((collisions - mis).abs() < 0.02 * collisions, "{}: collisions {} vs equi-angular {}", sampler, collisions, mis);
+            assert!(mis_sd < 0.8 * collisions_sd, "{}: sd {} vs {}", sampler, mis_sd, collisions_sd);
+        }
+        // The kernels have no code for it: such a medium isn't laid out for them (the same fog
+        // without it is).
+        let flat = |equiangular: bool| {
+            let s = lamps_in_fog(equiangular, "bvh");
+            let fog = s.objects.infinite_items.iter().find(|o| o.geometry.medium().is_some()).unwrap();
+            fog.geometry.medium().unwrap().flat(fog.medium.material_at(Vector3::zeros()).medium().unwrap()).is_ok()
+        };
+        assert!(flat(false) && !flat(true));
+    }
+
+    #[test]
+    fn test_equiangular_sampling_after_a_bounce() {
+        // The lamps' glow seen in a mirror and lighting a diffuse floor, through the fog: rays
+        // after the first are sampled equi-angularly too.
+        crate::geometry::seed_rand(12, 1);
+        let scene = |equiangular: bool, floor: &str| SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1, "light_sampler": "bvh",
+            "camera": {{ "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "L": {{ "type": "diffuse-light", "color": [1, 0.6, 0.3], "intensity": 50 }},
+                           "F": {} }},
+            "lights": [ {{ "location": [0.4, -0.3, 1], "intensity": 0.5 }} ],
+            "objects": [
+                {{ "type": "volume", "min": [-3, -3, -3], "max": [3, 3, 3], "density": 0.3, "g": 0.7,
+                   "equiangular": {} }},
+                {{ "type": "plane", "y": -1, "material": "F" }},
+                {{ "type": "sphere", "location": [0.2, 0.15, 0], "radius": 0.02, "material": "L" }},
+                {{ "type": "sphere", "location": [-0.5, 0.1, 0.6], "radius": 0.03, "material": "L" }}
+            ]
+        }}"#, floor, equiangular));
+        // Down at the floor near the camera, which reflects the fog about the lamps.
+        let r = Ray { ro: Vector3::new(0., 0., -2.5), rd: Vector3::new(0.03, -1., 2.5).normalize() };
+        let stats = |s: &Scene, n: usize| {
+            let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, s).1.rgb.x).collect();
+            let mean = v.iter().sum::<f64>() / n as f64;
+            (mean, (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt())
+        };
+        for (floor, gain) in [
+            (r#"{ "type": "metal", "reflective": [0.9, 0.9, 0.9] }"#, 0.92),
+            (r#"{ "type": "lambertian", "albedo": [0.8, 0.8, 0.8] }"#, 0.8),
+        ] {
+            let (collisions, collisions_sd) = stats(&scene(false, floor), 200_000);
+            let (mis, mis_sd) = stats(&scene(true, floor), 200_000);
+            assert!((collisions - mis).abs() < 0.03 * collisions, "{}: collisions {} vs equi-angular {}", floor, collisions, mis);
+            assert!(mis_sd < gain * collisions_sd, "{}: sd {} vs {}", floor, mis_sd, collisions_sd);
+        }
     }
 
     #[test]

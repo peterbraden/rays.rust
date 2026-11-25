@@ -494,11 +494,20 @@ impl Bvh {
                 }
                 continue;
             }
-            for child in [index + 1, node.offset] {
-                if ray.enters(&self.nodes[child as usize].bounds, min, max).is_some() {
-                    stack[top].write(child);
-                    top += 1;
-                }
+            // The nearer child first, where an occluder is likelier to be met.
+            let (a, b) = (index + 1, node.offset);
+            let ea = ray.enters(&self.nodes[a as usize].bounds, min, max);
+            let eb = ray.enters(&self.nodes[b as usize].bounds, min, max);
+            match (ea, eb) {
+                (Some(ea), Some(eb)) => {
+                    let (near, far) = if ea <= eb { (a, b) } else { (b, a) };
+                    stack[top].write(far);
+                    stack[top + 1].write(near);
+                    top += 2;
+                },
+                (Some(_), None) => { stack[top].write(a); top += 1; },
+                (None, Some(_)) => { stack[top].write(b); top += 1; },
+                (None, None) => {},
             }
         }
         false

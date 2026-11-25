@@ -1,0 +1,1218 @@
+From 46a6474ff27b85cc7bdd8829d5d28800b4f90539 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 10:56:41 +0000
+Subject: [PATCH] naga: read ray queries from SPIR-V, and write them as WGSL
+
+The SPIR-V front end reads `SPV_KHR_ray_query`: the acceleration structure
+and ray query types, and the `OpRayQuery*KHR` instructions into
+`Statement::RayQuery` and `Expression::RayQueryGetIntersection` (one field of
+it per getter; a candidate's kind renumbered from SPIR-V's; signed results
+bitcast). Instructions reading the ray itself (origin, direction, tmin,
+flags), which Naga has no expressions for, are still unsupported.
+
+The WGSL back end writes ray queries (it was `unreachable!`), enables
+`wgpu_ray_query` for them, and no longer declares the predeclared `RayDesc`
+and `RayIntersection` structs.
+
+Tests: `tests/in/spv/ray-query.spvasm`, written as rust-gpu writes a query
+(a local variable, its operations inline), to WGSL and MSL; the WGSL ray
+query tests now also write WGSL.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ naga/src/back/wgsl/writer.rs                  |  64 +++-
+ naga/src/front/spv/error.rs                   |   2 +
+ naga/src/front/spv/mod.rs                     |   6 +
+ naga/src/front/spv/next_block.rs              |  24 +-
+ naga/src/front/spv/ray_query.rs               | 310 ++++++++++++++++++
+ naga/tests/in/spv/ray-query.spvasm            | 114 +++++++
+ naga/tests/in/spv/ray-query.toml              |   8 +
+ naga/tests/in/wgsl/aliased-ray-query.toml     |   2 +-
+ naga/tests/in/wgsl/overrides-ray-query.toml   |   2 +-
+ .../in/wgsl/ray-query-no-init-tracking.toml   |   2 +-
+ naga/tests/in/wgsl/ray-query.toml             |   2 +-
+ naga/tests/out/msl/spv-ray-query.metal        | 176 ++++++++++
+ naga/tests/out/wgsl/spv-ray-query.wgsl        |  49 +++
+ .../out/wgsl/wgsl-aliased-ray-query.wgsl      |  26 ++
+ .../out/wgsl/wgsl-overrides-ray-query.wgsl    |  24 ++
+ .../wgsl/wgsl-ray-query-no-init-tracking.wgsl |  67 ++++
+ naga/tests/out/wgsl/wgsl-ray-query.wgsl       |  67 ++++
+ .../out/wgsl/wgsl-ray-tracing-pipeline.wgsl   |   9 -
+ 18 files changed, 933 insertions(+), 21 deletions(-)
+ create mode 100644 naga/src/front/spv/ray_query.rs
+ create mode 100644 naga/tests/in/spv/ray-query.spvasm
+ create mode 100644 naga/tests/in/spv/ray-query.toml
+ create mode 100644 naga/tests/out/msl/spv-ray-query.metal
+ create mode 100644 naga/tests/out/wgsl/spv-ray-query.wgsl
+ create mode 100644 naga/tests/out/wgsl/wgsl-aliased-ray-query.wgsl
+ create mode 100644 naga/tests/out/wgsl/wgsl-overrides-ray-query.wgsl
+ create mode 100644 naga/tests/out/wgsl/wgsl-ray-query-no-init-tracking.wgsl
+ create mode 100644 naga/tests/out/wgsl/wgsl-ray-query.wgsl
+
+diff --git a/naga/src/back/wgsl/writer.rs b/naga/src/back/wgsl/writer.rs
+index 643a8a0..43f3c53 100644
+--- a/naga/src/back/wgsl/writer.rs
++++ b/naga/src/back/wgsl/writer.rs
+@@ -136,6 +136,8 @@ impl<W: Write> Writer<W> {
+             .predeclared_types
+             .values()
+             .any(|t| *t == ty)
++            || Some(ty) == module.special_types.ray_desc
++            || Some(ty) == module.special_types.ray_intersection
+             || Some(ty) == module.special_types.external_texture_params
+             || Some(ty) == module.special_types.external_texture_transfer_function
+     }
+@@ -298,6 +300,9 @@ impl<W: Write> Writer<W> {
+             cooperative_matrix: bool,
+             draw_index: bool,
+             ray_tracing_pipeline: bool,
++            ray_query: bool,
++            /// Either `ray_query` or `ray_tracing_pipeline` lets a module have one.
++            acceleration_structure: bool,
+             per_vertex: bool,
+             binding_array: bool,
+         }
+@@ -369,7 +374,10 @@ impl<W: Write> Writer<W> {
+                     needed.cooperative_matrix = true;
+                 }
+                 TypeInner::AccelerationStructure { .. } => {
+-                    needed.ray_tracing_pipeline = true;
++                    needed.acceleration_structure = true;
++                }
++                TypeInner::RayQuery { .. } => {
++                    needed.ray_query = true;
+                 }
+                 TypeInner::BindingArray { .. } => {
+                     needed.binding_array = true;
+@@ -468,7 +476,11 @@ impl<W: Write> Writer<W> {
+             writeln!(self.out, "enable wgpu_cooperative_matrix;")?;
+             any_written = true;
+         }
+-        if needed.ray_tracing_pipeline {
++        if needed.ray_query {
++            writeln!(self.out, "enable wgpu_ray_query;")?;
++            any_written = true;
++        }
++        if needed.ray_tracing_pipeline || (needed.acceleration_structure && !needed.ray_query) {
+             writeln!(self.out, "enable wgpu_ray_tracing_pipeline;")?;
+             any_written = true;
+         }
+@@ -1063,7 +1075,44 @@ impl<W: Write> Writer<W> {
+                     writeln!(self.out, "{level}textureBarrier();")?;
+                 }
+             }
+-            Statement::RayQuery { .. } => unreachable!(),
++            Statement::RayQuery { query, ref fun } => {
++                write!(self.out, "{level}")?;
++                match *fun {
++                    crate::RayQueryFunction::Initialize {
++                        acceleration_structure,
++                        descriptor,
++                    } => {
++                        write!(self.out, "rayQueryInitialize(")?;
++                        self.write_expr(module, query, func_ctx)?;
++                        write!(self.out, ", ")?;
++                        self.write_expr(module, acceleration_structure, func_ctx)?;
++                        write!(self.out, ", ")?;
++                        self.write_expr(module, descriptor, func_ctx)?;
++                    }
++                    crate::RayQueryFunction::Proceed { result } => {
++                        let res_name = Baked(result).to_string();
++                        self.start_named_expr(module, result, func_ctx, &res_name)?;
++                        self.named_expressions.insert(result, res_name);
++                        write!(self.out, "rayQueryProceed(")?;
++                        self.write_expr(module, query, func_ctx)?;
++                    }
++                    crate::RayQueryFunction::GenerateIntersection { hit_t } => {
++                        write!(self.out, "rayQueryGenerateIntersection(")?;
++                        self.write_expr(module, query, func_ctx)?;
++                        write!(self.out, ", ")?;
++                        self.write_expr(module, hit_t, func_ctx)?;
++                    }
++                    crate::RayQueryFunction::ConfirmIntersection => {
++                        write!(self.out, "rayQueryConfirmIntersection(")?;
++                        self.write_expr(module, query, func_ctx)?;
++                    }
++                    crate::RayQueryFunction::Terminate => {
++                        write!(self.out, "rayQueryTerminate(")?;
++                        self.write_expr(module, query, func_ctx)?;
++                    }
++                }
++                writeln!(self.out, ");")?
++            }
+             Statement::SubgroupBallot { result, predicate } => {
+                 write!(self.out, "{level}")?;
+                 let res_name = Baked(result).to_string();
+@@ -1932,9 +1981,14 @@ impl<W: Write> Writer<W> {
+ 
+                 write!(self.out, ")")?
+             }
++            Expression::RayQueryGetIntersection { query, committed } => {
++                let which = if committed { "Committed" } else { "Candidate" };
++                write!(self.out, "rayQueryGet{which}Intersection(")?;
++                self.write_expr(module, query, func_ctx)?;
++                write!(self.out, ")")?
++            }
+             // Not supported yet
+-            Expression::RayQueryGetIntersection { .. }
+-            | Expression::RayQueryVertexPositions { .. } => unreachable!(),
++            Expression::RayQueryVertexPositions { .. } => unreachable!(),
+             // Nothing to do here, since call expression already cached
+             Expression::CallResult(_)
+             | Expression::AtomicResult { .. }
+diff --git a/naga/src/front/spv/error.rs b/naga/src/front/spv/error.rs
+index c0c525d..7700a89 100644
+--- a/naga/src/front/spv/error.rs
++++ b/naga/src/front/spv/error.rs
+@@ -22,6 +22,8 @@ pub enum Error {
+     UnknownInstruction(u16),
+     #[error("unknown capability %{0}")]
+     UnknownCapability(spirv::Word),
++    #[error("ray query intersection %{0} is neither a constant 0 (candidate) nor 1 (committed)")]
++    InvalidRayQueryIntersection(spirv::Word),
+     #[error("unsupported instruction {1:?} at {0:?}")]
+     UnsupportedInstruction(ModuleState, spirv::Op),
+     #[error("unsupported capability {0:?}")]
+diff --git a/naga/src/front/spv/mod.rs b/naga/src/front/spv/mod.rs
+index cd3e07b..99d8cf7 100644
+--- a/naga/src/front/spv/mod.rs
++++ b/naga/src/front/spv/mod.rs
+@@ -33,6 +33,7 @@ mod function;
+ mod image;
+ mod next_block;
+ mod null;
++mod ray_query;
+ 
+ pub use error::Error;
+ 
+@@ -85,6 +86,7 @@ pub const SUPPORTED_CAPABILITIES: &[spirv::Capability] = &[
+     spirv::Capability::RuntimeDescriptorArray,
+     spirv::Capability::StorageImageMultisample,
+     spirv::Capability::FragmentBarycentricKHR,
++    spirv::Capability::RayQueryKHR,
+     // tricky ones
+     spirv::Capability::UniformBufferArrayDynamicIndexing,
+     spirv::Capability::StorageBufferArrayDynamicIndexing,
+@@ -98,6 +100,7 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+     "SPV_KHR_16bit_storage",
+     "SPV_KHR_non_semantic_info",
+     "SPV_KHR_fragment_shader_barycentric",
++    "SPV_KHR_ray_query",
+ ];
+ 
+ #[derive(Copy, Clone, Debug)]
+@@ -1765,6 +1768,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                 Op::TypeImage => self.parse_type_image(inst, &mut module),
+                 Op::TypeSampledImage => self.parse_type_sampled_image(inst),
+                 Op::TypeSampler => self.parse_type_sampler(inst, &mut module),
++                Op::TypeAccelerationStructureKHR | Op::TypeRayQueryKHR => {
++                    self.parse_type_ray_tracing(inst, &mut module)
++                }
+                 Op::Constant | Op::SpecConstant => self.parse_constant(inst, &mut module),
+                 Op::ConstantComposite | Op::SpecConstantComposite => {
+                     self.parse_composite_constant(inst, &mut module)
+diff --git a/naga/src/front/spv/next_block.rs b/naga/src/front/spv/next_block.rs
+index 698ed37..afc94aa 100644
+--- a/naga/src/front/spv/next_block.rs
++++ b/naga/src/front/spv/next_block.rs
+@@ -744,9 +744,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                     let base_handle = get_expr_handle!(pointer_id, base_lexp);
+                     let type_lookup = self.lookup_type.lookup(base_lexp.type_id)?;
+                     let handle = match ctx.module.types[type_lookup.handle].inner {
+-                        crate::TypeInner::Image { .. } | crate::TypeInner::Sampler { .. } => {
+-                            base_handle
+-                        }
++                        crate::TypeInner::Image { .. }
++                        | crate::TypeInner::Sampler { .. }
++                        | crate::TypeInner::AccelerationStructure { .. } => base_handle,
+                         _ => match self.lookup_load_override.get(&pointer_id) {
+                             Some(&LookupLoadOverride::Loaded(handle)) => handle,
+                             //Note: we aren't handling `LookupLoadOverride::Pending` properly here
+@@ -3084,6 +3084,24 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                     },
+                 )?,
+ 
++                Op::RayQueryInitializeKHR
++                | Op::RayQueryProceedKHR
++                | Op::RayQueryGenerateIntersectionKHR
++                | Op::RayQueryConfirmIntersectionKHR
++                | Op::RayQueryTerminateKHR
++                | Op::RayQueryGetIntersectionTypeKHR
++                | Op::RayQueryGetIntersectionTKHR
++                | Op::RayQueryGetIntersectionInstanceCustomIndexKHR
++                | Op::RayQueryGetIntersectionInstanceIdKHR
++                | Op::RayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR
++                | Op::RayQueryGetIntersectionGeometryIndexKHR
++                | Op::RayQueryGetIntersectionPrimitiveIndexKHR
++                | Op::RayQueryGetIntersectionBarycentricsKHR
++                | Op::RayQueryGetIntersectionFrontFaceKHR
++                | Op::RayQueryGetIntersectionObjectToWorldKHR
++                | Op::RayQueryGetIntersectionWorldToObjectKHR => {
++                    self.parse_ray_query(inst, ctx, &mut emitter, &mut block, block_id, body_idx)?
++                }
+                 _ => {
+                     return Err(Error::UnsupportedInstruction(self.state, inst.op));
+                 }
+diff --git a/naga/src/front/spv/ray_query.rs b/naga/src/front/spv/ray_query.rs
+new file mode 100644
+index 0000000..78fca51
+--- /dev/null
++++ b/naga/src/front/spv/ray_query.rs
+@@ -0,0 +1,310 @@
++//! Parsing of ray queries (`SPV_KHR_ray_query`): the acceleration structure and ray query
++//! types, and the `OpRayQuery*KHR` instructions, into Naga's [`RayQuery`] statement and
++//! [`RayQueryGetIntersection`] expression.
++//!
++//! SPIR-V reads an intersection's properties one instruction each
++//! (`OpRayQueryGetIntersectionTKHR`, `...PrimitiveIndexKHR`, ...); Naga reads them all at once
++//! as a `RayIntersection` struct ([`SpecialTypes::ray_intersection`]), so each becomes a field of
++//! one. The properties of the ray itself (its origin, direction, `tmin` and flags), and those
++//! Naga's struct doesn't have, are not supported.
++//!
++//! [`RayQuery`]: crate::Statement::RayQuery
++//! [`RayQueryGetIntersection`]: crate::Expression::RayQueryGetIntersection
++//! [`SpecialTypes::ray_intersection`]: crate::SpecialTypes::ray_intersection
++
++use crate::front::spv::{
++    resolve_constant, BlockContext, Error, Frontend, LookupExpression, LookupHelper as _,
++    LookupType,
++};
++use crate::{Handle, RayQueryFunction, Statement};
++
++/// The fields of Naga's `RayIntersection` struct (`Module::generate_ray_intersection_type`).
++mod field {
++    pub const KIND: u32 = 0;
++    pub const T: u32 = 1;
++    pub const INSTANCE_CUSTOM_DATA: u32 = 2;
++    pub const INSTANCE_INDEX: u32 = 3;
++    pub const SBT_RECORD_OFFSET: u32 = 4;
++    pub const GEOMETRY_INDEX: u32 = 5;
++    pub const PRIMITIVE_INDEX: u32 = 6;
++    pub const BARYCENTRICS: u32 = 7;
++    pub const FRONT_FACE: u32 = 8;
++    pub const OBJECT_TO_WORLD: u32 = 9;
++    pub const WORLD_TO_OBJECT: u32 = 10;
++}
++
++impl<I: Iterator<Item = u32>> Frontend<I> {
++    /// `OpTypeAccelerationStructureKHR` and `OpTypeRayQueryKHR`.
++    pub(super) fn parse_type_ray_tracing(
++        &mut self,
++        inst: super::Instruction,
++        module: &mut crate::Module,
++    ) -> Result<(), Error> {
++        let start = self.data_offset;
++        self.switch(super::ModuleState::Type, inst.op)?;
++        inst.expect(2)?;
++        let id = self.next()?;
++        let inner = match inst.op {
++            spirv::Op::TypeAccelerationStructureKHR => crate::TypeInner::AccelerationStructure {
++                vertex_return: false,
++            },
++            _ => crate::TypeInner::RayQuery {
++                vertex_return: false,
++            },
++        };
++        let decor = self.future_decor.remove(&id).unwrap_or_default();
++        let handle = module.types.insert(
++            crate::Type {
++                name: decor.name,
++                inner,
++            },
++            self.span_from_with_op(start),
++        );
++        self.lookup_type.insert(
++            id,
++            LookupType {
++                handle,
++                base_id: None,
++            },
++        );
++        Ok(())
++    }
++
++    /// The `OpRayQuery*KHR` instructions in a function's body.
++    #[allow(clippy::too_many_arguments)]
++    pub(super) fn parse_ray_query(
++        &mut self,
++        inst: super::Instruction,
++        ctx: &mut BlockContext,
++        emitter: &mut crate::proc::Emitter,
++        block: &mut crate::Block,
++        block_id: spirv::Word,
++        body_idx: usize,
++    ) -> Result<(), Error> {
++        use spirv::Op;
++        let start = self.data_offset;
++        let span = crate::Span::from(start..(start + 4 * (inst.wc as usize)));
++
++        // An operand's expression, in the body being built.
++        macro_rules! operand {
++            () => {{
++                let id = self.next()?;
++                let lexp = self.lookup_expression.lookup(id)?;
++                self.get_expr_handle(id, lexp, ctx, emitter, block, body_idx)
++            }};
++        }
++        let statement = |fun,
++                         query,
++                         ctx: &mut BlockContext,
++                         emitter: &mut crate::proc::Emitter,
++                         block: &mut crate::Block| {
++            block.extend(emitter.finish(ctx.expressions));
++            block.push(Statement::RayQuery { query, fun }, span);
++            emitter.start(ctx.expressions);
++        };
++
++        match inst.op {
++            Op::RayQueryInitializeKHR => {
++                inst.expect(9)?;
++                let query = operand!();
++                // The acceleration structure is a handle: loading it (`OpLoad`) is the handle
++                // itself, and globals are in the root scope.
++                let acceleration_structure_id = self.next()?;
++                let acceleration_structure = self
++                    .lookup_expression
++                    .lookup(acceleration_structure_id)?
++                    .handle;
++                let flags = operand!();
++                let cull_mask = operand!();
++                let origin = operand!();
++                let tmin = operand!();
++                let dir = operand!();
++                let tmax = operand!();
++                let ty = ctx.module.generate_ray_desc_type();
++                let descriptor = ctx.expressions.append(
++                    crate::Expression::Compose {
++                        ty,
++                        components: alloc::vec![flags, cull_mask, tmin, tmax, origin, dir],
++                    },
++                    span,
++                );
++                statement(
++                    RayQueryFunction::Initialize {
++                        acceleration_structure,
++                        descriptor,
++                    },
++                    query,
++                    ctx,
++                    emitter,
++                    block,
++                );
++            }
++            Op::RayQueryProceedKHR => {
++                inst.expect(4)?;
++                let result_type_id = self.next()?;
++                let result_id = self.next()?;
++                let query = operand!();
++                block.extend(emitter.finish(ctx.expressions));
++                // The result is set by the statement, so is not emitted.
++                let result = ctx
++                    .expressions
++                    .append(crate::Expression::RayQueryProceedResult, span);
++                block.push(
++                    Statement::RayQuery {
++                        query,
++                        fun: RayQueryFunction::Proceed { result },
++                    },
++                    span,
++                );
++                emitter.start(ctx.expressions);
++                self.lookup_expression.insert(
++                    result_id,
++                    LookupExpression {
++                        handle: result,
++                        type_id: result_type_id,
++                        block_id,
++                    },
++                );
++            }
++            Op::RayQueryGenerateIntersectionKHR => {
++                inst.expect(3)?;
++                let query = operand!();
++                let hit_t = operand!();
++                statement(
++                    RayQueryFunction::GenerateIntersection { hit_t },
++                    query,
++                    ctx,
++                    emitter,
++                    block,
++                );
++            }
++            Op::RayQueryConfirmIntersectionKHR | Op::RayQueryTerminateKHR => {
++                inst.expect(2)?;
++                let query = operand!();
++                let fun = if inst.op == Op::RayQueryTerminateKHR {
++                    RayQueryFunction::Terminate
++                } else {
++                    RayQueryFunction::ConfirmIntersection
++                };
++                statement(fun, query, ctx, emitter, block);
++            }
++            Op::RayQueryGetIntersectionTypeKHR
++            | Op::RayQueryGetIntersectionTKHR
++            | Op::RayQueryGetIntersectionInstanceCustomIndexKHR
++            | Op::RayQueryGetIntersectionInstanceIdKHR
++            | Op::RayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR
++            | Op::RayQueryGetIntersectionGeometryIndexKHR
++            | Op::RayQueryGetIntersectionPrimitiveIndexKHR
++            | Op::RayQueryGetIntersectionBarycentricsKHR
++            | Op::RayQueryGetIntersectionFrontFaceKHR
++            | Op::RayQueryGetIntersectionObjectToWorldKHR
++            | Op::RayQueryGetIntersectionWorldToObjectKHR => {
++                inst.expect(5)?;
++                let result_type_id = self.next()?;
++                let result_id = self.next()?;
++                let query = operand!();
++                // 0 for the candidate intersection, 1 for the committed one: a constant.
++                let which_id = self.next()?;
++                let which = self.lookup_constant.lookup(which_id)?;
++                let committed = match resolve_constant(ctx.gctx(), &which.inner) {
++                    Some(0) => false,
++                    Some(1) => true,
++                    _ => return Err(Error::InvalidRayQueryIntersection(which_id)),
++                };
++                let index = match inst.op {
++                    Op::RayQueryGetIntersectionTypeKHR => field::KIND,
++                    Op::RayQueryGetIntersectionTKHR => field::T,
++                    Op::RayQueryGetIntersectionInstanceCustomIndexKHR => {
++                        field::INSTANCE_CUSTOM_DATA
++                    }
++                    Op::RayQueryGetIntersectionInstanceIdKHR => field::INSTANCE_INDEX,
++                    Op::RayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR => {
++                        field::SBT_RECORD_OFFSET
++                    }
++                    Op::RayQueryGetIntersectionGeometryIndexKHR => field::GEOMETRY_INDEX,
++                    Op::RayQueryGetIntersectionPrimitiveIndexKHR => field::PRIMITIVE_INDEX,
++                    Op::RayQueryGetIntersectionBarycentricsKHR => field::BARYCENTRICS,
++                    Op::RayQueryGetIntersectionFrontFaceKHR => field::FRONT_FACE,
++                    Op::RayQueryGetIntersectionObjectToWorldKHR => field::OBJECT_TO_WORLD,
++                    _ => field::WORLD_TO_OBJECT,
++                };
++                ctx.module.generate_ray_intersection_type();
++                let intersection = ctx.expressions.append(
++                    crate::Expression::RayQueryGetIntersection { query, committed },
++                    span,
++                );
++                let mut value = ctx.expressions.append(
++                    crate::Expression::AccessIndex {
++                        base: intersection,
++                        index,
++                    },
++                    span,
++                );
++                if index == field::KIND && !committed {
++                    // A committed intersection's kind is numbered as Naga's
++                    // (`RayQueryIntersection`: none, triangle, generated), but a candidate's
++                    // isn't: SPIR-V has triangle 0 and AABB 1, Naga triangle 1 and AABB 3.
++                    // (Literals are in scope everywhere, so are made outside the emitter.)
++                    block.extend(emitter.finish(ctx.expressions));
++                    let mut literal = |value: u32| {
++                        ctx.expressions
++                            .append(crate::Expression::Literal(crate::Literal::U32(value)), span)
++                    };
++                    let aabb = literal(crate::RayQueryIntersection::Aabb as u32);
++                    let (one, zero) = (literal(1), literal(0));
++                    emitter.start(ctx.expressions);
++                    let is_aabb = ctx.expressions.append(
++                        crate::Expression::Binary {
++                            op: crate::BinaryOperator::Equal,
++                            left: value,
++                            right: aabb,
++                        },
++                        span,
++                    );
++                    value = ctx.expressions.append(
++                        crate::Expression::Select {
++                            condition: is_aabb,
++                            accept: one,
++                            reject: zero,
++                        },
++                        span,
++                    );
++                }
++                let value = self.with_result_type(value, result_type_id, ctx, span)?;
++                self.lookup_expression.insert(
++                    result_id,
++                    LookupExpression {
++                        handle: value,
++                        type_id: result_type_id,
++                        block_id,
++                    },
++                );
++            }
++            _ => return Err(Error::UnsupportedInstruction(self.state, inst.op)),
++        }
++        Ok(())
++    }
++
++    /// `value`, a field of the intersection, as the instruction's result type: SPIR-V lets an
++    /// integer property be signed, where Naga's field is unsigned.
++    fn with_result_type(
++        &self,
++        value: Handle<crate::Expression>,
++        result_type_id: spirv::Word,
++        ctx: &mut BlockContext,
++        span: crate::Span,
++    ) -> Result<Handle<crate::Expression>, Error> {
++        let ty = self.lookup_type.lookup(result_type_id)?.handle;
++        Ok(match ctx.module.types[ty].inner.scalar_kind() {
++            Some(crate::ScalarKind::Sint) => ctx.expressions.append(
++                crate::Expression::As {
++                    expr: value,
++                    kind: crate::ScalarKind::Sint,
++                    convert: None,
++                },
++                span,
++            ),
++            _ => value,
++        })
++    }
++}
+diff --git a/naga/tests/in/spv/ray-query.spvasm b/naga/tests/in/spv/ray-query.spvasm
+new file mode 100644
+index 0000000..d55beed
+--- /dev/null
++++ b/naga/tests/in/spv/ray-query.spvasm
+@@ -0,0 +1,114 @@
++; A compute shader tracing one ray with a ray query, as rust-gpu writes one (the query a local
++; variable, its operations inline): it walks the candidates, accepting triangles in front of a
++; distance and generating a hit for every AABB, then reads the committed hit's properties.
++               OpCapability Shader
++               OpCapability RayQueryKHR
++               OpExtension "SPV_KHR_ray_query"
++               OpMemoryModel Logical GLSL450
++               OpEntryPoint GLCompute %main "main" %acs %out
++               OpExecutionMode %main LocalSize 1 1 1
++               OpDecorate %acs DescriptorSet 0
++               OpDecorate %acs Binding 0
++               OpDecorate %Out Block
++               OpMemberDecorate %Out 0 Offset 0
++               OpMemberDecorate %Out 1 Offset 4
++               OpMemberDecorate %Out 2 Offset 8
++               OpMemberDecorate %Out 3 Offset 16
++               OpMemberDecorate %Out 4 Offset 24
++               OpMemberDecorate %Out 5 Offset 28
++               OpDecorate %out DescriptorSet 0
++               OpDecorate %out Binding 1
++       %void = OpTypeVoid
++         %fn = OpTypeFunction %void
++       %bool = OpTypeBool
++       %uint = OpTypeInt 32 0
++        %int = OpTypeInt 32 1
++      %float = OpTypeFloat 32
++     %v2float = OpTypeVector %float 2
++     %v3float = OpTypeVector %float 3
++        %Acs = OpTypeAccelerationStructureKHR
++    %ptr_Acs = OpTypePointer UniformConstant %Acs
++         %Rq = OpTypeRayQueryKHR
++     %ptr_Rq = OpTypePointer Function %Rq
++        %Out = OpTypeStruct %float %uint %v2float %int %uint %uint
++    %ptr_Out = OpTypePointer StorageBuffer %Out
++  %ptr_float = OpTypePointer StorageBuffer %float
++   %ptr_uint = OpTypePointer StorageBuffer %uint
++ %ptr_v2float = OpTypePointer StorageBuffer %v2float
++    %ptr_int = OpTypePointer StorageBuffer %int
++        %acs = OpVariable %ptr_Acs UniformConstant
++        %out = OpVariable %ptr_Out StorageBuffer
++     %uint_0 = OpConstant %uint 0
++     %uint_1 = OpConstant %uint 1
++     %uint_2 = OpConstant %uint 2
++     %uint_3 = OpConstant %uint 3
++     %uint_4 = OpConstant %uint 4
++     %uint_5 = OpConstant %uint 5
++   %uint_255 = OpConstant %uint 255
++    %float_0 = OpConstant %float 0
++    %float_1 = OpConstant %float 1
++  %float_tmin = OpConstant %float 0.001
++  %float_tmax = OpConstant %float 1000
++   %float_far = OpConstant %float 500
++    %float_hit = OpConstant %float 2
++     %origin = OpConstantComposite %v3float %float_0 %float_0 %float_0
++        %dir = OpConstantComposite %v3float %float_0 %float_0 %float_1
++       %main = OpFunction %void None %fn
++      %entry = OpLabel
++         %rq = OpVariable %ptr_Rq Function
++          %a = OpLoad %Acs %acs
++               OpRayQueryInitializeKHR %rq %a %uint_0 %uint_255 %origin %float_tmin %dir %float_tmax
++               OpBranch %header
++     %header = OpLabel
++               OpLoopMerge %merge %continue None
++               OpBranch %body
++       %body = OpLabel
++       %more = OpRayQueryProceedKHR %bool %rq
++               OpSelectionMerge %step None
++               OpBranchConditional %more %step %merge
++       %step = OpLabel
++       %kind = OpRayQueryGetIntersectionTypeKHR %uint %rq %uint_0
++    %is_aabb = OpIEqual %bool %kind %uint_1
++               OpSelectionMerge %next None
++               OpBranchConditional %is_aabb %aabb %triangle
++       %aabb = OpLabel
++               OpRayQueryGenerateIntersectionKHR %rq %float_hit
++               OpBranch %next
++   %triangle = OpLabel
++          %t = OpRayQueryGetIntersectionTKHR %float %rq %uint_0
++      %front = OpRayQueryGetIntersectionFrontFaceKHR %bool %rq %uint_0
++       %near = OpFOrdLessThan %bool %t %float_far
++     %accept = OpLogicalAnd %bool %near %front
++               OpSelectionMerge %accepted None
++               OpBranchConditional %accept %confirm %accepted
++    %confirm = OpLabel
++               OpRayQueryConfirmIntersectionKHR %rq
++               OpBranch %accepted
++   %accepted = OpLabel
++               OpBranch %next
++       %next = OpLabel
++               OpBranch %continue
++   %continue = OpLabel
++               OpBranch %header
++      %merge = OpLabel
++     %hit_t = OpRayQueryGetIntersectionTKHR %float %rq %uint_1
++   %hit_kind = OpRayQueryGetIntersectionTypeKHR %uint %rq %uint_1
++   %hit_bary = OpRayQueryGetIntersectionBarycentricsKHR %v2float %rq %uint_1
++ %hit_custom = OpRayQueryGetIntersectionInstanceCustomIndexKHR %int %rq %uint_1
++   %hit_prim = OpRayQueryGetIntersectionPrimitiveIndexKHR %uint %rq %uint_1
++   %hit_geom = OpRayQueryGetIntersectionGeometryIndexKHR %uint %rq %uint_1
++         %p0 = OpAccessChain %ptr_float %out %uint_0
++               OpStore %p0 %hit_t
++         %p1 = OpAccessChain %ptr_uint %out %uint_1
++               OpStore %p1 %hit_kind
++         %p2 = OpAccessChain %ptr_v2float %out %uint_2
++               OpStore %p2 %hit_bary
++         %p3 = OpAccessChain %ptr_int %out %uint_3
++               OpStore %p3 %hit_custom
++         %p4 = OpAccessChain %ptr_uint %out %uint_4
++               OpStore %p4 %hit_prim
++         %p5 = OpAccessChain %ptr_uint %out %uint_5
++               OpStore %p5 %hit_geom
++               OpRayQueryTerminateKHR %rq
++               OpReturn
++               OpFunctionEnd
+diff --git a/naga/tests/in/spv/ray-query.toml b/naga/tests/in/spv/ray-query.toml
+new file mode 100644
+index 0000000..8b4f065
+--- /dev/null
++++ b/naga/tests/in/spv/ray-query.toml
+@@ -0,0 +1,8 @@
++capabilities = "RAY_QUERY"
++targets = "WGSL | METAL"
++
++[msl]
++fake_missing_bindings = true
++lang_version = [2, 4]
++spirv_cross_compatibility = false
++zero_initialize_workgroup_memory = false
+diff --git a/naga/tests/in/wgsl/aliased-ray-query.toml b/naga/tests/in/wgsl/aliased-ray-query.toml
+index eb809b5..950c4d2 100644
+--- a/naga/tests/in/wgsl/aliased-ray-query.toml
++++ b/naga/tests/in/wgsl/aliased-ray-query.toml
+@@ -1,5 +1,5 @@
+ capabilities = "RAY_QUERY"
+-targets = "SPIRV | METAL | HLSL"
++targets = "SPIRV | METAL | HLSL | WGSL"
+ 
+ [msl]
+ fake_missing_bindings = true
+diff --git a/naga/tests/in/wgsl/overrides-ray-query.toml b/naga/tests/in/wgsl/overrides-ray-query.toml
+index ae4ad9b..7a1f375 100644
+--- a/naga/tests/in/wgsl/overrides-ray-query.toml
++++ b/naga/tests/in/wgsl/overrides-ray-query.toml
+@@ -1,6 +1,6 @@
+ capabilities = "RAY_QUERY"
+ pipeline_constants = { o = 2.0 }
+-targets = "IR | SPIRV | METAL"
++targets = "IR | SPIRV | METAL | WGSL"
+ 
+ [msl]
+ fake_missing_bindings = true
+diff --git a/naga/tests/in/wgsl/ray-query-no-init-tracking.toml b/naga/tests/in/wgsl/ray-query-no-init-tracking.toml
+index 2265a8d..19706d8 100644
+--- a/naga/tests/in/wgsl/ray-query-no-init-tracking.toml
++++ b/naga/tests/in/wgsl/ray-query-no-init-tracking.toml
+@@ -1,5 +1,5 @@
+ capabilities = "RAY_QUERY"
+-targets = "SPIRV | METAL | HLSL"
++targets = "SPIRV | METAL | HLSL | WGSL"
+ 
+ [msl]
+ fake_missing_bindings = true
+diff --git a/naga/tests/in/wgsl/ray-query.toml b/naga/tests/in/wgsl/ray-query.toml
+index eb809b5..950c4d2 100644
+--- a/naga/tests/in/wgsl/ray-query.toml
++++ b/naga/tests/in/wgsl/ray-query.toml
+@@ -1,5 +1,5 @@
+ capabilities = "RAY_QUERY"
+-targets = "SPIRV | METAL | HLSL"
++targets = "SPIRV | METAL | HLSL | WGSL"
+ 
+ [msl]
+ fake_missing_bindings = true
+diff --git a/naga/tests/out/msl/spv-ray-query.metal b/naga/tests/out/msl/spv-ray-query.metal
+new file mode 100644
+index 0000000..11f1503
+--- /dev/null
++++ b/naga/tests/out/msl/spv-ray-query.metal
+@@ -0,0 +1,176 @@
++// language: metal2.4
++#include <metal_stdlib>
++#include <simd/simd.h>
++
++using metal::uint;
++
++struct type_8 {
++    float member;
++    uint member_1;
++    metal::float2 member_2;
++    int member_3;
++    char _pad4[4];
++    uint member_4;
++    uint member_5;
++};
++struct RayDesc {
++    uint flags;
++    uint cull_mask;
++    float tmin;
++    float tmax;
++    metal::float3 origin;
++    metal::float3 dir;
++};
++struct RayIntersection {
++    uint kind;
++    float t;
++    uint instance_custom_data;
++    uint instance_index;
++    uint sbt_record_offset;
++    uint geometry_index;
++    uint primitive_index;
++    metal::float2 barycentrics;
++    bool front_face;
++    char _pad9[11];
++    metal::float4x3 object_to_world;
++    metal::float4x3 world_to_object;
++};
++
++RayIntersection ray_query_get_intersection_false(metal::raytracing::intersection_query<metal::raytracing::instancing, metal::raytracing::triangle_data> intersector
++, uint intersector_tracker
++) {
++    RayIntersection intersection = RayIntersection {};
++    if (((intersector_tracker & 2) == 2) && !((intersector_tracker & 4) == 4)) {
++        metal::raytracing::intersection_type ty = intersector.get_candidate_intersection_type();
++        if (ty == metal::raytracing::intersection_type::triangle) {
++            intersection.kind = 1;
++            intersection.t = intersector.get_candidate_triangle_distance();
++            intersection.barycentrics = intersector.get_candidate_triangle_barycentric_coord();
++            intersection.front_face = intersector.is_candidate_triangle_front_facing();
++        } else if (ty == metal::raytracing::intersection_type::bounding_box) {
++            intersection.kind = 3;
++        }
++        if (ty != metal::raytracing::intersection_type::none) {
++            intersection.instance_custom_data = intersector.get_candidate_user_instance_id();
++            intersection.instance_index = intersector.get_candidate_instance_id();
++            intersection.geometry_index = intersector.get_candidate_geometry_id();
++            intersection.primitive_index = intersector.get_candidate_primitive_id();
++            intersection.object_to_world = intersector.get_candidate_object_to_world_transform();
++            intersection.world_to_object = intersector.get_candidate_world_to_object_transform();
++        }
++    }
++    return intersection;
++}
++RayIntersection ray_query_get_intersection_true(metal::raytracing::intersection_query<metal::raytracing::instancing, metal::raytracing::triangle_data> intersector
++, uint intersector_tracker
++) {
++    RayIntersection intersection = RayIntersection {};
++    if (((intersector_tracker & 4) == 4)) {
++        metal::raytracing::intersection_type ty = intersector.get_committed_intersection_type();
++        if (ty == metal::raytracing::intersection_type::triangle) {
++            intersection.kind = 1;
++            intersection.barycentrics = intersector.get_committed_triangle_barycentric_coord();
++            intersection.front_face = intersector.is_committed_triangle_front_facing();
++        } else if (ty == metal::raytracing::intersection_type::bounding_box) {
++            intersection.kind = 2;
++        }
++        if (ty != metal::raytracing::intersection_type::none) {
++            intersection.t = intersector.get_committed_distance();
++            intersection.instance_custom_data = intersector.get_committed_user_instance_id();
++            intersection.instance_index = intersector.get_committed_instance_id();
++            intersection.geometry_index = intersector.get_committed_geometry_id();
++            intersection.primitive_index = intersector.get_committed_primitive_id();
++            intersection.object_to_world = intersector.get_committed_object_to_world_transform();
++            intersection.world_to_object = intersector.get_committed_world_to_object_transform();
++        }
++    }
++    return intersection;
++}
++void function(
++    metal::raytracing::instance_acceleration_structure global,
++    device type_8& global_1
++) {
++    metal::raytracing::intersection_query<metal::raytracing::instancing, metal::raytracing::triangle_data> local = {};
++    uint naga_query_init_tracker_for_local = 0u;
++    float naga_query_tmax_tracker_for_local = 0.0;
++    RayDesc _e12 = RayDesc {0u, 255u, 0.001, 1000.0, metal::float3(0.0, 0.0, 0.0), metal::float3(0.0, 0.0, 1.0)};
++    {
++        RayDesc desc = _e12;
++        metal::raytracing::intersection_params params;
++        metal::raytracing::opacity_cull_mode cull_mode = 
++            (desc.flags & 64) != 0 ? metal::raytracing::opacity_cull_mode::opaque : (
++                (desc.flags & 128) != 0 ? metal::raytracing::opacity_cull_mode::non_opaque : metal::raytracing::opacity_cull_mode::none
++            );
++        params.set_opacity_cull_mode(cull_mode);
++        bool force_opacity = cull_mode == metal::raytracing::opacity_cull_mode::none;
++        if (force_opacity) {
++            params.force_opacity(
++                (desc.flags & 1) != 0 ? metal::raytracing::forced_opacity::opaque : (
++                    (desc.flags & 2) != 0 ? metal::raytracing::forced_opacity::non_opaque : metal::raytracing::forced_opacity::none
++                )
++            );
++        }
++        params.accept_any_intersection((desc.flags & 4) != 0);
++        metal::raytracing::ray ray = metal::raytracing::ray(desc.origin, desc.dir, desc.tmin, desc.tmax);
++        bool invalid_nan_infs = ((as_type<uint>(desc.origin.x) & 2139095040) == 2139095040) || ((as_type<uint>(desc.origin.y) & 2139095040) == 2139095040) || ((as_type<uint>(desc.origin.z) & 2139095040) == 2139095040) || ((as_type<uint>(desc.dir.x) & 2139095040) == 2139095040) || ((as_type<uint>(desc.dir.y) & 2139095040) == 2139095040) || ((as_type<uint>(desc.dir.z) & 2139095040) == 2139095040) || ((as_type<uint>(desc.tmin) & 2139095040) == 2139095040) || (((as_type<uint>(desc.tmax) & 2139095040) == 2139095040) && ((as_type<uint>(desc.tmax) & 0x7fffff) != 0));
++        bool invalid_t = (desc.tmin > desc.tmax) || (desc.tmin < 0.0);
++        bool invalid_dir = metal::all(metal::abs(desc.dir) == 0.0);
++        if (!(invalid_dir || invalid_t || invalid_nan_infs)) {
++            local.reset(ray,global, desc.cull_mask, params);
++            naga_query_init_tracker_for_local = 1;
++            naga_query_tmax_tracker_for_local = desc.tmax;
++        }
++    }
++    uint2 loop_bound = uint2(4294967295u);
++    while(true) {
++        if (metal::all(loop_bound == uint2(0u))) { break; }
++        loop_bound -= uint2(loop_bound.y == 0u, 1u);
++        bool _e13 = false;
++        if (((naga_query_init_tracker_for_local & 1) == 1) && !((naga_query_init_tracker_for_local & 4) == 4)) {
++            _e13 = local.next();
++            naga_query_init_tracker_for_local = naga_query_init_tracker_for_local | (_e13 ? 2: 6);
++        }
++        if (_e13) {
++        } else {
++            break;
++        }
++        if (((ray_query_get_intersection_false(local, naga_query_init_tracker_for_local).kind == 3u) ? 1u : 0u) == 1u) {
++            if (((naga_query_init_tracker_for_local & 2) == 2) && !((naga_query_init_tracker_for_local & 4) == 4)){
++                float t = 2.0;
++                float current_max_t = naga_query_tmax_tracker_for_local;
++                if (local.get_committed_intersection_type() != metal::raytracing::intersection_type::none) {
++                    current_max_t = local.get_committed_distance();
++                }
++                if (local.get_candidate_intersection_type() == metal::raytracing::intersection_type::bounding_box && (local.get_ray_min_distance() <= t) && (t <= current_max_t)) {
++                    local.commit_bounding_box_intersection(t);
++                }
++            }
++        } else {
++            if ((ray_query_get_intersection_false(local, naga_query_init_tracker_for_local).t < 500.0) && ray_query_get_intersection_false(local, naga_query_init_tracker_for_local).front_face) {
++                if (((naga_query_init_tracker_for_local & 2) == 2) && !((naga_query_init_tracker_for_local & 4) == 4)) {
++                    if (local.get_candidate_intersection_type() == metal::raytracing::intersection_type::triangle) {
++                local.commit_triangle_intersection();
++                    }
++                }
++            }
++        }
++        continue;
++    }
++    global_1.member = ray_query_get_intersection_true(local, naga_query_init_tracker_for_local).t;
++    global_1.member_1 = ray_query_get_intersection_true(local, naga_query_init_tracker_for_local).kind;
++    global_1.member_2 = ray_query_get_intersection_true(local, naga_query_init_tracker_for_local).barycentrics;
++    global_1.member_3 = as_type<int>(ray_query_get_intersection_true(local, naga_query_init_tracker_for_local).instance_custom_data);
++    global_1.member_4 = ray_query_get_intersection_true(local, naga_query_init_tracker_for_local).primitive_index;
++    global_1.member_5 = ray_query_get_intersection_true(local, naga_query_init_tracker_for_local).geometry_index;
++    if (((naga_query_init_tracker_for_local & 2) == 2) && !((naga_query_init_tracker_for_local & 4) == 4)) {
++        local.abort();
++    }
++    return;
++}
++
++[[max_total_threads_per_threadgroup(1)]] kernel void main_(
++  metal::raytracing::instance_acceleration_structure global [[user(fake0)]]
++, device type_8& global_1 [[user(fake0)]]
++) {
++    function(global, global_1);
++}
+diff --git a/naga/tests/out/wgsl/spv-ray-query.wgsl b/naga/tests/out/wgsl/spv-ray-query.wgsl
+new file mode 100644
+index 0000000..aed5eb1
+--- /dev/null
++++ b/naga/tests/out/wgsl/spv-ray-query.wgsl
+@@ -0,0 +1,49 @@
++enable wgpu_ray_query;
++
++struct type_8 {
++    member: f32,
++    member_1: u32,
++    member_2: vec2<f32>,
++    member_3: i32,
++    member_4: u32,
++    member_5: u32,
++}
++
++@group(0) @binding(0) 
++var global: acceleration_structure;
++@group(0) @binding(1) 
++var<storage, read_write> global_1: type_8;
++
++fn function_() {
++    var local: ray_query;
++
++    rayQueryInitialize((&local), global, RayDesc(0u, 255u, 0.001f, 1000f, vec3<f32>(0f, 0f, 0f), vec3<f32>(0f, 0f, 1f)));
++    loop {
++        let _e13 = rayQueryProceed((&local));
++        if _e13 {
++        } else {
++            break;
++        }
++        if (select(0u, 1u, (rayQueryGetCandidateIntersection((&local)).kind == 3u)) == 1u) {
++            rayQueryGenerateIntersection((&local), 2f);
++        } else {
++            if ((rayQueryGetCandidateIntersection((&local)).t < 500f) && rayQueryGetCandidateIntersection((&local)).front_face) {
++                rayQueryConfirmIntersection((&local));
++            }
++        }
++        continue;
++    }
++    global_1.member = rayQueryGetCommittedIntersection((&local)).t;
++    global_1.member_1 = rayQueryGetCommittedIntersection((&local)).kind;
++    global_1.member_2 = rayQueryGetCommittedIntersection((&local)).barycentrics;
++    global_1.member_3 = bitcast<i32>(rayQueryGetCommittedIntersection((&local)).instance_custom_data);
++    global_1.member_4 = rayQueryGetCommittedIntersection((&local)).primitive_index;
++    global_1.member_5 = rayQueryGetCommittedIntersection((&local)).geometry_index;
++    rayQueryTerminate((&local));
++    return;
++}
++
++@compute @workgroup_size(1, 1, 1) 
++fn main() {
++    function_();
++}
+diff --git a/naga/tests/out/wgsl/wgsl-aliased-ray-query.wgsl b/naga/tests/out/wgsl/wgsl-aliased-ray-query.wgsl
+new file mode 100644
+index 0000000..7fb19ce
+--- /dev/null
++++ b/naga/tests/out/wgsl/wgsl-aliased-ray-query.wgsl
+@@ -0,0 +1,26 @@
++enable wgpu_ray_query;
++
++@group(0) @binding(0) 
++var acc_struct: acceleration_structure;
++
++@compute @workgroup_size(1, 1, 1) 
++fn main_candidate() {
++    var rq_1: ray_query;
++
++    let pos = vec3(0f);
++    let dir = vec3<f32>(0f, 1f, 0f);
++    rayQueryInitialize((&rq_1), acc_struct, RayDesc(4u, 255u, 0.1f, 100f, pos, dir));
++    let intersection = rayQueryGetCandidateIntersection((&rq_1));
++    if (intersection.kind == 3u) {
++        rayQueryGenerateIntersection((&rq_1), 10f);
++        return;
++    } else {
++        if (intersection.kind == 1u) {
++            rayQueryConfirmIntersection((&rq_1));
++            return;
++        } else {
++            rayQueryTerminate((&rq_1));
++            return;
++        }
++    }
++}
+diff --git a/naga/tests/out/wgsl/wgsl-overrides-ray-query.wgsl b/naga/tests/out/wgsl/wgsl-overrides-ray-query.wgsl
+new file mode 100644
+index 0000000..1e7b5a1
+--- /dev/null
++++ b/naga/tests/out/wgsl/wgsl-overrides-ray-query.wgsl
+@@ -0,0 +1,24 @@
++enable wgpu_ray_query;
++
++override o: f32;
++
++@group(0) @binding(0) 
++var acc_struct: acceleration_structure;
++
++@compute @workgroup_size(1, 1, 1) 
++fn main() {
++    var rq: ray_query;
++
++    let desc = RayDesc(4u, 255u, (o * 17f), (o * 19f), vec3((o * 23f)), vec3<f32>((o * 29f), (o * 31f), (o * 37f)));
++    rayQueryInitialize((&rq), acc_struct, desc);
++    loop {
++        let _e25 = rayQueryProceed((&rq));
++        if _e25 {
++        } else {
++            break;
++        }
++        {
++        }
++    }
++    return;
++}
+diff --git a/naga/tests/out/wgsl/wgsl-ray-query-no-init-tracking.wgsl b/naga/tests/out/wgsl/wgsl-ray-query-no-init-tracking.wgsl
+new file mode 100644
+index 0000000..69e0a22
+--- /dev/null
++++ b/naga/tests/out/wgsl/wgsl-ray-query-no-init-tracking.wgsl
+@@ -0,0 +1,67 @@
++enable wgpu_ray_query;
++
++struct Output {
++    visible: u32,
++    normal: vec3<f32>,
++}
++
++@group(0) @binding(0) 
++var acc_struct: acceleration_structure;
++@group(0) @binding(1) 
++var<storage, read_write> output: Output;
++
++fn query_loop(pos: vec3<f32>, dir: vec3<f32>, acs: acceleration_structure) -> RayIntersection {
++    var rq_1: ray_query;
++
++    rayQueryInitialize((&rq_1), acs, RayDesc(4u, 255u, 0.1f, 100f, pos, dir));
++    loop {
++        let _e9 = rayQueryProceed((&rq_1));
++        if _e9 {
++        } else {
++            break;
++        }
++        {
++        }
++    }
++    return rayQueryGetCommittedIntersection((&rq_1));
++}
++
++fn get_torus_normal(world_point: vec3<f32>, intersection: RayIntersection) -> vec3<f32> {
++    let local_point = (intersection.world_to_object * vec4<f32>(world_point, 1f));
++    let point_on_guiding_line = (normalize(local_point.xy) * 2.4f);
++    let world_point_on_guiding_line = (intersection.object_to_world * vec4<f32>(point_on_guiding_line, 0f, 1f));
++    return normalize((world_point - world_point_on_guiding_line));
++}
++
++@compute @workgroup_size(1, 1, 1) 
++fn main() {
++    let pos_1 = vec3(0f);
++    let dir_1 = vec3<f32>(0f, 1f, 0f);
++    let _e7 = query_loop(pos_1, dir_1, acc_struct);
++    output.visible = u32((_e7.kind == 0u));
++    let _e18 = get_torus_normal((dir_1 * _e7.t), _e7);
++    output.normal = _e18;
++    return;
++}
++
++@compute @workgroup_size(1, 1, 1) 
++fn main_candidate() {
++    var rq: ray_query;
++
++    let pos_2 = vec3(0f);
++    let dir_2 = vec3<f32>(0f, 1f, 0f);
++    rayQueryInitialize((&rq), acc_struct, RayDesc(4u, 255u, 0.1f, 100f, pos_2, dir_2));
++    let intersection_1 = rayQueryGetCandidateIntersection((&rq));
++    if (intersection_1.kind == 3u) {
++        rayQueryGenerateIntersection((&rq), 10f);
++        return;
++    } else {
++        if (intersection_1.kind == 1u) {
++            rayQueryConfirmIntersection((&rq));
++            return;
++        } else {
++            rayQueryTerminate((&rq));
++            return;
++        }
++    }
++}
+diff --git a/naga/tests/out/wgsl/wgsl-ray-query.wgsl b/naga/tests/out/wgsl/wgsl-ray-query.wgsl
+new file mode 100644
+index 0000000..69e0a22
+--- /dev/null
++++ b/naga/tests/out/wgsl/wgsl-ray-query.wgsl
+@@ -0,0 +1,67 @@
++enable wgpu_ray_query;
++
++struct Output {
++    visible: u32,
++    normal: vec3<f32>,
++}
++
++@group(0) @binding(0) 
++var acc_struct: acceleration_structure;
++@group(0) @binding(1) 
++var<storage, read_write> output: Output;
++
++fn query_loop(pos: vec3<f32>, dir: vec3<f32>, acs: acceleration_structure) -> RayIntersection {
++    var rq_1: ray_query;
++
++    rayQueryInitialize((&rq_1), acs, RayDesc(4u, 255u, 0.1f, 100f, pos, dir));
++    loop {
++        let _e9 = rayQueryProceed((&rq_1));
++        if _e9 {
++        } else {
++            break;
++        }
++        {
++        }
++    }
++    return rayQueryGetCommittedIntersection((&rq_1));
++}
++
++fn get_torus_normal(world_point: vec3<f32>, intersection: RayIntersection) -> vec3<f32> {
++    let local_point = (intersection.world_to_object * vec4<f32>(world_point, 1f));
++    let point_on_guiding_line = (normalize(local_point.xy) * 2.4f);
++    let world_point_on_guiding_line = (intersection.object_to_world * vec4<f32>(point_on_guiding_line, 0f, 1f));
++    return normalize((world_point - world_point_on_guiding_line));
++}
++
++@compute @workgroup_size(1, 1, 1) 
++fn main() {
++    let pos_1 = vec3(0f);
++    let dir_1 = vec3<f32>(0f, 1f, 0f);
++    let _e7 = query_loop(pos_1, dir_1, acc_struct);
++    output.visible = u32((_e7.kind == 0u));
++    let _e18 = get_torus_normal((dir_1 * _e7.t), _e7);
++    output.normal = _e18;
++    return;
++}
++
++@compute @workgroup_size(1, 1, 1) 
++fn main_candidate() {
++    var rq: ray_query;
++
++    let pos_2 = vec3(0f);
++    let dir_2 = vec3<f32>(0f, 1f, 0f);
++    rayQueryInitialize((&rq), acc_struct, RayDesc(4u, 255u, 0.1f, 100f, pos_2, dir_2));
++    let intersection_1 = rayQueryGetCandidateIntersection((&rq));
++    if (intersection_1.kind == 3u) {
++        rayQueryGenerateIntersection((&rq), 10f);
++        return;
++    } else {
++        if (intersection_1.kind == 1u) {
++            rayQueryConfirmIntersection((&rq));
++            return;
++        } else {
++            rayQueryTerminate((&rq));
++            return;
++        }
++    }
++}
+diff --git a/naga/tests/out/wgsl/wgsl-ray-tracing-pipeline.wgsl b/naga/tests/out/wgsl/wgsl-ray-tracing-pipeline.wgsl
+index ed58d24..9e1e6b7 100644
+--- a/naga/tests/out/wgsl/wgsl-ray-tracing-pipeline.wgsl
++++ b/naga/tests/out/wgsl/wgsl-ray-tracing-pipeline.wgsl
+@@ -5,15 +5,6 @@ struct HitCounters {
+     selected_hit: u32,
+ }
+ 
+-struct RayDesc {
+-    flags: u32,
+-    cull_mask: u32,
+-    tmin: f32,
+-    tmax: f32,
+-    origin: vec3<f32>,
+-    dir: vec3<f32>,
+-}
+-
+ var<ray_payload> hit_num: HitCounters;
+ @group(0) @binding(0) 
+ var acc_struct: acceleration_structure;
+-- 
+2.43.0
+

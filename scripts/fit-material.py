@@ -918,7 +918,23 @@ class Problem:
                 for path in p.get("paths", [p["path"]]):
                     put(preset, path, float("%.5g" % v))
             k += 1
+        legal_bombing(preset)
         return preset, usage
+
+
+def legal_bombing(o):
+    """Bombing nodes' sizes kept as the parser takes them, [smallest, largest] and at most four
+    cells, however the free search has scaled the cell and the sizes apart."""
+    if isinstance(o, list):
+        for x in o:
+            legal_bombing(x)
+    elif isinstance(o, dict):
+        if o.get("node") == "bombing" and isinstance(o.get("size"), list) and len(o["size"]) == 2:
+            cell = o.get("cell", 0.05)
+            a, b = sorted(min(float(v), 4. * cell) for v in o["size"])
+            o["size"] = [a, b]
+        for v in o.values():
+            legal_bombing(v)
 
 
 def sliced_transport(x, y, passes=12, seed=1):

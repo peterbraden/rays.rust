@@ -2952,6 +2952,26 @@ transport amplitudes in position and wavevector, though for deep water).
     number makes them; and the wind's waves summed with them, the fetch along a river five
     of its widths (half a meander's wavelength, a model choice).
   - The nearest lake's report searched every lake cell's shore: 12 of 14 minutes of a load.
+- Coasts (steps 6 and 7 begun, `ocean::Surf`, `terrain::scenery::shoreface`), each checked on
+  shots of `terrain-coast.json`'s world with its `focus` pinned (the patches follow the camera
+  otherwise, and the shore with them):
+  - The sea over a landscape before it finds the depth under each point by a ray cast down
+    onto the ground, and its waves break there: Battjes and Janssen's fraction of random waves
+    breaking, McCowan's γ = 0.78.
+  - The shoreface takes Dean's equilibrium profile, A y^(2/3), A = 0.21 D^0.48 (0.3 mm sand;
+    closure at 8 m, a model choice for Hallermeier's).
+  - Waves shoal (linear theory's energy flux) and refract (Snell's law, the refraction
+    coefficient on their height); in the surf zone the crests are laid out by phase across
+    Dean's profile, following the depth contours, each wave's height varying along its crest
+    and from wave to wave; a wave breaks where it reaches 0.78 of the depth, white on its front
+    and behind with the foam it leaves, fading with the whitecaps' 3.5 s (so the inner surf
+    zone is about half white, (τ/T)(1 - e^(-T/τ))).
+  - Trains: the wind's sea and an ocean's `"swell"`; waves heading out to sea make no surf.
+  - Found: from offshore the surf is a thin line, as it should be for a metre of waves on a
+    1:16 shore (a 30-40 m surf zone); a long swell's is wider. The swell is in the surf only,
+    not yet on the open sea's surface; the breakers are foam on a flat sea (no breaking face);
+    no swash or wet sand at the waterline; the kernels (GPU) don't know the surf, so such a sea
+    is the CPU's.
 - Found after merging master (closed basins, geology): on the alpine test site (30°N, in the
   subtropical dry belt) the closed basins cut nearly all of a patch's drainage (its largest
   catchment fell from 1500 to 37 km²), so it has no rivers; with `"evaporation": 0` they come

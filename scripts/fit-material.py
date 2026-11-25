@@ -354,15 +354,24 @@ class StructureLoss:
         return sum(self.weights[k] * v for k, v in self.parts_of(a, b).items())
 
 
+# About the least difference one notices along each of Oklab's axes, for the muted colours of
+# natural ground: lightness 0.02; chroma less, as near grey the eye sees a tint of 0.005 to
+# 0.01 (a scree fitted with 0.02 for both went teal and khaki over a grey scan, its mean 0.007
+# off along a, which cost next to nothing).
+JND = np.array([0.02, 0.008, 0.008])
+
+
 class ColourLoss:
     """Colour compared in Oklab, where distances are about as different as they look, in
     three parts, each of which the patch loss's colour term was nearly blind to one way
     (scripts/loss-benchmark.py):
 
-    - `mean`: the squared distance between the images' mean colours.
+    - `mean`: the squared distance between the images' mean colours, each axis in units of
+      the least noticeable difference along it (`JND`).
     - `spread`: the colours' distribution about its mean, at each pyramid level: the sliced
       Wasserstein distance between the centred colours, each axis over the reference's own
-      deviation along it, so a material's chroma counts as much as its lightness and a
+      deviation along it (and half a noticeable difference, so a flat colour's noise isn't
+      magnified), so a material's chroma counts as much as its lightness and a
       contrast flattened or boosted shows (it didn't: a third less contrast scored as a
       quadrant of the same scan).
     - `binding`: which colours go where: each pixel's colour with its neighbourhood's (the
@@ -371,7 +380,7 @@ class ColourLoss:
       a pixel's colour beside its surroundings' tells them apart.
     """
 
-    WEIGHTS = {"mean": 50., "spread": 3., "binding": 1.}
+    WEIGHTS = {"mean": 0.25, "spread": 3., "binding": 1.}
 
     def __init__(self, parts=("mean", "spread", "binding"), levels=4, samples=8192, projections=48, seed=5):
         self.parts, self.levels, self.samples, self.seed = parts, levels, samples, seed
@@ -385,13 +394,14 @@ class ColourLoss:
         la, lb = oklab(a), oklab(b)
         out = {}
         if "mean" in self.parts:
-            out["mean"] = float(np.sum((la.reshape(-1, 3).mean(0) - lb.reshape(-1, 3).mean(0)) ** 2))
+            d = (la.reshape(-1, 3).mean(0) - lb.reshape(-1, 3).mean(0)) / JND
+            out["mean"] = float(np.sum(d * d))
         pa, pb = PatchLoss.pyramid(la, self.levels), PatchLoss.pyramid(lb, self.levels)
         spread = binding = 0.
         for k in range(self.levels):
             x, y = pa[k], pb[k]
             mx, my = x.reshape(-1, 3).mean(0), y.reshape(-1, 3).mean(0)
-            scale = x.reshape(-1, 3).std(0) + 0.02
+            scale = x.reshape(-1, 3).std(0) + 0.5 * JND
             rng = np.random.default_rng(self.seed + k)
             fx, fy = ((x - mx) / scale).reshape(-1, 3), ((y - my) / scale).reshape(-1, 3)
             n = min(self.samples, len(fx))

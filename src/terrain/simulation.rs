@@ -616,7 +616,7 @@ impl Terrain {
     /// water reaching it that flows on: none below a closed basin.
     fn balance(&self, flow: &mut Flow) -> Basins {
         let n = self.domain.len();
-        let mut basins = Basins { closed: vec![false; n], water: vec![0.; n], count: 0 };
+        let mut basins = Basins { closed: vec![false; n], water: vec![0.; n], floor: vec![false; n], count: 0 };
         if self.temperature.is_none() || self.params.evaporation <= 0. { return basins; }
         let surface = self.surface();
         let evaporation = self.evaporation();
@@ -667,9 +667,19 @@ impl Terrain {
                         loss -= net[c];
                         level = sorted.get(k + 1).map_or(flow.filled[c], |&d| surface[d]);
                     }
+                    // Its floor: as far as a wet year's water spreads, `WET_YEAR` times as
+                    // much as the mean (and at least its lowest cell).
+                    let (mut wet, mut spread) = (0., 1);
+                    while spread < sorted.len() && wet < WET_YEAR * inflow {
+                        wet -= net[sorted[spread - 1]];
+                        if wet < WET_YEAR * inflow { spread += 1; }
+                    }
                     for &c in cells {
                         basins.closed[c] = true;
                         basins.water[c] = (level - surface[c]).max(0.);
+                    }
+                    for &c in &sorted[..spread] {
+                        basins.floor[c] = true;
                     }
                 } else {
                     water[i] += w;
@@ -1075,8 +1085,12 @@ pub struct Basins {
     /// Cells in the depression of a closed basin, whose lake never spills.
     pub closed: Vec<bool>,
     /// Depth of the water standing in closed basins, metres: their terminal lakes. The rest
-    /// of a closed depression is dry: a playa where it is flat.
+    /// of a closed depression is dry.
     pub water: Vec<f64>,
+    /// Cells of a closed basin's floor: as far as its lake spreads in a wet year (`WET_YEAR`),
+    /// dried to a crust of salt and clay between them. The rest of the depression, which the
+    /// water never reaches, is not.
+    pub floor: Vec<bool>,
     /// How many closed basins there are.
     pub count: usize,
 }
@@ -1084,13 +1098,18 @@ pub struct Basins {
 /// Terminal lakes shallower than this, metres, count as dry playa.
 pub const SALT_LAKE_DEPTH: f64 = 0.5;
 
+/// How much more water than the mean a wet year brings a closed basin: its lake spreads that
+/// much further over the floor, which is a playa where it then dries (`Basins::floor`). (Desert
+/// rivers' yearly flows vary severalfold.)
+pub const WET_YEAR: f64 = 3.;
+
 impl Basins {
     /// Whether cell `i` is under a closed basin's terminal lake.
     pub fn salt_lake(&self, i: usize) -> bool { self.closed[i] && self.water[i] > SALT_LAKE_DEPTH }
 
     /// Whether cell `i` of `t` is a playa: a closed basin's dry floor of lake beds.
     pub fn playa(&self, t: &Terrain, i: usize) -> bool {
-        self.closed[i] && self.water[i] <= SALT_LAKE_DEPTH && t.sediment[i] > crate::terrain::map::ALLUVIUM && t.ice[i] < ICE_FREE
+        self.closed[i] && self.floor[i] && self.water[i] <= SALT_LAKE_DEPTH && t.sediment[i] > crate::terrain::map::ALLUVIUM && t.ice[i] < ICE_FREE
     }
 }
 
@@ -1477,8 +1496,13 @@ mod tests {
         // rain's factor.
         let bowl = 40e6 * 600. / t.params.orographic.as_ref().map_or(600., |o| o.reference);
         assert!(dry < wet - bowl, "{} vs {}", dry, wet);
-        // With nothing flowing in but its own rain, its floor is dry: a playa.
+        // With nothing flowing in but its own rain, its floor is dry: a playa, where a wet
+        // year's water spreads, its lowest ground; not the slopes of the whole bowl.
         assert!(closed.water.iter().all(|&w| w == 0.));
+        let (floor, bowl_cells) = ((0..len).filter(|&i| closed.floor[i]).count(), (0..len).filter(|&i| closed.closed[i]).count());
+        assert!(closed.floor[12 * n + 12] || closed.floor[11 * n + 11], "the bottom is its floor");
+        assert!(floor < bowl_cells / 2, "{} of {} cells floor", floor, bowl_cells);
+        assert!((0..len).all(|i| !closed.floor[i] || closed.closed[i]));
         // Without evaporation, every lake spills.
         t.params.evaporation = 0.;
         assert_eq!(t.basins().count, 0);

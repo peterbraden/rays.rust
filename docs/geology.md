@@ -170,7 +170,8 @@ open-water evaporation (from 0.5 m/yr at 0 °C to 2 m/yr in a hot desert) less t
 A lake that would lose more than flows in never spills: its basin keeps its water and its
 sediment, the rivers below it lose its catchment, and its water stands where evaporation
 balances the inflow, as a shallow salt lake or none at all, leaving a flat playa of lake beds
-(the module docs of `terrain::simulation`, "Closed basins"; `evaporation` scales it, 0 for
+where a wet year's lake spreads (three times the mean inflow, `WET_YEAR`: the basin's lowest
+ground, not the slopes of the whole depression) (the module docs of `terrain::simulation`, "Closed basins"; `evaporation` scales it, 0 for
 none). Maps show salt lakes in green-blue and playas in white; rendered, playas are salt crust
 and clay pan cracked into polygons, and terminal lakes shallow brine, and graphs can read a
 `playa` field.

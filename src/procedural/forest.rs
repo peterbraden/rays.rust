@@ -620,6 +620,13 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
             }
 
             grid[at(cell(x, z)).expect("a tree within the area")].push([x, z, r]);
+            // Room alone thins the trees down to a favour of a quarter (twice the radius:
+            // more would widen every search). Below that, a tree takes its room but stands
+            // only with the favour's share of a quarter, so that the gaps it leaves aren't
+            // filled by later darts, and they stand as thinly as the favour says (as on a grid).
+            if favoured < 0.25 && favoured < 0.25 * (yaw * 97.).fract() {
+                continue;
+            }
             if clustering > 0. {
                 let c = parent.unwrap_or_else(|| {
                     // A new clump, growing to between 1 and about 25 copies, mostly few.
@@ -698,6 +705,13 @@ mod tests {
                 let (a, b) = (count(&darts, &sp, &all, k), count(&grid, &sp, &all, k));
                 assert!((b / a - 1.).abs() < 0.3, "species {} of {}: darts {}, grid {}", k, sp.len(), a, b);
             }
+        }
+        // And as thinly where they are little favoured: darts fill every gap, so it isn't
+        // room alone that thins them.
+        for f in [0.5, 0.1, 0.03] {
+            let thin = move |_: f64, _: f64| f;
+            let (a, b) = (count(&darts, &[one(1., 0.2)], &thin, 0), count(&grid, &[one(1., 0.2)], &thin, 0));
+            assert!((b / a - 1.).abs() < 0.3, "favour {}: darts {}, grid {}", f, a, b);
         }
         let half = |x: f64, _: f64| if x < 0. { 1. } else { 0.5 };
         let (west, east) = (|p: &&Placement| p.position.x < 0., |p: &&Placement| p.position.x >= 0.);

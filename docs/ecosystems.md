@@ -76,7 +76,7 @@ tens of kilometres, so ecotones between wetter and drier biomes are kilometres w
 the air cools faster, so there they are a few hundred metres. Each biome has several plant communities,
 and which grows where is decided region by region: each community has a smooth noise of its
 own, about 4 km across, and holds the ground where its noise leads its biome's others, fading
-into the next over a narrow ecotone. So every community has a fair share of its biome, and
+into the next over an ecotone about a kilometre wide, where their plants mix. So every community has a fair share of its biome, and
 different valleys of one climate grow different woods (`terrain::flora::COMMUNITIES`):
 
 | biome | communities (their main plants; ground plants) |

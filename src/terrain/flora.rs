@@ -14,7 +14,7 @@
 //!
 //! Which of a biome's communities grows where is decided region by region: each has a smooth
 //! noise of its own, kilometres across (`REGION`), and holds the ground where its noise is
-//! the highest of its biome's, fading into the next over a narrow ecotone (`ECOTONE`). So
+//! the highest of its biome's, fading into the next over an ecotone about a kilometre wide (`ECOTONE`). So
 //! every community has an equal share of its biome in expectation, in patches a few
 //! kilometres across, and different valleys of one climate grow different woods.
 //!
@@ -234,8 +234,9 @@ pub const COMMUNITIES: &[Community] = &[
 const REGION: f64 = 4000.;
 
 /// How far one community's noise must lead another's for it to hold the ground alone: the
-/// ecotone between them, a few percent of a region across.
-const ECOTONE: f64 = 0.04;
+/// ecotone between them, where their plants mix, about a kilometre across (the noises' leads
+/// change by about a tenth over a few hundred metres).
+const ECOTONE: f64 = 0.15;
 
 /// Whether `species` is a conifer, dropping needles (some are drawn with oval leaves).
 pub fn conifer(species: &str) -> bool {

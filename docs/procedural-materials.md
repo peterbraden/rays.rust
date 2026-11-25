@@ -253,11 +253,73 @@ What the loss sees, a preset still has to be able to make: refitted with it, tra
 ran to its smallest, the loss rightly missing the scan's fine grit everywhere and the preset
 having none to give it but by shrinking everything.
 
+### Solved colours, palettes and free graphs
+
+The latest round of fits (its settings now the defaults) changed what is searched, what is compared and how
+the result is judged:
+
+- **Colours are solved, not searched.** A rendered preset is linear in its colours, so the fit
+  renders the preset once with its fitted colours black and once per three colours with each
+  in one channel, and composes any choice of colours from those. The scan's pixels are matched
+  to the composed render's by iterated sliced optimal transport (in Oklab, in just noticeable
+  differences), and the colours come from a weighted least squares, pulled a little towards the
+  author's and kept in [0.003, 0.95] (`ColourSolve`). This reached granite_outcrop's dark rock,
+  which the bounded tints couldn't; the colours then cost nothing in the search's dimensions.
+- **A palette of the scan.** `PaletteLoss` clusters the scan's colours into six (k-means in
+  Oklab) and labels every pixel of both images by its nearest. It then compares each colour's
+  share, the sizes of its connected patches (as a distribution in octaves), which colours lie
+  beside which at 1, 3 and 9 pixels, the power spectra of lightness and the two chroma axes, and
+  each colour's own spectrum. A histogram can't tell sparse large stones from a confetti of
+  small ones; these parts can.
+- **Measured against the scan itself.** `FloorLoss` divides every part of the colour,
+  structure and palette losses by how much it differs between the scan's own four detail tiles
+  (plus a quarter of its typical value, so a part the scan is uniform in doesn't dominate), and
+  takes their root mean square. A loss of 1 is about as far from the scan as the scan is from
+  itself; the score averages the whole and the detail view (`--loss floor`, the default).
+- **Lit by a sun.** A uniform sky at one sample a pixel left about 11% noise in the albedo,
+  which the spectra read as grain and the search exploited. A sun straight down (on a wall,
+  straight in) with the relief stripped gives the albedo exactly at one sample.
+- **Every number free** (`--free`). The preset's graphs are searched as written:
+  - lengths (scales, cells, wavelengths, warps, sprite sizes) within ×/÷4;
+  - amplitudes, densities, multipliers and stretches within ×/÷2.5;
+  - roughness, jitter, spread, widths and coverage by ±0.25;
+  - offsets and smoothstep edges by ±0.3;
+  - each colour map's stops shifted and stretched;
+  - numeric variables within ×/÷3.
+
+  The same node with the same seed and value is tied into one parameter. A preset gains 11 to
+  50 dimensions, about 45 minutes a preset at 60 generations. A candidate the renderer refuses
+  is scored as far off, and bombing sizes are kept as the parser takes them.
+
+Each preset's loss as a multiple of its scan's own variation, measured on the detail view at 8
+samples (the fits' own scores, over both views, are lower):
+
+| Preset | As written | Fitted | | Preset | As written | Fitted |
+|---|---|---|---|---|---|---|
+| ochre_crust | 6.84 | 0.62 | | veined_basalt | 83.5 | 1.73 |
+| bedded_sandstone | 6.14 | 0.90 | | shingle | 49.9 | 2.10 |
+| lichened_ironstone | 25.3 | 0.91 | | weathered_grey_rock | 39.5 | 2.14 |
+| mossy_slab | 16.6 | 1.07 | | granite_outcrop | 116 | 2.21 |
+| caliche_ground | 14.4 | 1.20 | | stony_bank | 123 | 3.00 |
+| trail_dirt | 97.3 | 1.35 | | angular_rubble | 12.9 | 3.09 |
+| pebble_bed | 7.78 | 1.59 | | foliated_rock | 190 | 3.66 |
+| weathered_pink_granite | 26.8 | 1.62 | | laterite | 199 | 3.88 |
+| | | | | scree | 80.1 | 4.35 |
+
+All but two are applied. angular_rubble's fit is closer in tone but turns its angular stones
+into blobs close up. ochre_crust's fit swirls where the scan cracks. Both keep the presets as
+written.
+
+The fits furthest from their scans are broken stone and crusted ground. The fits move sizes,
+contrasts and colours freely, so what is left is structure the graphs can't make: angular,
+sharp-edged stones lying on one another, and cracks. Those need new sprites (`bombing` with
+angular shapes) rather than more search.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)
 
-*Each: the scan, the preset as written, and fitted (the first ten; the six after them aren't pictured). All sixteen fits are applied (leaf_litter_gravel's after its leaves were remade by `bombing`).*
+*Each: the scan, the preset as written, and fitted (the first ten; the six after them aren't pictured). All sixteen fits of that round were applied (leaf_litter_gravel's after its leaves were remade by `bombing`); the round above has since refitted fifteen of them.*
 
 Sixteen presets were written to imitate particular Poly Haven scans, each scan recorded in the
 preset's `references`:

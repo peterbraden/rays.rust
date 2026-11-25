@@ -951,6 +951,9 @@ impl SceneFile {
             } else if obj["type"] == "volume" && matches!(obj.get("density"), Some(Value::Object(_) | Value::String(_))) {
                 let fields = landscape.clone().map(|l| Arc::new(ObjectFields(l)) as Arc<dyn crate::graph::Fields>);
                 vec![Arc::new(SceneFile::parse_volume_over(&obj, geometries, fields))]
+            } else if obj["type"] == "ocean" && landscape.is_some() {
+                // Over the landscape: its waves break in the shallows.
+                vec![Arc::new(crate::ocean::create_ocean_over(&obj, landscape.clone()))]
             } else if obj["type"] == "landscape" {
                 // Kept, as a surface for scatters after it.
                 // With its rivers' water and falls (`create_landscape`).

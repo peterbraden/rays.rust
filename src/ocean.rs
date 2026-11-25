@@ -1258,6 +1258,53 @@ pub struct PhysicalOcean {
     pub absorption: Option<Color>,
     /// Whitecaps, if the wind raises any.
     pub foam: Option<Foam>,
+    /// Where the sea is over ground near the shore, the waves breaking there (`Surf`).
+    pub surf: Option<Surf>,
+}
+
+/// McCowan's breaking index: a wave breaks when its height reaches this fraction of the depth
+/// (J. McCowan, "On the highest wave of permanent type", Phil. Mag. 38, 1894; the value used by
+/// Battjes and Janssen for their maximum height, H_m = γ d).
+pub const BREAKING_INDEX: f64 = 0.78;
+
+/// The fraction of waves breaking where waves of root-mean-square height `hrms` (m) reach water
+/// `depth` metres deep, by Battjes and Janssen's model of random waves in the surf zone: the
+/// heights are Rayleigh distributed but truncated at H_m = γ d, those at it breaking, so the
+/// fraction Q_b satisfies (1 - Q_b) / -ln Q_b = (H_rms / H_m)² (J. A. Battjes and J. P. F. M.
+/// Janssen, "Energy loss and set-up due to breaking of random waves", Proc. 16th Int. Conf.
+/// Coastal Engineering, 1978). None break in deep water; all where the waves are as high as the
+/// water allows, and over land.
+pub fn breaking_fraction(hrms: f64, depth: f64) -> f64 {
+    if depth <= 0. { return 1.; }
+    let b2 = (hrms / (BREAKING_INDEX * depth)).powi(2);
+    if b2 >= 1. { return 1.; }
+    if b2 < 0.05 { return 0.; }
+    // f(Q) = (1 - Q) + b² ln Q rises from -∞ at 0 through its root to 0 at 1 (its maximum
+    // there is past the root for b² < 1): bisect on (0, 1).
+    let f = |q: f64| (1. - q) + b2 * q.ln();
+    let (mut lo, mut hi) = (1e-12, 1. - 1e-12);
+    if f(hi) < 0. { return 1.; }
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if f(mid) < 0. { lo = mid } else { hi = mid }
+    }
+    0.5 * (lo + hi)
+}
+
+/// The surf: the water's depth under the sea's surface near the land (a function of a point
+/// on the surface, None where it doesn't know, as far out at sea), and the waves' root-mean-
+/// square height as they arrive (the open sea's, before they feel the bottom).
+#[derive(Clone)]
+pub struct Surf {
+    pub depth: std::sync::Arc<dyn Fn(&Vector3<f64>) -> Option<f64> + Send + Sync>,
+    pub hrms: f64,
+}
+
+impl Surf {
+    /// The fraction of waves breaking at `p`.
+    pub fn breaking(&self, p: &Vector3<f64>) -> f64 {
+        (self.depth)(p).map_or(0., |d| breaking_fraction(self.hrms, d))
+    }
 }
 
 /// Residual foam's albedo, as a fraction of fresh foam's: a thinner layer of larger bubbles.
@@ -1611,8 +1658,9 @@ impl PhysicalOcean {
 
 impl MaterialModel for PhysicalOcean {
     fn water(&self) -> Option<crate::material::model::Water> {
-        // (Transparent water goes down to what is beneath, which the kernel doesn't.)
-        self.absorption.is_none().then(|| crate::material::model::Water {
+        // (Transparent water goes down to what is beneath, which the kernel doesn't; nor does
+        // it know the surf.)
+        (self.absorption.is_none() && self.surf.is_none()).then(|| crate::material::model::Water {
             body: self.water.as_reflectance(), bubbles: BUBBLES.as_reflectance(), roughness: self.roughness,
             radius: self.center.map_or(0., |c| -c.y), foam: self.foam.as_ref().map(|f| f.export()),
         })
@@ -1635,6 +1683,17 @@ impl MaterialModel for PhysicalOcean {
         // diffusely about the mean surface (foam rides the wave, smoothing its ripples). Fresh
         // foam is a dense froth; residual foam a thin skin of bubbles over the water, darker.
         let mut bubbles = 0.;
+        // The surf: where waves break over the shallows, white water over that fraction of the
+        // sea, as fresh foam.
+        if let Some(surf) = &self.surf {
+            let breaking = surf.breaking(&intersection.point);
+            if breaking > 0. && geometry::rand() < breaking {
+                let albedo = self.foam.as_ref().map_or(Color::new(0.6, 0.6, 0.6), |f| f.albedo).as_reflectance();
+                let normal = if up.dot(&v) > 0. { up } else { -up };
+                return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal }, r, &intersection.point, s);
+            }
+            bubbles = breaking;
+        }
         if let Some(foam) = &self.foam {
             let (fresh, residual, p) = foam.sample(intersection.point.x, intersection.point.z);
             let (solid, lace) = (foam.ragged(fresh, p), foam.lace(residual, p));
@@ -1647,7 +1706,7 @@ impl MaterialModel for PhysicalOcean {
             }
             // Between the patches, the clouds of bubbles a breaking crest drove down linger
             // under the surface, scattering light back up through the water: paler, greener sea.
-            bubbles = fresh.max(0.5 * residual);
+            bubbles = bubbles.max(fresh.max(0.5 * residual));
         }
         let into = Intersection { normal: n, ..*intersection };
         // The water body, lit through the surface, as much as gets in.
@@ -1724,6 +1783,7 @@ fn physical_material(opts: &Value, waves_slope: f64, wind: Vector2<f64>, center:
         roughness: SceneFile::parse_number(&opts["roughness"], (cox_munk_slope(wind.norm()) - waves_slope).max(1e-3)),
         center,
         foam: None,
+        surf: None,
         absorption: absorption(opts),
     }
 }
@@ -1746,6 +1806,13 @@ fn waves_of(opts: &Value) -> WaveField {
 
 /// An ocean from its scene object (see the module docs' scene options).
 pub fn create_ocean(opts: &Value) -> SceneObject {
+    create_ocean_over(opts, None)
+}
+
+/// As `create_ocean`, over `ground` (a landscape before it in the scene): its waves break in the
+/// shallows (`Surf`), the depth under each point found by a ray cast straight down from above
+/// the sea onto the ground.
+pub fn create_ocean_over(opts: &Value, ground: Option<std::sync::Arc<crate::sceneobject::SceneObject>>) -> SceneObject {
     let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.));
     let waves = waves_of(opts);
     let radius = SceneFile::parse_number(&opts["planet_radius"], crate::planet::EARTH_RADIUS);
@@ -1758,6 +1825,24 @@ pub fn create_ocean(opts: &Value) -> SceneObject {
         let coverage = SceneFile::parse_number(&opts["whitecaps"], whitecap_coverage(wind.norm())).clamp(0., 1.);
         if coverage > 0. {
             m.foam = Some(Foam::new(waves_of(opts), wind, coverage, SceneFile::parse_color_def(opts, "foam_albedo", Color::new(0.6, 0.6, 0.6))));
+        }
+        if let Some(ground) = ground {
+            // The waves' height as they arrive: the open sea's significant height, four times
+            // its surface's standard deviation; H_rms = H_s / √2 for Rayleigh-distributed waves.
+            let (_, sd) = waves.height_exceeded(0.5);
+            let hrms = 4. * sd / 2f64.sqrt();
+            let centre = planet_radius.map(|r| Vector3::new(0., -r, 0.));
+            let (above, reach) = (200., 2000.);
+            m.surf = Some(Surf { hrms, depth: std::sync::Arc::new(move |p: &Vector3<f64>| {
+                // Sea level under `p`, and the ground below it.
+                let (up, level) = match centre {
+                    Some(c) => { let u = (p - c).normalize(); (u, c + u * (-c.y)) },
+                    None => (Vector3::y(), Vector3::new(p.x, 0., p.z)),
+                };
+                let ray = Ray { ro: level + up * above, rd: -up };
+                let hit = ground.geometry.intersects(&ray)?;
+                (hit.dist <= above + reach).then_some(hit.dist - above)
+            }) });
         }
         Box::new(m)
     };
@@ -1894,6 +1979,25 @@ mod curved_tests {
         let covered = (0..n * n).map(|i| foam.at((i % n) as f64 * 2.31, (i / n) as f64 * 2.17)).sum::<f64>() / (n * n) as f64;
         let w = whitecap_coverage(wind.norm());
         assert!((covered - w).abs() < 0.4 * w, "{} vs {}", covered, w);
+    }
+
+    #[test]
+    fn test_waves_break_in_the_shallows() {
+        let hrms = 0.78;
+        // Out at sea none break; where the waves are as high as the water allows (γ d), all do,
+        // and over land.
+        assert_eq!(breaking_fraction(hrms, 100.), 0.);
+        assert_eq!(breaking_fraction(hrms, hrms / BREAKING_INDEX), 1.);
+        assert_eq!(breaking_fraction(hrms, -1.), 1.);
+        // More break the shallower it gets.
+        let q: Vec<f64> = [3., 2., 1.5, 1.2, 1.05].iter().map(|&d| breaking_fraction(hrms, d)).collect();
+        assert!(q.windows(2).all(|w| w[0] < w[1]), "{:?}", q);
+        // The fraction satisfies Battjes and Janssen's (1 - Q) / -ln Q = (H_rms / γ d)².
+        let (d, q) = (1.5, breaking_fraction(hrms, 1.5));
+        assert!(((1. - q) / -q.ln() - (hrms / (BREAKING_INDEX * d)).powi(2)).abs() < 1e-9, "{}", q);
+        // Half break where (H_rms / H_m)² = 0.5 / ln 2: 1.178 m deep for these waves.
+        let half = hrms / (BREAKING_INDEX * (0.5 / 2f64.ln()).sqrt());
+        assert!((breaking_fraction(hrms, half) - 0.5).abs() < 1e-6, "{} at {}", breaking_fraction(hrms, half), half);
     }
 
     #[test]

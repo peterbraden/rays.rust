@@ -327,7 +327,7 @@ impl RiverWater {
         let bubbles = Color::new(0.01, 0.05, 0.06) * foam;
         PhysicalOcean {
             water: body + bubbles, roughness: RIPPLES, center: Some(self.frame.centre()),
-            absorption: Some(attenuation), foam: None,
+            absorption: Some(attenuation), foam: None, surf: None,
         }
     }
 

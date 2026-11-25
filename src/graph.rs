@@ -34,6 +34,12 @@
 //!   from the surface (`style` `"cavity"`: crevices and corners) or in from under it
 //!   (`"edges"`: convex edges); needs the scene (in textures and layers' masks), `default`
 //!   without one.
+//! - `bombing`: sprites scattered over the plane x-z by texture bombing (`patterns::Bombing`):
+//!   `shape` `"leaf"` (a lens with a midrib) or `"disc"` (an ellipse), on a grid of `cell`
+//!   (metres, default 0.05), `density` a cell on average, each its own angle, length from
+//!   `size` [smallest, largest] (at most four cells) and `width` over length; overlapping, the
+//!   topmost kept. `output` `"mask"` (coverage), `"id"` (the topmost's random value), `"vein"`
+//!   (its midrib) or `"height"` (stacked, rounded at the edge), each in [0, 1]; `seed`.
 //! - `checker` (`size`, `plan`) and `brick` (`size` [x, y, z], `mortar`, `style` `"mortar"` or
 //!   `"id"`, `seed`): POV-Ray's, in [0, 1], box filtered.
 //! - `talus`: fallen blocks and scree, angular and fractured, many small to few large, sorted
@@ -329,6 +335,8 @@ enum Op {
     Wave { input: Box<Node>, shape: crate::patterns::Wave, frequency: f64, phase: f64, exponent: f64 },
     Checker { size: f64, plan: bool },
     Brick { size: Vector3<f64>, mortar: f64, style: crate::patterns::BrickStyle, seed: u64 },
+    /// Sprites scattered over the plane x-z (`patterns::Bombing`), in [0, 1].
+    Bombing(Box<crate::patterns::Bombing>),
     /// The share of short rays about the hit that meet something within `radius`: from outside,
     /// crevices and corners (`edges` false); from inside, convex edges (`edges` true).
     Occlusion { radius: f64, rays: u32, edges: bool, default: f64 },
@@ -472,6 +480,7 @@ impl Node {
                 Some(s) => occlusion(s, c, *radius, *rays, *edges),
                 None => *default,
             },
+            Op::Bombing(b) => b.eval(c.p.x, c.p.z, c.filter),
             Op::Checker { size, plan } => crate::patterns::checker(c.p, *size, c.filter, *plan),
             Op::Brick { size, mortar, style, seed } => crate::patterns::brick(c.p, *size, *mortar, c.filter, *style, *seed),
             Op::Transform { input, inverse, normals, translate, shrink } => {
@@ -601,7 +610,7 @@ impl Op {
             Op::Gradient { .. } => (f64::NEG_INFINITY, f64::INFINITY),
             Op::Rings { .. } | Op::Spherical { .. } => (0., f64::INFINITY),
             Op::Wave { exponent, .. } => if *exponent >= 0. { (0., 1.) } else { (0., f64::INFINITY) },
-            Op::Checker { .. } | Op::Brick { .. } => (0., 1.),
+            Op::Checker { .. } | Op::Brick { .. } | Op::Bombing(_) => (0., 1.),
             Op::Occlusion { default, .. } => (default.min(0.), default.max(1.)),
             Op::Transform { input, .. } => input.range(),
             Op::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
@@ -671,6 +680,7 @@ impl Op {
             Op::Checker { size, .. } => return *size,
             Op::Occlusion { radius, .. } => return *radius,
             Op::Brick { mortar, .. } => return *mortar,
+            Op::Bombing(b) => return b.finest(),
             Op::Wave { input, frequency, .. } => {
                 // A cycle is 1 / frequency of the input; how far that is depends on the input.
                 return input.finest().min(1. / frequency.abs().max(1e-9));
@@ -1083,6 +1093,28 @@ fn parse_node(v: &Value) -> Result<Node, String> {
                 default: num(o, "default", 0.)? }
         },
         "checker" => Op::Checker { size: positive(o, "size", 1.)?, plan },
+        "bombing" => {
+            use crate::patterns::{Bombing, BombingOutput, SpriteShape};
+            let shape = match o["shape"].as_str().unwrap_or("leaf") {
+                "leaf" => SpriteShape::Leaf,
+                "disc" => SpriteShape::Disc,
+                s => return Err(format!("unknown bombing shape \"{}\": leaf or disc", s)),
+            };
+            let output = match o["output"].as_str().unwrap_or("mask") {
+                "mask" => BombingOutput::Mask,
+                "id" => BombingOutput::Id,
+                "vein" => BombingOutput::Vein,
+                "height" => BombingOutput::Height,
+                s => return Err(format!("unknown bombing output \"{}\": mask, id, vein or height", s)),
+            };
+            let cell = positive(o, "cell", 0.05)?;
+            let size = pair(o, "size", (0.6 * cell, 1.5 * cell))?;
+            if !(size.0 > 0. && size.1 >= size.0 && size.1 <= 4. * cell) {
+                return Err("bombing's size must be [smallest, largest], positive and at most four cells".into());
+            }
+            let width = positive(o, "width", if shape == SpriteShape::Leaf { 0.35 } else { 1. })?;
+            Op::Bombing(Box::new(Bombing { shape, cell, size, width, density: num(o, "density", 1.)?.clamp(0., 8.), seed: seed()?, output }))
+        },
         "brick" => {
             let size = vec3(o, "size", Vector3::new(0.215, 0.065, 0.1025))?;
             if size.iter().any(|s| *s <= 0.) {

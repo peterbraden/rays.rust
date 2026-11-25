@@ -2985,6 +2985,15 @@ transport amplitudes in position and wavevector, though for deep water).
     most, the mean level kept. Seen from the beach the breakers stand as lines of dark faces
     under white crests. Not yet: an overhanging lip (a height field can't), the faces'
     translucence, the waves moving with `time`. Put `detail_center` over the surf zone.
+  - The shallows: from the waterline the foreground was the inner surf, not the swash, drawn
+    as a grey sheet because its foam (one bore's, fading over 11 s) was a coin flip against
+    its strength at every sample. The foam left behind a bore is now lace (`Surf::lace`, the
+    whitecaps' pattern at a third the size, edges sharpened), the roller on its front solid.
+    The swash: each uprush reaches between the setup (`ocean::setup`) and the run-up, in
+    tongues along the shore; below its edge a film of water over sand (pbrt's coated diffuse,
+    whose coat darkens the sand as being wet does), a ragged line of lace at the edge and
+    streaks behind; above it wet sand (`scenery::Swash`). Seen from 2 m the lace behind the
+    edge is too many round blobs.
 - Found after merging master (closed basins, geology): on the alpine test site (30°N, in the
   subtropical dry belt) the closed basins cut nearly all of a patch's drainage (its largest
   catchment fell from 1500 to 37 km²), so it has no rivers; with `"evaporation": 0` they come

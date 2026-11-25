@@ -437,9 +437,19 @@ pub enum RiverAt {
     /// A river's bed bare beside its water, in its channel below the bankfull level: the bars
     /// floods scour too often for plants to hold; with the median grain, metres.
     Bar(f64),
-    /// The sea's swash running up a shore: wet sand under a film of water, and whether foam's
-    /// lace is on it here.
-    Swash(bool),
+    /// The sea's swash running up a shore (`Ground::shore`).
+    Swash(Swash),
+}
+
+/// What the swash leaves at a point of the shore.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Swash {
+    /// Sand under a film of water, glassy, reflecting the sky.
+    Film,
+    /// Foam's lace on the film: along the uprush's leading edge, and streaks behind it.
+    Lace,
+    /// Wet sand above where this uprush reached.
+    Wet,
 }
 
 /// Heights of the landscape, from its layers and the planet's own topography.
@@ -1245,11 +1255,13 @@ impl Ground {
         self.layer_at(&d).map_or(RiverAt::Land, |l| l.river_at(&d, h, surfaced))
     }
 
-    /// The shore at `p` (`h` metres above sea level), where the sea's waves wash it: up to
-    /// the height they run up (`ocean::runup`, Stockdon's, on a beach face of `FORESHORE`) the swash,
-    /// a film of water over wet ground with lace of foam in bands along it, thinning towards
-    /// the top; above that, wet as far again as water wicks up the sand (`capillary_rise`).
-    /// None above, or without a sea.
+    /// The shore at `p` (`h` metres above sea level), where the sea's waves wash it, up to the
+    /// height they run up (`ocean::runup`, Stockdon's, on a beach face of `FORESHORE`). At any
+    /// moment each uprush has reached somewhere between the setup (`ocean::setup`, the waves'
+    /// mean level at the shore) and that, varying along the shore in tongues tens of metres
+    /// long: below its edge a film of water over the sand, with lace of foam in a ragged line
+    /// at the edge and in streaks behind it; above, wet sand; and above the run-up, wet as far
+    /// again as water wicks up the sand (`capillary_rise`). None above, or without a sea.
     fn shore(&self, p: &Vector3<f64>, h: f64) -> Option<RiverAt> {
         let (h0, period) = self.sea?;
 
@@ -1257,10 +1269,21 @@ impl Ground {
         let reach = crate::ocean::runup(h0, period, FORESHORE);
         if h < -0.05 || h > reach + wet { return None; }
         if h > reach { return Some(RiverAt::Bed(BEACH_SAND / 1000.)); }
-        // The lace: bands along the shore, broken by noise, fewer up the swash.
-        let up = (h / reach.max(1e-3)).clamp(0., 1.);
-        let n = self.noise.noise(p.x / 1.2, p.z / 1.2, h * 4.);
-        Some(RiverAt::Swash(n > 0.15 + 0.7 * up))
+        let setup = crate::ocean::setup(h0, period, FORESHORE);
+        // Where this uprush has reached, its edge ragged by a finer noise.
+        let tongue = (0.5 + 0.7 * self.noise.noise(p.x / 15., p.z / 15., 3.7)).clamp(0., 1.);
+        let ragged = 0.015 * self.noise.noise(p.x / 0.4, p.z / 0.4, 9.1);
+        let edge = setup + (reach - setup) * tongue + ragged;
+        // The lace at the edge, a few centimetres of height (a few decimetres up the beach),
+        // broken in places; and streaks of it left behind on the film.
+        const LACE: f64 = 0.02;
+        if h > edge + LACE { return Some(RiverAt::Swash(Swash::Wet)); }
+        let lace = if h > edge - LACE {
+            self.noise.noise(p.x / 0.7, p.z / 0.7, 1.3) > -0.3
+        } else {
+            self.noise.noise(p.x / 0.6, p.z / 0.6, h * 6.) > 0.45
+        };
+        Some(RiverAt::Swash(if lace { Swash::Lace } else { Swash::Film }))
     }
 
     /// Whether scene point `p` is under a closed basin's terminal lake: brine, shallow over a
@@ -1593,6 +1616,10 @@ pub struct LandscapeMedium {
     beds: [Lambertian; 2],
     /// Foam on the swash.
     foam: Lambertian,
+    /// The swash's film of water over sand: a smooth coat of water (a few ripples where the
+    /// grains break it) over dry sand, whose light the coat turns back to the grains darkens it
+    /// as being wet does (`material::layered`).
+    film: Box<dyn MaterialModel + Sync + Send>,
     /// Their bars, bare beside the water: sand, and gravel and coarser (the material
     /// library's).
     bars: [Box<dyn MaterialModel + Sync + Send>; 2],
@@ -1617,6 +1644,10 @@ impl LandscapeMedium {
             ground,
             beds: [Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(SAND_ALBEDO)) }, Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(GRAVEL_ALBEDO)) }],
             foam: Lambertian { albedo: crate::textures::ColorTexture::Constant(Color::new(0.6, 0.6, 0.6)) },
+            film: Box::new(crate::material::layered::Coated {
+                base: crate::material::layered::Base::Diffuse(crate::textures::ColorTexture::Constant(Color::new(SAND_ALBEDO[0], SAND_ALBEDO[1], SAND_ALBEDO[2]))),
+                refractive_index: crate::ocean::WATER_INDEX, roughness: 0.03, thickness: 0.01, albedo: Color::black(), g: 0., max_depth: 10, samples: 1,
+            }),
             bars: ["beach_sand", "river_gravel"].map(|name| crate::scenefile::SceneFile::parse_material_definition(&serde_json::json!({"type": "library", "name": name}), name, &serde_json::Map::new())),
         }
     }
@@ -1647,8 +1678,9 @@ impl Medium for LandscapeMedium {
             RiverAt::Water => &self.water,
             RiverAt::Bed(grain) => &self.beds[(grain > 0.002) as usize],
             RiverAt::Bar(grain) => &*self.bars[(grain > 0.002) as usize],
-            RiverAt::Swash(true) => &self.foam,
-            RiverAt::Swash(false) => &self.beds[0],
+            RiverAt::Swash(Swash::Lace) => &self.foam,
+            RiverAt::Swash(Swash::Film) => &*self.film,
+            RiverAt::Swash(Swash::Wet) => &self.beds[0],
             RiverAt::Land if self.ground.salt_lake(&pt) => &self.brine,
             RiverAt::Land => &*self.land,
         }

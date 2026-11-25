@@ -1356,6 +1356,15 @@ pub struct PhysicalOcean {
 /// height `h0` (m), `period` (s; L₀ = g T² / 2π) and the beach's slope `slope` (H. F. Stockdon,
 /// R. A. Holman, P. A. Howd and A. H. Sallenger, "Empirical parameterization of setup, swash,
 /// and runup", Coastal Engineering 53, 2006).
+/// The setup at the shore, metres: how far the waves' mean level stands above the still water
+/// where they run up a beach of slope `slope`, by Stockdon et al.'s fit, ⟨η⟩ = 0.35 β (H₀ L₀)^½
+/// (see `runup`).
+pub fn setup(h0: f64, period: f64, slope: f64) -> f64 {
+    if h0 <= 0. { return 0.; }
+    let l0 = 9.81 * period * period / std::f64::consts::TAU;
+    0.35 * slope * (h0 * l0).sqrt()
+}
+
 pub fn runup(h0: f64, period: f64, slope: f64) -> f64 {
     if h0 <= 0. { return 0.; }
     let l0 = 9.81 * period * period / std::f64::consts::TAU;
@@ -1548,14 +1557,22 @@ impl Surf {
     /// where that height reaches 0.78 of the depth, and is white on its front and behind it
     /// with the foam it leaves, fading as it ages. Over land, all white.
     pub fn white(&self, p: &Vector3<f64>) -> (f64, f64) {
-        let Some((d, arriving)) = self.state(p) else { return (0., 0.) };
-        if d <= 0. { return (1., 1.); }
+        let (fresh, residual, breaking) = self.foam(p);
+        (fresh.max(residual), breaking)
+    }
+
+    /// As `white`, the white water at `p` as the roller on a bore's front (fresh foam, solid)
+    /// and the foam left behind it (residual, to be broken into lace), and the fraction of
+    /// waves breaking.
+    pub fn foam(&self, p: &Vector3<f64>) -> (f64, f64, f64) {
+        let Some((d, arriving)) = self.state(p) else { return (0., 0., 0.) };
+        if d <= 0. { return (1., 1., 1.); }
         // The fraction breaking, of the trains together (their energies add).
         let hrms = arriving.iter().map(|a| a.0 * a.0).sum::<f64>().sqrt();
-        if hrms <= 0. { return (0., 0.); }
+        if hrms <= 0. { return (0., 0., 0.); }
         let breaking = breaking_fraction(hrms, d);
-        if breaking <= 0. { return (0., 0.); }
-        let white = arriving.iter().enumerate().filter(|a| a.1.0 > 0.).map(|(k, &(h, phase))| {
+        if breaking <= 0. { return (0., 0., 0.); }
+        let (fresh, residual) = arriving.iter().enumerate().filter(|a| a.1.0 > 0.).map(|(k, &(h, phase))| {
             let height = self.wave_height(p, k, h, phase);
             // A broken wave's foam: the roller on its front, and behind it (seaward: the phase
             // grows out to sea) the foam it left as it passed, as old as the phase since its
@@ -1566,9 +1583,34 @@ impl Surf {
             // The roller rides the front face, the last few hundredths of the cycle before the
             // crest.
             let roller = crate::math::smoothstep(1. - 2. * BORE_FRONT, 1. - 0.5 * BORE_FRONT, u);
-            crate::math::smoothstep(0.95, 1.05, height / (BREAKING_INDEX * d)) * (-age / FOAM_DECAY).exp().max(roller)
-        }).fold(0., f64::max);
-        (white, breaking)
+            let broken = crate::math::smoothstep(0.95, 1.05, height / (BREAKING_INDEX * d));
+            (broken * roller, broken * (-age / FOAM_DECAY).exp())
+        }).fold((0f64, 0f64), |a, b| (a.0.max(b.0), a.1.max(b.1)));
+        (fresh, residual, breaking)
+    }
+
+    /// Residual foam of strength `r` at `p` broken into lace, as the whitecaps' is
+    /// (`shared::sea::FoamPattern::lace`): covering about a fraction r of the water in patches
+    /// that shrink and part as it thins, rather than a haze over it all.
+    pub fn lace(&self, r: f64, p: &Vector3<f64>) -> f64 {
+        static PATTERN: std::sync::OnceLock<(crate::noise::PerlinNoise, f64)> = std::sync::OnceLock::new();
+        let (noise, sd) = PATTERN.get_or_init(|| {
+            let noise = crate::noise::PerlinNoise::shuffled(0x1ace);
+            let mut rng = geometry::Pcg32::new(31, 1);
+            let v: Vec<f64> = (0..4096).map(|_| {
+                let (x, z) = (rng.next_f64() * 300., rng.next_f64() * 300.);
+                0.65 * noise.fbm(x / 1.6, 0.3, z / 1.6, 3, 0.55, 2.2) + 0.35 * noise.fbm(x / 6., 4.1, z / 6., 2, 0.5, 2.)
+            }).collect();
+            let mean = v.iter().sum::<f64>() / v.len() as f64;
+            let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt().max(1e-6);
+            (noise, sd)
+        });
+        // (A third of the whitecaps' size: the foam a bore leaves is a finer lace, patches a
+        // metre or less across.)
+        // Its edges sharpened (the same on either side, so as much is covered): foam floating
+        // on the water ends at a line.
+        let l = shared::sea::FoamPattern { wind: (1., 0.), speed: 0., lace_sd: *sd, perm: 0 }.lace(noise, r, (3. * p.x, 3. * p.z));
+        crate::math::smoothstep(0.4, 0.6, l)
     }
 
     /// The surface's height at `p` (m, about the mean sea) from the waves in the surf, and how
@@ -2122,7 +2164,8 @@ impl MaterialModel for PhysicalOcean {
         // The surf: where waves break over the shallows, white water over that fraction of the
         // sea, as fresh foam.
         if let Some(surf) = &self.surf {
-            let (white, breaking) = surf.white(&intersection.point);
+            let (fresh, residual, breaking) = surf.foam(&intersection.point);
+            let white = fresh.max(surf.lace(residual, &intersection.point));
             if white > 0. && geometry::rand() < white {
                 let albedo = self.foam.as_ref().map_or(Color::new(0.6, 0.6, 0.6), |f| f.albedo).as_reflectance();
                 let normal = if up.dot(&v) > 0. { up } else { -up };
@@ -2542,6 +2585,21 @@ mod curved_tests {
     }
 
     #[test]
+    fn test_the_foam_behind_a_bore_breaks_into_lace() {
+        // About as much of the water is covered as the foam's strength, in patches: mostly
+        // all or nothing, not a haze.
+        let surf = Surf { depth: std::sync::Arc::new(|_: &Vector3<f64>| None), trains: vec![], dean_a: 0.1,
+            noise: crate::noise::PerlinNoise::shuffled(1), grid: None };
+        for r in [0.1, 0.3, 0.6] {
+            let v: Vec<f64> = (0..20000).map(|i| surf.lace(r, &Vector3::new(0.37 * (i % 150) as f64, 0., 0.41 * (i / 150) as f64))).collect();
+            let mean = v.iter().sum::<f64>() / v.len() as f64;
+            assert!((mean - r).abs() < 0.08, "{} for {}", mean, r);
+            let between = v.iter().filter(|&&c| c > 0.1 && c < 0.9).count() as f64 / v.len() as f64;
+            assert!(between < 0.3, "{} between for {}", between, r);
+        }
+    }
+
+    #[test]
     fn test_the_surf_stands_up_over_the_shallows() {
         // A straight beach of Dean's profile, the sea out along +x, a 1.5 m, 11 s swell coming
         // straight in, the surf found on a grid about the beach.
@@ -2618,6 +2676,10 @@ mod curved_tests {
         assert!(runup(1., 10., 0.1) > runup(1., 10., 0.05));
         assert!(runup(1., 14., 0.05) > runup(1., 10., 0.05));
         assert_eq!(runup(0., 10., 0.05), 0.);
+        // The setup, the mean level the swash rises from: 0.35 × 0.05 × 12.49 = 0.219 m, below
+        // the run-up.
+        assert!((setup(1., 10., 0.05) - 0.219).abs() < 0.002, "{}", setup(1., 10., 0.05));
+        assert!(setup(1., 10., 0.05) < runup(1., 10., 0.05));
         // An ocean's waves at its shore: the swell's period when it carries more.
         let (h, t) = shore_waves(&serde_json::json!({"wind": [7, 2], "swell": {"height": 1.5, "period": 11}})).unwrap();
         assert!(h > 1.5 && h < 2.2 && t == 11., "{} {}", h, t);

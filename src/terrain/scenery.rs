@@ -337,10 +337,14 @@ impl Layer {
                     // Under a lake's surface (`terrain::basins`), its bed.
                     Some(level) if h < level + 0.05 => RiverAt::Bed(0.0005),
                     // In a river's channel above its water, where the mesh draws the channel:
-                    // a bare bar.
-                    _ if carve.channel(q).is_some_and(|(_, half, _, out)| out < 0. && surfaced(half)) =>
-                        RiverAt::Bar(carve.channel(q).map_or(0.01, |c| c.2)),
-                    _ => wet(water.wet_oxbow(point_cell(&self.domain, q), q)),
+                    // a bare bar, its edge ragged where plants take hold (up to 0.6 m either
+                    // way over a few metres, a model choice; the rim is a smooth curve).
+                    _ => match carve.channel(q) {
+                        // Wet up to where water wicks from the river (`capillary_rise`).
+                        Some((level, half, grain, out)) if out < ragged(q) && surfaced(half) =>
+                            if h < level + capillary_rise(grain) { RiverAt::Bed(grain) } else { RiverAt::Bar(grain) },
+                        _ => wet(water.wet_oxbow(point_cell(&self.domain, q), q)),
+                    },
                 },
             },
             None => wet(water.wet(point_cell(&self.domain, q), q)),
@@ -358,6 +362,22 @@ impl Layer {
         let (x, z) = self.tangent(d)?;
         Some(([x, z], carve))
     }
+}
+
+/// How high water wicks up a bed of median grain `grain` (m) above the river beside it, metres:
+/// Jurin's height h = 2γ / (ρ g r) for water's surface tension γ = 0.073 N/m, its pores'
+/// radius r taken as a fifth of the grain (a common approximation): 15 cm in fine sand,
+/// millimetres in gravel. Below it the bed is wet, and dark.
+pub fn capillary_rise(grain: f64) -> f64 {
+    2. * 0.073 / (1000. * 9.81 * 0.2 * grain.max(1e-5))
+}
+
+/// How far a river's bare bar reaches beyond its channel's rim at patch point `q`, metres:
+/// smooth noise, up to 0.6 either way at a few metres' scale.
+fn ragged(q: crate::terrain::channel::Point) -> f64 {
+    static NOISE: std::sync::OnceLock<crate::noise::PerlinNoise> = std::sync::OnceLock::new();
+    let n = NOISE.get_or_init(|| crate::noise::PerlinNoise::shuffled(0xba25));
+    0.6 * (2. * n.noise(q[0] / 3., q[1] / 3., 0.5) - 1.)
 }
 
 /// What the ground is at a point, as far as water goes.
@@ -1566,6 +1586,13 @@ mod tests {
     use crate::terrain::simulation::TerrainParams;
 
     fn frame() -> Frame { Frame::new(45., 7., 6.36e6, 1.) }
+
+    #[test]
+    fn test_water_wicks_higher_in_finer_beds() {
+        // Jurin's law over 0.5 mm sand (pores 0.1 mm): about 15 cm; over 5 cm gravel, 1.5 mm.
+        assert!((capillary_rise(0.0005) - 0.149).abs() < 0.002, "{}", capillary_rise(0.0005));
+        assert!(capillary_rise(0.05) < 0.002);
+    }
 
     #[test]
     fn test_site_is_the_scene_origin_and_the_planet_curves_away() {

@@ -2921,10 +2921,42 @@ transport amplitudes in position and wavevector, though for deep water).
   where the patch is the finest drawn (a coarse patch's samples see a gorge as a basin). Rivers
   through lakes take the lake's level. First versions flooded a third of the patch: the wall
   where a patch blends into the next held water, hence the outlets along its edge.
-- Open: the simulation's width (c√A) is wide for the discharge on these mountain patches
-  (42 m wide and 25 cm deep at the mean flow), so from above a river reads as pale sand under
-  clear water. Width from discharge (w ∝ Q^0.5 with a sourced coefficient) and the water's
-  colour from its suspended sediment (step 3) are the next things to look at.
+- Worked in small steps from here, each checked on a fixed shot (a river's camera pinned 3 m
+  over the river point nearest an anchor, so changes to the ground don't move it):
+  - Lakes' waves (`ocean::WaveField::lake`): Tessendorf's, as the sea's, a young sea's by the
+    lake's fetch along the wind (`Basins::length`): JONSWAP's peak (`jonswap_peak`) and
+    height, slopes at most Cox and Munk's (JONSWAP's fits are for kilometres of fetch; over
+    a few hundred metres they give slopes steeper than the open sea's, a model choice to cap
+    them). They only tilt the normals (centimetres high). The sun's glitter on lakes became
+    sparkles instead of a smooth smear. The landscape's `wind`. Depth's effect on the waves'
+    speed was left out: in a still picture it changes nothing, and it matters only within
+    half a metre of the shore.
+  - Rivers leave lakes no higher than the lake (`levels`: a lake sets the running level; a
+    river into a lake is backed up to it): they had started 2-3 m above it, drawn in the air.
+  - Width from discharge: Parker et al.'s quasi-universal relation for single-thread gravel
+    rivers, B̃ = 4.63 Q̂^0.0667 (`hydraulics::parker_width`, `alluvial`; coefficients checked
+    in secondary sources, the paper unread), the bankfull width from the bankfull flow and
+    the grain, iterated. The test river went from 34 m and 12 cm to 9 m and 29 cm.
+  - The channel as the hydraulics have it: the parabola as wide as the river in flood, its
+    rim at the bankfull level, a floodplain flat there for three widths of the water (a
+    model choice), the valley's side rising 1 in 2 beyond (a model choice); the 1:1 bank,
+    which made a trench where the drawn floor stood above the river, is gone. The bed beside
+    the water is shaded as the material library's river gravel or sand (`RiverAt::Bar`).
+  - Fields: `river` measured along the drawn courses (`Carve::edge`; the skeleton's 50 m
+    segments cut across bends, so banks read as in the water and stayed bare of detail),
+    `grain` (the bed's median grain) and `channel` (beyond the channel's rim, for keeping
+    plants off the bars).
+  - Rivers' surfaces: the waves standing on the current, λ from tanh(kd) = kU²/g
+    (`river_water::stationary_wavelength`), crests across the flow, laid along and across the
+    river (`Carve::water_at`'s station) so they follow its bends, as rough as the Froude
+    number makes them; and the wind's waves summed with them, the fetch along a river five
+    of its widths (half a meander's wavelength, a model choice).
+  - The nearest lake's report searched every lake cell's shore: 12 of 14 minutes of a load.
+- Found after merging master (closed basins, geology): on the alpine test site (30°N, in the
+  subtropical dry belt) the closed basins cut nearly all of a patch's drainage (its largest
+  catchment fell from 1500 to 37 km²), so it has no rivers; with `"evaporation": 0` they come
+  back. That may be right for a dry site; river tests moved to wet mountains, the camera on a
+  `"feature": "confluence"` (the viewpoint search, `terrain::features`).
 
 ### Order
 

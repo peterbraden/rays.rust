@@ -2955,8 +2955,11 @@ transport amplitudes in position and wavevector, though for deep water).
 - Found after merging master (closed basins, geology): on the alpine test site (30°N, in the
   subtropical dry belt) the closed basins cut nearly all of a patch's drainage (its largest
   catchment fell from 1500 to 37 km²), so it has no rivers; with `"evaporation": 0` they come
-  back. That may be right for a dry site; river tests moved to wet mountains, the camera on a
-  `"feature": "confluence"` (the viewpoint search, `terrain::features`).
+  back. That is right: the climate gives the site 92 mm of rain a year (hyper-arid, a cold
+  desert with glaciers), so the land's Budyko runoff is 4-8 mm a year against lakes losing
+  0.5-1.1 m, and nearly every lake is closed. The 2.5 m³/s river the earlier steps were tuned
+  on existed only because every lake spilled. River tests moved to wet mountains (a search of
+  the planet's orogeny and climate for strong relief with over 900 mm of rain).
 
 ### Order
 

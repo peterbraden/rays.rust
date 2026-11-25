@@ -197,7 +197,7 @@ use crate::scenefile::SceneFile;
 use crate::material::functions::{scatter_dielectric, refract, reflect, schlick};
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::geometry;
-use rand::{SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand::rngs::StdRng;
 use rayon::prelude::*;
 
@@ -758,9 +758,59 @@ pub struct WaveField {
     lambda: f64,
     /// The wind, m/s.
     pub wind: Vector2<f64>,
+    /// Swell from a distant storm (`with_swell`), on top of the wind's waves.
+    pub swell: Vec<Swell>,
 }
 
+/// One of a swell's waves: amplitude (m), wavevector (rad/m, x and z), angular frequency and
+/// phase.
+#[derive(Clone, Copy, Debug)]
+pub struct Swell { pub amplitude: f64, pub k: Vector2<f64>, pub omega: f64, pub phase: f64 }
+
+/// How many waves a swell is drawn as, and how widely their frequencies (a fraction of the
+/// peak's) and directions (radians) spread: a swell, sorted by its long journey, is narrow in
+/// both, its crests long (a model choice within what is measured: periods within a few
+/// tenths of a second, directions within about ten degrees).
+const SWELL_WAVES: usize = 12;
+const SWELL_SPREAD: (f64, f64) = (0.08, 0.17);
+
 impl WaveField {
+    /// These waves with a swell on them: significant height `height` (m), `period` (s), coming
+    /// the way of `heading` (x and z): long-crested waves drawn from a narrow band about the
+    /// period and the heading, random phases (seeded), deep-water wavelengths (λ = g T² / 2π),
+    /// their amplitudes together making the height (H_s = 4 √(Σ a² / 2)). They raise and tilt
+    /// the surface as the wind's waves do (not choppy: a swell's waves are low for their length).
+    pub fn with_swell(mut self, height: f64, period: f64, heading: Vector2<f64>, seed: u64) -> WaveField {
+        if height <= 0. || period <= 0. || heading.norm() <= 0. { return self; }
+        let mut s = [0u8; 32];
+        s[..8].copy_from_slice(&seed.wrapping_add(0x51e11).to_le_bytes());
+        let mut rng: StdRng = SeedableRng::from_seed(s);
+        let peak = std::f64::consts::TAU / period;
+        let angle = heading.y.atan2(heading.x);
+        let amplitude = height / 4. * (2. / SWELL_WAVES as f64).sqrt();
+        for _ in 0..SWELL_WAVES {
+            let omega = peak * (1. + SWELL_SPREAD.0 * (2. * rng.random::<f64>() - 1.));
+            let theta = angle + SWELL_SPREAD.1 * (2. * rng.random::<f64>() - 1.);
+            let k = omega * omega / 9.81;
+            let wave = Swell { amplitude, k: Vector2::new(theta.cos(), theta.sin()) * k, omega, phase: std::f64::consts::TAU * rng.random::<f64>() };
+            self.max_height += amplitude;
+            self.max_slope += amplitude * k;
+            self.mean_square_slope += 0.5 * (amplitude * k).powi(2);
+            self.swell.push(wave);
+        }
+        self
+    }
+
+    /// The swell's height and slopes at (x, z).
+    fn swell_at(&self, x: f64, z: f64) -> Vector3<f64> {
+        let time = self.tiles.first().map_or(0., |t| t.time);
+        self.swell.iter().fold(Vector3::zeros(), |w, s| {
+            let phase = s.k.x * x + s.k.y * z - s.omega * time + s.phase;
+            let (sin, cos) = phase.sin_cos();
+            w + Vector3::new(s.amplitude * cos, -s.amplitude * s.k.x * sin, -s.amplitude * s.k.y * sin)
+        })
+    }
+
     /// The waves for `wind` (m/s) at `time`, without choppiness. The Phillips spectrum's constant
     /// is arbitrary; with `amplitude` it is that, and otherwise the waves are scaled so their
     /// mean square slope is `resolved` of Cox and Munk's for the wind.
@@ -801,7 +851,7 @@ impl WaveField {
         // Measured unchopped (the displacement scales with the waves, so it would be wrong until
         // they are), then chopped.
         let mut field = WaveField { tiles: vec![], max_height: 0., max_slope: 0., mean_square_slope: 0.,
-            lambda: 0., wind };
+            lambda: 0., wind, swell: vec![] };
         field.tiles = std::mem::take(&mut tiles);
         let k = match (state.amplitude, state.resolved) {
             (Some(a), _) => a.sqrt(),
@@ -901,6 +951,7 @@ impl WaveField {
             let v = t.at(x, z);
             w += Vector3::new(0., v.y, v.z);
         }
+        if !self.swell.is_empty() { w += self.swell_at(x, z); }
         w
     }
 
@@ -909,6 +960,7 @@ impl WaveField {
         let p = self.source(x, z);
         self.tiles[..DISPLACED].iter().map(|t| t.at(p.0, p.1).x).sum::<f64>()
             + self.tiles[DISPLACED..].iter().map(|t| t.at(x, z).x).sum::<f64>()
+            + if self.swell.is_empty() { 0. } else { self.swell_at(x, z).x }
     }
 
     /// The height the waves (`full_height`) exceed over `fraction` of the sea, and the spread
@@ -1159,7 +1211,8 @@ impl Ocean {
 
 impl Geometry for Ocean {
     fn ocean(&self) -> Option<&Ocean> {
-        Some(self)
+        // (The kernels' sea has no swell yet: one with a swell is the CPU's.)
+        self.waves.swell.is_empty().then_some(self)
     }
 
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
@@ -1944,12 +1997,17 @@ fn absorption(opts: &Value) -> Option<Color> {
 
 /// The waves an ocean's scene object describes (deterministic, so built alike wherever needed).
 fn waves_of(opts: &Value) -> WaveField {
-    WaveField::sea(
+    let seed = SceneFile::parse_int(&opts["seed"], 0) as u64;
+    let waves = WaveField::sea(
         SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.)),
         SceneFile::parse_number(&opts["time"], 0.),
-        SceneFile::parse_int(&opts["seed"], 0) as u64,
+        seed,
         SeaState::parse(opts),
-    )
+    );
+    let swell = &opts["swell"];
+    if !swell.is_object() { return waves; }
+    waves.with_swell(SceneFile::parse_number(&swell["height"], 1.).max(0.), SceneFile::parse_number(&swell["period"], 10.).max(1.),
+        SceneFile::parse_vec2_def(swell, "direction", Vector2::new(-1., 0.)), seed)
 }
 
 /// An ocean from its scene object (see the module docs' scene options).
@@ -2209,6 +2267,35 @@ mod curved_tests {
         let outer = |s: &Surf| (0..2000).map(|i| 0.1 * i as f64).filter(|&x| s.white(&Vector3::new(x, 0., 0.)).1 > 0.1).fold(0., f64::max);
         let (short, long) = (beach(vec![train(0.84, 5.3, Vector2::new(-1., 0.))]), beach(vec![train(0.84, 12., Vector2::new(-1., 0.))]));
         assert!(outer(&long) > 1.2 * outer(&short), "{} vs {}", outer(&long), outer(&short));
+    }
+
+    #[test]
+    fn test_a_swell_rolls_in_long_crests() {
+        // A 2 m, 12 s swell on an almost calm sea: its height is the one asked for.
+        let calm = WaveField::sea(Vector2::new(1., 0.), 0., 1, SeaState::default());
+        let swell = WaveField::sea(Vector2::new(1., 0.), 0., 1, SeaState::default()).with_swell(2., 12., Vector2::new(-1., 0.), 3);
+        let hs = |w: &WaveField| {
+            let n = 20000;
+            let (mut s, mut s2) = (0., 0.);
+            for i in 0..n { let h = w.full_height(13.7 * (i % 200) as f64, 11.3 * (i / 200) as f64); s += h; s2 += h * h; }
+            4. * (s2 / n as f64 - (s / n as f64).powi(2)).sqrt()
+        };
+        let (h0, h1) = (hs(&calm), hs(&swell));
+        let alone = (h1 * h1 - h0 * h0).sqrt();
+        assert!((alone - 2.).abs() < 0.3, "{} (calm {}, with swell {})", alone, h0, h1);
+        // Its crests are long: the surface changes far more along its heading (x) than across
+        // it, over a quarter of its wavelength (225 m).
+        let (mut along, mut across) = (0., 0.);
+        for i in 0..400 {
+            let (x, z) = (31. * i as f64, 17. * i as f64);
+            let h = swell.full_height(x, z) - calm.full_height(x, z);
+            along += (swell.full_height(x + 56., z) - calm.full_height(x + 56., z) - h).abs();
+            across += (swell.full_height(x, z + 56.) - calm.full_height(x, z + 56.) - h).abs();
+        }
+        assert!(along > 3. * across, "{} {}", along, across);
+        // And such a sea is the CPU's (the kernels have no swell).
+        let ocean = Ocean { planet_radius: None, waves: swell, detail_center: Vector2::zeros(), detail_distance: 300., absorption: None };
+        assert!(ocean.ocean().is_none());
     }
 
     #[test]

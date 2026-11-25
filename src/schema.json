@@ -3009,7 +3009,7 @@
           "name": "swell",
           "kind": "object",
           "default": null,
-          "doc": "Swell from a distant storm, breaking on the shore of a landscape before it with the wind's sea: {\"height\" (significant, m, default 1), \"period\" (s, default 10), \"direction\" ([x, z] it travels, default [-1, 0])}. In the surf only, so far."
+          "doc": "Swell from a distant storm: long-crested waves on the sea's surface, and breaking with the wind's sea on the shore of a landscape before it: {\"height\" (significant, m, default 1), \"period\" (s, default 10), \"direction\" ([x, z] it travels, default [-1, 0])}. A sea with swell is rendered on the CPU."
         },
         {"name": "time", "kind": "number", "default": 0, "doc": "Time of the wave animation, s."},
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Random realisation of the waves."},

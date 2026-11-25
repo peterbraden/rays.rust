@@ -2967,11 +2967,15 @@ transport amplitudes in position and wavevector, though for deep water).
     and behind with the foam it leaves, fading with the whitecaps' 3.5 s (so the inner surf
     zone is about half white, (τ/T)(1 - e^(-T/τ))).
   - Trains: the wind's sea and an ocean's `"swell"`; waves heading out to sea make no surf.
+  - The swash: ground by the sea washed up to Stockdon et al.'s run-up (2006) on a 1:12 beach
+    face (a model choice), wet above it as far as water wicks; the swell on the sea's surface
+    too, a dozen long-crested waves from a narrow band (`WaveField::with_swell`).
   - Found: from offshore the surf is a thin line, as it should be for a metre of waves on a
-    1:16 shore (a 30-40 m surf zone); a long swell's is wider. The swell is in the surf only,
-    not yet on the open sea's surface; the breakers are foam on a flat sea (no breaking face);
-    no swash or wet sand at the waterline; the kernels (GPU) don't know the surf, so such a sea
-    is the CPU's.
+    1:16 shore (a 30-40 m surf zone); a long swell's is wider. The breakers are foam on a flat
+    sea (no breaking face); the swash a wet sand without a water film's sheen; the kernels
+    (GPU) know neither the surf nor the swell, so such a sea is the CPU's. A black speckle at
+    the shore was the sea's rays leaving from under it (its hit uncertain by centimetres, a
+    sphere the planet's size), now offset by the hit's error.
 - Found after merging master (closed basins, geology): on the alpine test site (30°N, in the
   subtropical dry belt) the closed basins cut nearly all of a patch's drainage (its largest
   catchment fell from 1500 to 37 km²), so it has no rivers; with `"evaporation": 0` they come

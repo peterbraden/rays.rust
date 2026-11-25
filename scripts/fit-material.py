@@ -673,6 +673,96 @@ def put(obj, path, value):
     obj[path[-1]] = value
 
 
+def free_params(preset, taken=()):
+    """Every number of a preset's graphs a fit can move, as spec params (`--free`): the sizes
+    of its noises and cells (`scale`, `smallest`, a warp's `amount`, a bombing's `cell` and
+    `size`; up to four times either way, on a log scale), roughness and jitter (within a
+    quarter), weights in `multiply` (up to 2.5 times) and offsets in `add`, `smoothstep`'s
+    thresholds, `transform`'s stretches, scalar variables (shares, densities: three times),
+    a layer's coverage, and each colour map's stops (an offset and a stretch). Seeds and
+    octave counts stay. Nodes of the same seed and value are one parameter: a cell pattern's
+    `id` and its `stones` must stay the same cells. `taken` are paths the spec already has."""
+    params, tied = [], {}
+    taken = {tuple(t) for t in taken}
+
+    def add(path, v, kind, key=None):
+        if tuple(path) in taken or v == 0:
+            return
+        if key is not None and key in tied:
+            tied[key]["paths"].append(list(path))
+            return
+        if kind == "length":
+            p = {"min": abs(v) / 4., "max": abs(v) * 4., "log": True} if v > 0 else None
+        elif kind == "factor":
+            p = {"min": v / 2.5, "max": v * 2.5, "log": True} if v > 0 else None
+        elif kind == "count":
+            p = {"min": v / 3., "max": v * 3., "log": True} if v > 0 else None
+        elif kind == "unit":
+            p = {"min": max(0., v - 0.25), "max": min(1., v + 0.25)}
+        else:  # an offset or a threshold
+            p = {"min": v - 0.3, "max": v + 0.3}
+        if p is None:
+            return
+        p.update(path=list(path), paths=[list(path)], free=kind)
+        params.append(p)
+        if key is not None:
+            tied[key] = p
+
+    def number(x):
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+    def walk(o, path):
+        if isinstance(o, list):
+            for i, x in enumerate(o):
+                walk(x, path + [i])
+            return
+        if not isinstance(o, dict):
+            return
+        node, seed = o.get("node"), o.get("seed")
+        for k, v in o.items():
+            here = path + [k]
+            key = lambda: (node, k, seed, v) if seed is not None else None
+            if k in ("scale", "smallest", "cell", "wavelength") and number(v) and node:
+                add(here, v, "length", key())
+            elif k == "amount" and node == "warp" and number(v):
+                add(here, v, "length", key())
+            elif k in ("amplitude", "density") and number(v) and node:
+                add(here, v, "factor", key())
+            elif k in ("roughness", "jitter", "spread") and number(v) and node:
+                add(here, v, "unit", key())
+            elif k == "width" and node == "bombing" and number(v):
+                add(here, v, "unit", key())
+            elif k == "size" and node == "bombing" and isinstance(v, list):
+                for i, x in enumerate(v):
+                    add(here + [i], x, "length", (node, k, i, seed, x))
+            elif k == "scale" and node == "transform" and isinstance(v, list):
+                for i, x in enumerate(v):
+                    if number(x) and x != 1:
+                        add(here + [i], x, "factor")
+            elif k in ("from", "to") and node == "smoothstep" and number(v):
+                add(here, v, "offset")
+            elif k == "coverage" and number(v):
+                add(here, v, "unit")
+            elif k == "inputs" and node in ("multiply", "add") and isinstance(v, list):
+                for i, x in enumerate(v):
+                    if number(x):
+                        add(here + [i], x, "factor" if node == "multiply" else "offset")
+            elif k == "color_map" and isinstance(v, list):
+                stops = [here + [i, 0] for i, e in enumerate(v) if isinstance(e, list) and number(e[0])]
+                if len(stops) >= 2 and not any(tuple(s) in taken for s in stops):
+                    params.append({"kind": "stops", "paths": stops, "free": "stops"})
+            walk(v, here)
+
+    for name, v in preset.get("variables", {}).items():
+        if number(v):
+            add(["variables", name], v, "count")
+    walk(preset.get("variables", {}), ["variables"])
+    walk(preset.get("material", {}), ["material"])
+    if "normal" in preset:
+        walk(preset["normal"], ["normal"])
+    return params
+
+
 class Problem:
     """The spec's parameters as a vector in [0, 1]^n, and the material they make."""
 
@@ -688,8 +778,20 @@ class Problem:
                 self.slots += [(p, c) for c in range(3)]
             elif p.get("kind") == "colours":
                 self.slots += [(p, ("group", c)) for c in range(4)]
+            elif p.get("kind") == "stops":
+                self.slots += [(p, ("stops", c)) for c in range(2)]
             else:
                 self.slots.append((p, None))
+
+    def apply_stops(self, preset, p, offset, stretch):
+        """A colour map's stops moved together: offset by up to `offset` of their span and
+        stretched about their middle by up to `stretch` either way, so they keep their order."""
+        positions = [get(self.preset, path) for path in p["paths"]]
+        mid, span = 0.5 * (min(positions) + max(positions)), max(max(positions) - min(positions), 0.1)
+        o = (2. * min(max(offset, 0.), 1.) - 1.) * p.get("offset", 0.3) * span
+        st = p.get("stretch", 2.) ** (2. * min(max(stretch, 0.), 1.) - 1.)
+        for path, v in zip(p["paths"], positions):
+            put(preset, path, float("%.5g" % (mid + st * (v - mid) + o)))
 
     def group_bounds(self, p, c):
         """The group's numbers: a gain on lightness, two tint shifts, a contrast."""
@@ -767,6 +869,9 @@ class Problem:
     def start(self, usage):
         x = []
         for p, c in self.slots:
+            if isinstance(c, tuple) and c[0] == "stops":
+                x.append(0.5)  # no offset, no stretch
+                continue
             if isinstance(c, tuple):
                 lo, hi = self.group_bounds(p, c[1])
                 x.append(0.5 if c[1] in (1, 2) else (0. - math.log(lo)) / (math.log(hi) - math.log(lo)))
@@ -793,6 +898,10 @@ class Problem:
         k = 0
         while k < len(self.slots):
             p, c = self.slots[k]
+            if isinstance(c, tuple) and c[0] == "stops":
+                self.apply_stops(preset, p, float(x[k]), float(x[k + 1]))
+                k += 2
+                continue
             if isinstance(c, tuple):
                 self.apply_group(preset, p, [self.group_value(p, j, float(x[k + j])) for j in range(4)])
                 k += 4
@@ -806,7 +915,8 @@ class Problem:
             if "field" in p:
                 usage[p["field"]] = v
             else:
-                put(preset, p["path"], v)
+                for path in p.get("paths", [p["path"]]):
+                    put(preset, path, float("%.5g" % v))
             k += 1
         return preset, usage
 
@@ -863,6 +973,7 @@ class ColourSolve:
         self.paths = list(dict.fromkeys(paths))
         self.own = np.array([get(preset, list(p)) for p in self.paths], dtype=np.float64)
         self.prior, self.iterations = prior, iterations
+        self.black_base = None
 
     @property
     def renders(self):
@@ -976,6 +1087,8 @@ def main():
                    help="floor: each part as a multiple of the scan's own (FloorLoss); fit: FitLoss's weighted sum")
     a.add_argument("--no-structure", dest="structure", action="store_false",
                    help="the colour loss alone (PatchLoss), as fits before the structure term were")
+    a.add_argument("--free", action="store_true",
+                   help="search every number of the preset's graphs too (free_params), not only the spec's")
     a.add_argument("--no-solve", dest="solve", action="store_false",
                    help="search for the colours with the rest (as fits before ColourSolve did)")
     a.add_argument("--no-detail", dest="detail", action="store_false",
@@ -1015,6 +1128,12 @@ def main():
     if args.loss == "floor" and not details:
         sys.exit("--loss floor measures against the scan's detail tiles: drop --no-detail")
     loss = FloorLoss(details) if args.loss == "floor" else FitLoss() if args.structure else PatchLoss()
+    if args.free:
+        taken = [p["path"] for p in spec["params"] if "path" in p]
+        extra = free_params(preset, taken)
+        spec = dict(spec, params=spec["params"] + extra)
+        print("free: %d more parameters (%s)" % (len(extra), ", ".join(
+            "%s %d" % (k, sum(p["free"] == k for p in extra)) for k in sorted({p["free"] for p in extra}))), file=sys.stderr)
     solver = ColourSolve(spec, preset) if args.solve else None
     if solver is not None and not solver.paths:
         solver = None
@@ -1044,8 +1163,17 @@ def main():
             if solver is None:
                 imgs = rendered(p, u, tag)
                 return score(imgs), imgs, p
-            views = [solver.shares([render(solver.basis(p, r), u, name, args, s, tmp, tag + "v%dr%d" % (v, r), linear=True)
-                                    for r in range(solver.renders)]) for v, s in enumerate(sizes)]
+            views = []
+            for v, s in enumerate(sizes):
+                imgs = [None if r == 0 and solver.black_base else
+                        render(solver.basis(p, r), u, name, args, s, tmp, tag + "v%dr%d" % (v, r), linear=True)
+                        for r in range(solver.renders)]
+                if imgs[0] is None:
+                    imgs[0] = np.zeros_like(imgs[1])
+                elif solver.black_base is None:
+                    # A matte preset is black without its colours: once seen, not rendered again.
+                    solver.black_base = bool(imgs[0].max() < 1e-4)
+                views.append(solver.shares(imgs))
             colours = solver.solve(views, targets)
             imgs = [linear_to_srgb(np.clip(solver.compose(view, colours), 0, 1)) for view in views]
             return score(imgs), imgs, solver.apply(p, colours)

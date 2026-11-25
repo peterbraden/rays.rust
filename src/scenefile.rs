@@ -4781,7 +4781,7 @@ impl SceneFile {
         let height =SceneFile::parse_int(&s.height, 480);
 
         let mut scene = Scene {
-            image: ImageOpts { width, height },
+            image: ImageOpts::whole(width, height),
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
                 background: SceneFile::parse_background(&s.background, pixel_angle,

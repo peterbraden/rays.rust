@@ -62,6 +62,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - `--width <NUM>`: Override scene file width
 - `--height <NUM>`: Override scene file height
 - `--seed <NUM>`: Override the scene's render seed; the same seed gives the same image
+- `--crop <X> <Y> <W> <H>`: Render only the W by H pixels from column X and row Y (from the top left) of the whole `--width` by `--height` frame (`ImageOpts::crop`, `scene::Frame`): each pixel the frame's own, sample for sample (its camera ray and random streams are its place in the frame's, `ImageOpts::in_frame`; the camera and what is sized to its pixels are built for the frame), but where adaptive sampling's neighbours differ at the edges and image-wide glare and flare; path tracer only (the kernels number their pixels' streams within the image), and part of the saved render's key
 - `--samples <NUM>`: Samples per pixel to render to, overriding the scene's `supersamples`
 - `--add-samples <NUM>`: Render this many more samples per pixel than the saved state has
 - `--fresh`: Start afresh rather than resuming

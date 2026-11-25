@@ -109,14 +109,19 @@ fn cell_colour(t: &Terrain, i: usize, sea: &[bool], level: f64) -> [f64; 3] {
 /// Write a shaded relief map of `t` to `path`, about `width` pixels wide (a patch is drawn at a
 /// whole number of pixels per cell).
 pub fn write_map(t: &Terrain, path: &str, width: usize) {
+    relief_image(t, width).save(path).unwrap();
+}
+
+/// `write_map`'s picture, in memory.
+pub fn relief_image(t: &Terrain, width: usize) -> image::RgbImage {
     let (sea, level) = sea(t);
     // Closed basins: their terminal lakes, and the playas of their flat floors of lake beds.
     let basins = t.basins();
-    write_shaded(t, path, width, &|i| {
+    shaded(t, width, &|i| {
         if basins.salt_lake(i) && t.ice[i] < ICE_FREE { return SALT_LAKE_COLOUR; }
         if basins.playa(t, i) { return PLAYA_COLOUR; }
         cell_colour(t, i, &sea, level)
-    });
+    })
 }
 
 /// Where the sea is (`Terrain::outlets`, but not a patch's edge on land), and its level.
@@ -130,10 +135,15 @@ fn sea(t: &Terrain) -> (Vec<bool>, f64) {
 /// exposed at each cell (`Terrain::rock`, in `geology::Rock::map_colour`), sea floor included,
 /// with ice in white.
 pub fn write_geology_map(t: &Terrain, path: &str, width: usize) {
-    write_shaded(t, path, width, &|i| {
+    geology_image(t, width).save(path).unwrap();
+}
+
+/// `write_geology_map`'s picture, in memory.
+pub fn geology_image(t: &Terrain, width: usize) -> image::RgbImage {
+    shaded(t, width, &|i| {
         if t.ice[i] >= ICE_FREE { return [0.92, 0.94, 0.96]; }
         t.rock(i).map_colour()
-    });
+    })
 }
 
 /// Write a patch's surface (its ground and ice) to `path` as a 16-bit greyscale PNG, a pixel a
@@ -155,16 +165,21 @@ pub fn write_height_map(t: &Terrain, path: &str) -> Option<(f64, f64)> {
 /// (`Terrain::precipitation`): browns where it is dry, through greens, to blues where it is
 /// wettest (from 0 to 4000 mm a year, on a square-root scale).
 pub fn write_rain_map(t: &Terrain, path: &str, width: usize) {
+    rain_image(t, width).save(path).unwrap();
+}
+
+/// `write_rain_map`'s picture, in memory.
+pub fn rain_image(t: &Terrain, width: usize) -> image::RgbImage {
     const STOPS: [[f64; 3]; 5] = [[0.55, 0.38, 0.20], [0.85, 0.75, 0.45], [0.45, 0.70, 0.35], [0.20, 0.55, 0.70], [0.12, 0.20, 0.60]];
-    write_shaded(t, path, width, &|i| {
+    shaded(t, width, &|i| {
         let x = (t.precipitation[i] / 4000.).clamp(0., 1.).sqrt() * (STOPS.len() - 1) as f64;
         let k = (x.floor() as usize).min(STOPS.len() - 2);
         let f = x - k as f64;
         std::array::from_fn(|c| STOPS[k][c] * (1. - f) + STOPS[k + 1][c] * f)
-    });
+    })
 }
 
-fn write_shaded(t: &Terrain, path: &str, width: usize, colour: &dyn Fn(usize) -> [f64; 3]) {
+fn shaded(t: &Terrain, width: usize, colour: &dyn Fn(usize) -> [f64; 3]) -> image::RgbImage {
     let (water, level) = sea(t);
     let (w, h, cells, spacing): (usize, usize, Vec<usize>, f64) = match &t.domain.layout {
         Layout::Patch { n, spacing, .. } => {
@@ -219,7 +234,7 @@ fn write_shaded(t: &Terrain, path: &str, width: usize, colour: &dyn Fn(usize) ->
             }
         }
     }
-    img.save(path).unwrap();
+    img
 }
 
 
@@ -227,6 +242,11 @@ fn write_shaded(t: &Terrain, path: &str, width: usize, colour: &dyn Fn(usize) ->
 /// hypsometric tints on land, deepening blues at sea, shaded relief, and (with tectonics) the
 /// plates' boundaries in red. The topography is sampled with detail down to a pixel.
 pub fn write_planet_map(planet: &crate::terrain::planet::Planet, path: &str, width: usize) {
+    planet_image(planet, width).save(path).unwrap();
+}
+
+/// `write_planet_map`'s picture, in memory.
+pub fn planet_image(planet: &crate::terrain::planet::Planet, width: usize) -> image::RgbImage {
     use rayon::prelude::*;
     let (w, h) = (width, width / 2);
     let pixel = planet.params.radius * std::f64::consts::PI / h as f64;
@@ -262,13 +282,18 @@ pub fn write_planet_map(planet: &crate::terrain::planet::Planet, path: &str, wid
             img.put_pixel(x as u32, y as u32, image::Rgb([px(c[0]), px(c[1]), px(c[2])]));
         }
     }
-    img.save(path).unwrap();
+    img
 }
 
 
 /// Write an equirectangular map of a planet's climate to `path`, `width` pixels wide: the land
 /// coloured by biome (brightened, as albedos are dark to the eye), the sea by its depth.
 pub fn write_climate_map(planet: &crate::terrain::planet::Planet, climate: &crate::terrain::climate::Climate, path: &str, width: usize) {
+    climate_image(planet, climate, width).save(path).unwrap();
+}
+
+/// `write_climate_map`'s picture, in memory.
+pub fn climate_image(planet: &crate::terrain::planet::Planet, climate: &crate::terrain::climate::Climate, width: usize) -> image::RgbImage {
     use crate::terrain::climate::Biome;
     use rayon::prelude::*;
     let (w, h) = (width, width / 2);
@@ -289,7 +314,7 @@ pub fn write_climate_map(planet: &crate::terrain::planet::Planet, climate: &crat
     }).collect();
     let mut img = image::RgbImage::new(w as u32, h as u32);
     for (k, c) in pixels.into_iter().enumerate() { img.put_pixel((k % w) as u32, (k / w) as u32, image::Rgb(c)); }
-    img.save(path).unwrap();
+    img
 }
 
 #[cfg(test)]

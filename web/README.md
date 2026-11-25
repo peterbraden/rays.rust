@@ -45,9 +45,23 @@ the CPU carries on, as it does when "CPU" is chosen. The GPU's copy is remade fo
 and kept for a camera move (`Renderer::set_camera`), and render servers are not used while
 it is rendering.
 
-The page has two tabs: Scene (the outline, the selected thing's properties and the scene
-file, with the picture small beside them) and Render (the picture alone, with its size, the
-renderer, servers and saving the image). `?page=render` opens on the second.
+The page has three tabs: Scene (the outline, the selected thing's properties and the scene
+file, with the picture small beside them), Render (the picture alone, with its size, the
+renderer, servers and saving the image) and Planet. `?page=render` or `?page=planet` opens on
+one of the others.
+
+## Planet
+
+The Planet tab builds a world from a seed while you watch (`planet.js`, `planet-worker.js`,
+`src/planet_builder.rs`): the plates and the climate first, with their progress, then the
+whole planet's landscape evolving, a map after every stretch of years (relief, geology, rain;
+or the plates and biomes it started from). It is the planet a full-scale `landscape` with that
+seed is built on (`world::build`'s first stages and its `planet` stage, step for step), so
+"Copy as landscape" gives a scene's `landscape` object for it at the time shown. The maps are
+kept as they come, and the timeline goes back over them or plays them through. Its work is a
+worker of its own, apart from the render's; a new planet is a new worker. At 64 cells (as
+landscapes) the planet takes about 11 s to build in Chromium and then evolves about 2000 years
+a second; 32 cells and longer steps are much quicker.
 
 ## Render servers
 

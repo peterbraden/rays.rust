@@ -1169,6 +1169,7 @@ name = "rays-web"
 version = "0.0.1"
 dependencies = [
  "console_error_panic_hook",
+ "js-sys",
  "rays",
  "serde_json",
  "wasm-bindgen",

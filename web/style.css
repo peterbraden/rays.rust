@@ -47,6 +47,45 @@ h2 { font-size: 11px; margin: 0; text-transform: uppercase; letter-spacing: 0.08
 #pages button { border-color: transparent; background: none; padding: 4px 12px; color: var(--muted); }
 #pages button[aria-selected="true"] { background: var(--bg); border-color: var(--line); color: var(--text); }
 body[data-page="scene"] .for-render, body[data-page="render"] .for-scene { display: none; }
+/* The third page, Planet (planet.js), has a page of its own and none of the scene's controls. */
+body[data-page="planet"] .for-render, body[data-page="planet"] .for-scene, body[data-page="planet"] #builder { display: none; }
+body:not([data-page="planet"]) #planet-page { display: none; }
+#planet-page {
+    flex: 1; min-height: 0;
+    display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+}
+#planet-sidebar { background: var(--panel); border-right: 1px solid var(--line); min-height: 0; overflow-y: auto; }
+#planet-form { padding: 8px 12px 16px; display: grid; gap: 8px; }
+#planet-form .about { margin: 0; color: var(--muted); }
+#planet-form .field { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px; align-items: center; color: var(--muted); }
+#planet-form .inputs { display: flex; gap: 4px; min-width: 0; }
+#planet-form .inputs input { flex: 1; min-width: 0; }
+#planet-form select { min-width: 0; }
+#planet-form .buttons { display: flex; gap: 6px; }
+#planet-form .group-label { margin: 8px 0 0; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button:disabled { opacity: 0.5; cursor: default; }
+#planet-progress { display: grid; gap: 4px; }
+#planet-progress[hidden] { display: none; }
+#planet-progress progress { width: 100%; }
+#planet-stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; font-variant-numeric: tabular-nums; }
+#planet-stats dt { color: var(--muted); }
+#planet-stats dd { margin: 0; text-align: right; }
+#planet-log { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+#planet-log:empty { display: none; }
+#planet-viewport {
+    background: var(--viewport); display: flex; flex-direction: column; align-items: center; justify-content: center;
+    position: relative; padding: 12px; min-height: 0; overflow: hidden; gap: 8px;
+}
+#planet-canvas { max-width: 100%; min-height: 0; flex: 0 1 auto; object-fit: contain; image-rendering: auto; background: #000; }
+#planet-timeline { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 1024px; color: #d0d0ca; font-variant-numeric: tabular-nums; }
+#planet-timeline input { flex: 1; min-width: 0; }
+#planet-timeline span { min-width: 12em; text-align: right; }
+#planet-error {
+    position: absolute; left: 12px; right: 12px; top: 12px; margin: 0;
+    background: var(--error-bg); color: var(--error-text);
+    padding: 8px 10px; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
 main {
     flex: 1; min-height: 0;
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 30%);
@@ -151,4 +190,7 @@ button:hover { border-color: var(--accent); }
     #outline-column, #inspector-column { overflow: visible; }
     #outline-column { border-right: 0; border-bottom: 1px solid var(--line); }
     #json { min-height: 320px; }
+    #planet-page { grid-template-columns: 1fr; grid-template-rows: minmax(240px, 45vh) auto; overflow-y: auto; }
+    #planet-viewport { order: -1; }
+    #planet-sidebar { border-right: 0; border-top: 1px solid var(--line); overflow: visible; }
 }

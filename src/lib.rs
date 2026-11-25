@@ -20,6 +20,7 @@ pub mod assets;
 pub mod scheduler;
 mod shared_rules;
 pub mod world;
+pub mod planet_builder;
 pub mod schema;
 #[cfg(feature = "cli")]
 pub mod server;

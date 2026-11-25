@@ -290,3 +290,63 @@ impl Preview {
         self.inner.pick(x, y).map_or(-1, |i| i as i32)
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// The planet builder (`web/planet.js`, `web/planet-worker.js`): a world from a seed, its
+// plates and climate built, then its landscape evolved a stretch of years at a time, with a
+// map after each (`rays::planet_builder`).
+
+/// A planet and its landscape's evolution so far.
+#[wasm_bindgen]
+pub struct PlanetBuilder {
+    inner: rays::planet_builder::PlanetBuild,
+}
+
+#[wasm_bindgen]
+impl PlanetBuilder {
+    /// Build the planet of `seed` (a full-scale landscape's), on `cells` cells a cube face
+    /// edge, steps of `step` years (0 for a landscape's own), to time zero. `progress` is
+    /// called with each stage's name, the fraction of it done, and a line about it or
+    /// undefined; it returns whether to carry on (anything but `false` carries on).
+    #[wasm_bindgen(constructor)]
+    pub fn new(seed: f64, cells: usize, step: f64, progress: &js_sys::Function) -> Result<PlanetBuilder, JsValue> {
+        let mut params = rays::planet_builder::params(seed.max(0.) as u64);
+        if step > 0. { params.step = step; }
+        let mut on_progress = |e: &rays::world::Progress| {
+            let message = e.message.as_deref().map_or(JsValue::UNDEFINED, JsValue::from_str);
+            let r = progress.call3(&JsValue::NULL, &JsValue::from_str(&e.stage), &JsValue::from_f64(e.fraction), &message);
+            !matches!(r, Ok(v) if v.as_bool() == Some(false))
+        };
+        let inner = rays::planet_builder::PlanetBuild::new(params, cells, &mut on_progress)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(PlanetBuilder { inner })
+    }
+
+    /// Years evolved so far.
+    pub fn time(&self) -> f64 { self.inner.time() }
+
+    /// Years a step takes.
+    pub fn step(&self) -> f64 { self.inner.step() }
+
+    /// Advance by about `years` (whole steps, at least one), calling `progress` with the time
+    /// after each step; it returns whether to carry on, as `new`'s. Returns the time reached.
+    pub fn advance(&mut self, years: f64, progress: &js_sys::Function) -> f64 {
+        self.inner.advance(years, &mut |t| {
+            let r = progress.call1(&JsValue::NULL, &JsValue::from_f64(t));
+            !matches!(r, Ok(v) if v.as_bool() == Some(false))
+        })
+    }
+
+    /// A map, `width` pixels wide and half as high: RGBA, top row first. `view` is one of
+    /// `rays::planet_builder::View::NAMES`.
+    pub fn map(&self, view: &str, width: usize) -> Result<Vec<u8>, JsValue> {
+        let view = rays::planet_builder::View::parse(view).ok_or_else(|| JsValue::from_str(&format!(
+            "no map \"{}\" (there are: {})", view, rays::planet_builder::View::NAMES.join(", "))))?;
+        Ok(self.inner.map(view, width).rgba)
+    }
+
+    /// `rays::planet_builder::Stats` as JSON.
+    pub fn stats(&self) -> String {
+        serde_json::to_string(&self.inner.stats()).unwrap_or_default()
+    }
+}

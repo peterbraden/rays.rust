@@ -106,6 +106,26 @@ export async function instantiate() {
         },
 
         /**
+         * A planet from a seed, built to time zero: its plates, climate and landscape before
+         * erosion (see `PlanetBuilder` in web/src/lib.rs). Slow (seconds to a minute), and
+         * nothing else runs meanwhile: call it from a worker. `progress(stage, fraction,
+         * message)` hears how the stages go. The planet then advances by whole steps of its
+         * simulation (`advance(years, onStep)`) and draws maps (`map(view, width)`: RGBA,
+         * width by width / 2).
+         */
+        planet(seed, cells, step, progress) {
+            const p = guard(() => new glue.PlanetBuilder(seed, cells, step, progress));
+            return {
+                time: () => guard(() => p.time()),
+                step: () => guard(() => p.step()),
+                advance: (years, onStep) => guard(() => p.advance(years, onStep ?? (() => true))),
+                map: (view, width) => guard(() => p.map(view, width)),
+                stats: () => JSON.parse(guard(() => p.stats())),
+                free: () => p.free(),
+            };
+        },
+
+        /**
          * The scene on the GPU (WebGPU), if this browser has one and the scene can be
          * flattened for it; throws with the reason otherwise. See `Renderer` in web/src/lib.rs:
          * `pass()` queues a sample of every pixel (`advance(n)` up to n of them together), `await image()` reads the picture back.

@@ -7,6 +7,7 @@
 // renders different layers, which are added up here and drawn as they arrive.
 import { instantiate } from './rays.js';
 import { Raycaster } from './raycaster.js';
+import { showPlanet } from './planet.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('canvas');
@@ -1418,19 +1419,21 @@ function showTab(name) {
     }
     if (name === 'json') { syncJsonText(); }
 }
-// The page shows the scene's configuration (with the picture small beside it) or the render
-// alone. The render doesn't stop or start with them: it follows the scene, whichever is shown.
+// The page shows the scene's configuration (with the picture small beside it), the render
+// alone, or the planet builder (planet.js, a page of its own). The render doesn't stop or start
+// with them: it follows the scene, whichever is shown.
+const PAGES = ['scene', 'render', 'planet'];
 function showPage(name) {
     document.body.dataset.page = name;
-    for (const page of ['scene', 'render']) { $(`page-${page}`).setAttribute('aria-selected', String(page === name)); }
+    for (const page of PAGES) { $(`page-${page}`).setAttribute('aria-selected', String(page === name)); }
     try { localStorage.setItem('rays-page', name); } catch (e) { /* not kept, then */ }
+    if (name === 'planet') { showPlanet(); }
 }
-$('page-scene').addEventListener('click', () => showPage('scene'));
-$('page-render').addEventListener('click', () => showPage('render'));
+for (const page of PAGES) { $(`page-${page}`).addEventListener('click', () => showPage(page)); }
 {
     let page = new URLSearchParams(location.search).get('page');
     try { page ??= localStorage.getItem('rays-page'); } catch (e) { /* no storage: the default */ }
-    showPage(page === 'render' ? 'render' : 'scene');
+    showPage(PAGES.includes(page) ? page : 'scene');
 }
 $('tab-outline').addEventListener('click', () => showTab('outline'));
 $('tab-json').addEventListener('click', () => showTab('json'));

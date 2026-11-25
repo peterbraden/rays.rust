@@ -12,6 +12,7 @@
     <nav id="pages" role="tablist" aria-label="Page">
         <button id="page-scene" type="button" role="tab" aria-selected="true" aria-controls="sidebar">Scene</button>
         <button id="page-render" type="button" role="tab" aria-selected="false" aria-controls="viewport">Render</button>
+        <button id="page-planet" type="button" role="tab" aria-selected="false" aria-controls="planet-page">Planet</button>
     </nav>
     <label class="for-scene">Scene
         <select id="scene-picker"></select>
@@ -35,7 +36,7 @@
     <button id="servers" type="button" class="for-render" title="Machines running &quot;rays serve&quot; that share the rendering">Servers…</button>
     <span id="status" role="status"></span>
 </header>
-<main>
+<main id="builder">
     <section id="sidebar" aria-label="Scene">
         <div id="tabs" role="tablist" aria-label="Sidebar view">
             <button id="tab-outline" type="button" role="tab" aria-selected="true" aria-controls="outline-view">Outline</button>
@@ -71,6 +72,93 @@
         <canvas id="canvas" width="360" height="240"></canvas>
         <p id="error" role="alert" hidden></p>
         <p id="hint">Drag to orbit · Shift-drag to pan · Scroll to zoom · Click an object to select it</p>
+    </section>
+</main>
+<main id="planet-page" aria-label="Planet builder">
+    <section id="planet-sidebar">
+        <div class="panel-head"><h2>Planet</h2></div>
+        <form id="planet-form" autocomplete="off">
+            <p class="about">A world from a seed: its plates drift and collide, its climate is worked out, and then
+            its landscape is eroded by rivers, the sea and the weather while you watch, a map after every stretch of
+            years. The same planet a full-scale <code>landscape</code> with this seed is built on.</p>
+            <label class="field">Seed
+                <span class="inputs">
+                    <input id="planet-seed" type="number" min="0" step="1" value="0">
+                    <button id="planet-random" type="button" title="A random seed">Random</button>
+                </span>
+            </label>
+            <label class="field">Cells
+                <select id="planet-cells" title="Cells along each edge of the cube the sphere is mapped from: six times its square in all">
+                    <option value="32">32 (quick, 390 km)</option>
+                    <option value="48">48 (260 km)</option>
+                    <option value="64" selected>64 (as landscapes, 160 km)</option>
+                    <option value="96">96 (slow, 100 km)</option>
+                </select>
+            </label>
+            <label class="field">Step
+                <select id="planet-step" title="Years a step of the simulation takes. Landscapes take 100: longer steps are quicker, and come to a slightly different planet">
+                    <option value="100" selected>100 years (as landscapes)</option>
+                    <option value="250">250 years</option>
+                    <option value="500">500 years</option>
+                    <option value="1000">1000 years</option>
+                </select>
+            </label>
+            <div class="buttons">
+                <button id="planet-build" type="button" class="primary">Build</button>
+                <button id="planet-run" type="button" disabled>Pause</button>
+            </div>
+            <h2 class="group-label">While it evolves</h2>
+            <label class="field">A map every
+                <select id="planet-years">
+                    <option value="1000">1 000 years</option>
+                    <option value="5000">5 000 years</option>
+                    <option value="10000" selected>10 000 years</option>
+                    <option value="50000">50 000 years</option>
+                    <option value="100000">100 000 years</option>
+                </select>
+            </label>
+            <label class="field">Until
+                <select id="planet-until">
+                    <option value="50000">50 000 years</option>
+                    <option value="100000" selected>100 000 years</option>
+                    <option value="500000">500 000 years</option>
+                    <option value="1000000">1 million years</option>
+                    <option value="Infinity">no end</option>
+                </select>
+            </label>
+            <label class="field">Map
+                <select id="planet-view">
+                    <option value="relief" selected>Relief</option>
+                    <option value="geology">Geology</option>
+                    <option value="rain">Rain</option>
+                    <option value="plates">Plates (at the start)</option>
+                    <option value="climate">Climate</option>
+                </select>
+            </label>
+            <label class="field">Map width
+                <select id="planet-width">
+                    <option value="512">512</option>
+                    <option value="1024" selected>1024</option>
+                    <option value="2048">2048</option>
+                </select>
+            </label>
+            <div id="planet-progress" hidden>
+                <span id="planet-stage"></span>
+                <progress id="planet-bar" max="1" value="0"></progress>
+            </div>
+            <dl id="planet-stats"></dl>
+            <ol id="planet-log"></ol>
+            <button id="planet-copy" type="button" disabled title="Copy a landscape object with this seed and time, for a scene's objects">Copy as landscape</button>
+        </form>
+    </section>
+    <section id="planet-viewport">
+        <canvas id="planet-canvas" width="1024" height="512"></canvas>
+        <p id="planet-error" role="alert" hidden></p>
+        <div id="planet-timeline">
+            <button id="planet-play" type="button" title="Play the maps so far" disabled>▶</button>
+            <input id="planet-scrub" type="range" min="0" max="0" value="0" disabled aria-label="Map at time">
+            <span id="planet-time">Not built yet</span>
+        </div>
     </section>
 </main>
 <script type="module" src="app.js"></script>

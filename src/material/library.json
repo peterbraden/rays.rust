@@ -4999,60 +4999,110 @@
         ],
         "fit": {
           "loss": {
-            "start": 166.953769,
-            "fitted": 61.728004
+            "start": 113.55547,
+            "fitted": 1.01266
           },
-          "iterations": 40,
+          "iterations": 60,
           "resolution": 128,
-          "samples": 8,
-          "loss_kind": "structure+detail",
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free",
           "date": "2026-11-25",
           "applied": false,
           "values": {
-            "scale": 2.2573,
+            "variables.relief.inputs.0.scale": 2.7403,
+            "variables.relief.inputs.0.smallest": 0.0027,
+            "variables.relief.inputs.0.amplitude": 0.0322,
+            "variables.relief.inputs.0.roughness": 0.6028,
+            "variables.relief.inputs.1.scale": 0.0796,
+            "variables.relief.inputs.1.smallest": 0.0056,
+            "variables.relief.inputs.1.amplitude": 0.0017,
+            "variables.mottle.scale": 8.4829,
+            "variables.mottle.smallest": 0.0051,
+            "variables.mottle.roughness": 0.7871,
+            "variables.crystals.amount": 0.0005,
+            "variables.crystals.scale": 0.0021,
+            "variables.crystals.input.scale": 0.0174,
+            "variables.stains.from": 0.4032,
+            "variables.stains.to": 0.5486,
+            "variables.stains.input.scale": 7.3048,
+            "variables.stains.input.smallest": 0.2183,
+            "variables.stains.input.roughness": 0.6407,
+            "variables.streaks.inputs.0.breakup.scale": 17.617,
+            "variables.streaks.inputs.0.breakup.amplitude": 11.866,
+            "variables.streaks.inputs.1.from": 0.0265,
+            "variables.streaks.inputs.1.to": 0.4341,
+            "variables.streaks.inputs.1.input.scale": 2.0301,
+            "variables.streaks.inputs.1.input.smallest": 0.0122,
+            "variables.streaks.inputs.1.input.roughness": 0.7216,
+            "variables.grey_lichen.inputs.1.from": 0.2449,
+            "variables.grey_lichen.inputs.1.to": 0.0025,
+            "variables.grey_lichen.inputs.1.input.inputs.0.scale": 0.5543,
+            "variables.grey_lichen.inputs.1.input.inputs.0.smallest": 0.0213,
+            "variables.grey_lichen.inputs.1.input.inputs.1.inputs.0": 0.9195,
+            "variables.grey_lichen.inputs.1.input.inputs.1.inputs.1.scale": 0.0642,
+            "variables.grey_lichen.inputs.1.input.inputs.1.inputs.1.smallest": 0.0011,
+            "variables.map_lichen.inputs.1.from": 0.1459,
+            "variables.map_lichen.inputs.1.to": 0.5999,
+            "variables.map_lichen.inputs.1.input.scale": 14.128,
+            "variables.map_lichen.inputs.1.input.smallest": 0.4921,
+            "variables.map_lichen.inputs.2.from": 0.3721,
+            "variables.map_lichen.inputs.2.to": 0.3279,
+            "variables.map_lichen.inputs.2.input.amount": 0.0468,
+            "variables.map_lichen.inputs.2.input.scale": 0.0712,
+            "variables.map_lichen.inputs.2.input.input.scale": 0.0833,
+            "material.layers.0.material.albedo.color_map.0.0": -0.2216,
+            "material.layers.0.material.albedo.color_map.0.1.color_map.0.0": 0.002,
+            "material.layers.0.material.albedo.color_map.0.1.color_map.1.0": 0.129,
             "material.layers.0.material.albedo.color_map.0.1.color_map.1.1": [
-              0.1076,
-              0.1339,
-              0.1517
+              0.1308,
+              0.1293,
+              0.0678
             ],
+            "material.layers.0.material.albedo.color_map.0.1.color_map.2.0": 0.3068,
+            "material.layers.0.material.albedo.color_map.0.1.color_map.3.0": 0.51,
             "material.layers.0.material.albedo.color_map.0.1.color_map.3.1": [
-              0.2117,
-              0.2261,
-              0.1181
+              0.013,
+              0.0059,
+              0.003
             ],
+            "material.layers.0.material.albedo.color_map.1.0": 0.4978,
+            "material.layers.0.material.albedo.color_map.1.1.color_map.0.0": -0.1598,
+            "material.layers.0.material.albedo.color_map.1.1.color_map.1.0": 0.0902,
             "material.layers.0.material.albedo.color_map.1.1.color_map.1.1": [
-              0.1291,
-              0.1741,
-              0.2453
+              0.2865,
+              0.2818,
+              0.246
             ],
+            "material.layers.0.material.albedo.color_map.1.1.color_map.2.0": 0.4403,
+            "material.layers.0.material.albedo.color_map.1.1.color_map.3.0": 0.8404,
             "material.layers.0.material.albedo.color_map.1.1.color_map.3.1": [
-              0.2317,
-              0.4039,
-              0.1245
+              0.4063,
+              0.3864,
+              0.3211
             ],
-            "material.layers.1.material.albedo.color_map.0.1": [
-              0.1696,
-              0.1107,
-              0.0315
-            ],
-            "material.layers.1.material.albedo.color_map.1.1": [
-              0.2607,
-              0.0418,
-              0.1733
-            ],
-            "material.layers.1.coverage": 0.9925,
+            "material.layers.1.material.albedo.pattern.scale": 0.5921,
+            "material.layers.1.material.albedo.color_map.0.0": -0.4013,
+            "material.layers.1.material.albedo.color_map.1.0": 0.3796,
+            "material.layers.1.coverage": 0.0267,
+            "material.layers.3.material.albedo.pattern.scale": 0.1132,
+            "material.layers.3.material.albedo.color_map.0.0": -0.3812,
             "material.layers.3.material.albedo.color_map.0.1": [
-              0.4816,
-              0.311,
-              0.2646
+              0.0043,
+              0.003,
+              0.003
             ],
+            "material.layers.3.material.albedo.color_map.1.0": 0.5796,
             "material.layers.3.material.albedo.color_map.1.1": [
-              0.4472,
-              0.6659,
-              0.4235
+              0.1181,
+              0.0685,
+              0.0403
             ],
-            "material.layers.3.coverage": 0.0427,
-            "material.layers.4.coverage": 0.4299
+            "material.layers.3.coverage": 0.9496,
+            "material.layers.4.material.albedo.pattern.scale": 0.0096,
+            "material.layers.4.material.albedo.color_map.0.0": -0.3292,
+            "material.layers.4.material.albedo.color_map.1.0": -0.1694,
+            "material.layers.4.material.albedo.color_map.2.0": -0.0495,
+            "material.layers.4.material.albedo.color_map.3.0": 0.6696
           }
         }
       }

@@ -1260,9 +1260,10 @@ def main():
                 sys.exit("--record needs a preset's reference, not a spec file")
             values = {}
             for p in spec["params"]:
-                if p.get("kind") == "colours":
+                if "paths" in p:
                     for path in p["paths"]:
-                        values[".".join(map(str, path))] = get(fitted, path)
+                        v = get(fitted, path)
+                        values[".".join(map(str, path))] = [round(c, 4) for c in v] if isinstance(v, list) else round(v, 4)
                     continue
                 if "field" in p:
                     values[p["field"]] = round(fitted_usage[p["field"]], 4)

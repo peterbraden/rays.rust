@@ -364,6 +364,36 @@ impl Layer {
     }
 }
 
+/// Dean's scale parameter for a beach of median grain `d50` (mm), m^(1/3): A = 0.21 D^0.48
+/// (R. G. Dean, "Equilibrium beach profiles: characteristics and applications", J. Coastal
+/// Research 7(1), 1991, after Moore 1982; D in millimetres, which gives the tabulated 0.1 for
+/// 0.2 mm sand).
+pub fn dean_a(d50: f64) -> f64 { 0.21 * d50.max(0.01).powf(0.48) }
+
+/// The beach's median grain, mm: a medium sand (a model choice, until the coast's sediment is
+/// known).
+const BEACH_SAND: f64 = 0.3;
+
+/// The depth below which waves no longer reshape the sea floor, metres: a typical depth of
+/// closure for moderate coasts (6-10 m; a model choice for Hallermeier's, which needs the
+/// waves of the year's storms).
+pub const CLOSURE_DEPTH: f64 = 8.;
+
+/// Ground at height `h` (metres above sea level) on a slope `steepness`, as the waves shape the
+/// shoreface below sea level: Dean's equilibrium profile, the depth A y^(2/3) at distance y
+/// from the shore (Dean 1977, 1991), y taken as the drawn depth over the slope (the drawn
+/// ground a ramp from the shoreline). It is shallower than a ramp, concave, the waves' energy
+/// spent evenly across it; beyond the depth of closure the drawn sea floor returns. Only ever
+/// shallower than drawn. (Ground below sea level inland, rare, is taken as sea floor too.)
+pub fn shoreface(h: f64, steepness: f64) -> f64 {
+    if h >= 0. || h <= -2. * CLOSURE_DEPTH { return h; }
+    let drawn = -h;
+    let y = drawn / steepness.max(1e-3);
+    let dean = dean_a(BEACH_SAND) * y.powf(2. / 3.);
+    let shaped = 1. - smoothstep(CLOSURE_DEPTH, 2. * CLOSURE_DEPTH, drawn);
+    -(drawn - shaped * (drawn - dean).max(0.))
+}
+
 /// How high water wicks up a bed of median grain `grain` (m) above the river beside it, metres:
 /// Jurin's height h = 2γ / (ρ g r) for water's surface tension γ = 0.073 N/m, its pores'
 /// radius r taken as a fifth of the grain (a common approximation): 15 cm in fine sand,
@@ -642,6 +672,7 @@ impl Relief {
     /// slope there.
     pub fn height(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
         let g = self.uncarved(d, slope, local);
+        let g = shoreface(g, slope.steepness);
         let Some(l) = self.layers.iter().find(|l| l.contains(d)) else { return g };
         let Some((q, carve)) = l.carve(d) else { return g };
         carve.carved(q, g, local)
@@ -1586,6 +1617,25 @@ mod tests {
     use crate::terrain::simulation::TerrainParams;
 
     fn frame() -> Frame { Frame::new(45., 7., 6.36e6, 1.) }
+
+    #[test]
+    fn test_the_shoreface_takes_deans_profile() {
+        // Dean's A for 0.2 mm sand is the tabulated 0.1 m^(1/3); coarser sand, steeper.
+        assert!((dean_a(0.2) - 0.097).abs() < 0.002, "{}", dean_a(0.2));
+        assert!(dean_a(1.) > dean_a(0.3));
+        // On a 1:16 ramp, drawn 1 m deep 16 m out: Dean's 0.118 × 16^(2/3) = 0.75 m.
+        let s = 1. / 16.;
+        assert!((shoreface(-1., s) + 0.749).abs() < 0.01, "{}", shoreface(-1., s));
+        // The shoreline stays, the land is untouched, and the profile deepens offshore, back to
+        // the drawn floor beyond twice the depth of closure.
+        assert_eq!(shoreface(0., s), 0.);
+        assert_eq!(shoreface(5., s), 5.);
+        let profile: Vec<f64> = (1..40).map(|k| shoreface(-0.5 * k as f64, s)).collect();
+        assert!(profile.windows(2).all(|w| w[1] < w[0]), "{:?}", profile);
+        assert_eq!(shoreface(-17., s), -17.);
+        // Never deeper than drawn: a gentle drawn floor stays as it is.
+        assert_eq!(shoreface(-0.2, 0.001), -0.2);
+    }
 
     #[test]
     fn test_water_wicks_higher_in_finer_beds() {

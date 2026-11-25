@@ -1042,6 +1042,13 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         }
         triangles.extend(tris.into_iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
     }
+    // How many rivers each patch draws, and how much of it is ice.
+    for l in relief.layers.iter() {
+        let Some(r) = &l.rivers else { continue };
+        if r.courses.is_empty() && l.spacing > 1e4 { continue; }
+        let length: f64 = r.courses.iter().map(|c| c.nodes.windows(2).map(|w| crate::terrain::rivers::dist(w[0].p, w[1].p)).sum::<f64>()).sum();
+        say(format!("Landscape: the {:.0} m patch has {} river courses, {:.0} km of them", l.spacing, r.courses.len(), length / 1000.));
+    }
     // Where the nearest river is, to frame it.
     let near = relief.layers.iter().filter_map(|l| {
         let carve = l.rivers.as_ref()?.carve.get()?;

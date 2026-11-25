@@ -231,7 +231,7 @@ fn bend(nodes: &[Node], seed: u64) -> Vec<Node> {
     out
 }
 
-fn dist(a: Point, b: Point) -> f64 { (a[0] - b[0]).hypot(a[1] - b[1]) }
+pub fn dist(a: Point, b: Point) -> f64 { (a[0] - b[0]).hypot(a[1] - b[1]) }
 
 /// The point of segment `a`-`b` nearest `q`, as the fraction along it, and the distance.
 fn nearest_on(a: Point, b: Point, q: Point) -> (f64, f64) {

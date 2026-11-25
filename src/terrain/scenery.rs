@@ -1373,7 +1373,8 @@ impl Ground {
         if under > 0. {
             let litter = mix(colour(LEAF_LITTER), colour(NEEDLE_LITTER), needles) * (0.8 + 0.4 * n(2., 0.6));
             let moss = if dry { 0. } else { 0.6 * smoothstep(0.5, 0.7, n(5., 0.8)) };
-            let hold = under * smoothstep(0.3, 0.5, flat);
+            // (Where it is dry, little: a desert's shrubs drop few leaves, and they blow away.)
+            let hold = under * smoothstep(0.3, 0.5, flat) * if dry { 0.25 } else { 1. };
             ground = mix(ground, mix(litter, colour(MOSS), moss) * grain, hold);
             shares.mix(Shares::of(Bare::Floor), hold);
         }

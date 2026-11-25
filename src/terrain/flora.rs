@@ -141,11 +141,16 @@ pub struct Community {
     pub ground: &'static [&'static str],
     pub density: f64,
     pub conditions: &'static str,
+    /// How much closer than their own spacing its plants stand (1; less in a rainforest's
+    /// crowded, closed canopy).
+    pub crowding: f64,
 }
 
 const fn community(name: &'static str, biome: Biome, plants: &'static [(&'static str, f64)], ground: &'static [&'static str], density: f64, conditions: &'static str) -> Community {
-    Community { name, biome, plants, stunted: None, ground, density, conditions }
+    Community { name, biome, plants, stunted: None, ground, density, conditions, crowding: 1. }
 }
+
+const fn crowded(c: Community, crowding: f64) -> Community { Community { crowding, ..c } }
 
 const fn stunted(c: Community, height: f64) -> Community { Community { stunted: Some(height), ..c } }
 
@@ -214,12 +219,13 @@ pub const COMMUNITIES: &[Community] = &[
     community("palm savanna", Savanna, &[("palm", 0.15), ("thornbush", 0.1)],
         &["savanna"], 300., "summer"),
     // Rainforest.
-    community("lowland rainforest", Rainforest, &[("kapok", 0.1), ("black-tupelo", 0.5), ("palm", 0.2), ("tree-fern", 0.3), ("shrub", 0.5)],
-        &["bracken", "litter"], 150., "lush"),
-    community("cloud forest", Rainforest, &[("tree-fern", 0.6), ("black-tupelo", 0.3), ("shrub", 0.4)],
-        &["bracken", "sedge"], 200., "lush"),
-    community("palm forest", Rainforest, &[("palm", 0.6), ("tree-fern", 0.2), ("black-tupelo", 0.1), ("shrub", 0.3)],
-        &["bracken", "litter"], 150., "lush"),
+    // Rainforest: closed canopies, crowded, in layers: emergents, canopy, tree ferns, shrubs.
+    crowded(community("lowland rainforest", Rainforest, &[("kapok", 0.15), ("black-tupelo", 0.8), ("palm", 0.3), ("tree-fern", 0.5), ("shrub", 0.6)],
+        &["bracken", "litter"], 150., "lush"), 0.6),
+    crowded(community("cloud forest", Rainforest, &[("tree-fern", 0.8), ("black-tupelo", 0.5), ("shrub", 0.5)],
+        &["bracken", "sedge"], 200., "lush"), 0.6),
+    crowded(community("palm forest", Rainforest, &[("palm", 0.9), ("tree-fern", 0.4), ("black-tupelo", 0.3), ("shrub", 0.4)],
+        &["bracken", "litter"], 150., "lush"), 0.6),
 ];
 
 /// How wide a community's regions are, metres: the scale of each one's noise.
@@ -378,6 +384,11 @@ pub fn populations(present: &[&'static Community], strata: &[&str], seed: u64, r
                 if c.plants.iter().any(|(s, _)| *s == p.species) && !heights.contains(&h) { heights.push(h); }
             }
             for height in heights {
+                let growing = || present.iter()
+                    .filter(|c| (if stratum == Shrub { c.stunted } else { None }) == height)
+                    .filter(|c| c.plants.iter().any(|(s, _)| *s == p.species));
+                // As close as the most crowded of them.
+                let crowding = growing().map(|c| c.crowding).fold(1., f64::min);
                 let terms: Vec<Value> = present.iter()
                     .filter(|c| (if stratum == Shrub { c.stunted } else { None }) == height)
                     .filter_map(|c| c.plants.iter().find(|(s, _)| *s == p.species).map(|&(_, a)| (c, a)))
@@ -406,9 +417,11 @@ pub fn populations(present: &[&'static Community], strata: &[&str], seed: u64, r
                 species["leaves"] = Value::from(l);
                 let reach = match stratum { Tree => reach, Shrub => 0.5 * reach };
                 // Stunted, they crowd closer, in proportion to how much they shrank.
-                let spacing = match height { Some(h) => p.spacing * (h / 2.).clamp(0.3, 1.), None => p.spacing };
+                let spacing = crowding * match height { Some(h) => p.spacing * (h / 2.).clamp(0.3, 1.), None => p.spacing };
+                // In clumps rather than evenly spread: groves and thickets, more so for shrubs.
+                let clustering = match stratum { Tree => 0.25, Shrub => 0.45 };
                 out.push(json!({"forest": {
-                    "reach": reach, "fade": 0.3, "spacing": spacing, "clearings": 0.1, "patch_size": 30. * p.spacing, "patchiness": 0.5,
+                    "reach": reach, "fade": 0.3, "spacing": spacing, "clustering": clustering, "clearings": 0.1, "patch_size": 30. * p.spacing, "patchiness": 0.5,
                     "max_slope": p.max_slope, "variants": 3, "lod": true,
                     "species": [species],
                     "where": {"node": "multiply", "inputs": rule},

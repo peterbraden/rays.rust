@@ -1329,13 +1329,16 @@ pub fn shoaling(omega: f64, depth: f64) -> f64 {
     (cg0 / cg).sqrt()
 }
 
+/// The water's depth under a point of the sea's surface, metres, if known.
+pub type Depth = std::sync::Arc<dyn Fn(&Vector3<f64>) -> Option<f64> + Send + Sync>;
+
 /// The surf: the water's depth under the sea's surface near the land (a function of a point
 /// on the surface, None where it doesn't know, as far out at sea), the waves' root-mean-square
 /// height out at sea, and their angular frequency (the spectrum's peak), by which they grow as
 /// they come into the shallows (`shoaling`).
 #[derive(Clone)]
 pub struct Surf {
-    pub depth: std::sync::Arc<dyn Fn(&Vector3<f64>) -> Option<f64> + Send + Sync>,
+    pub depth: Depth,
     pub hrms: f64,
     pub omega: f64,
 }

@@ -3148,6 +3148,18 @@
           "doc": "Look the sky up in a precomputed table; false integrates every ray exactly."
         },
         {
+          "name": "lut_size",
+          "kind": "vec2",
+          "default": [256, 128],
+          "doc": "The table's columns and rows: smaller is quicker to build and a little less exact (the scene builder's preview uses a quarter of each, within 0.4%)."
+        },
+        {
+          "name": "cache",
+          "kind": "path",
+          "default": null,
+          "doc": "Directory where the sky's tables are kept (sky-<key>.bin, about 19 MB) and reused. By default the scene's landscape's cache, if it has one."
+        },
+        {
           "name": "moonlight",
           "kind": "json",
           "default": null,

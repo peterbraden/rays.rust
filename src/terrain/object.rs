@@ -592,12 +592,10 @@ fn ground_material(o: &Value, materials: &serde_json::Map<String, Value>) -> Opt
 }
 
 pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> SceneObject {
-    let mut params = terrain_params(o);
-    // Without a `scale`, the landscape is drawn as itself, in metres on the scene's planet.
-    if o.get("scale").is_none() {
-        if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
+    if let Some(params) = full_scale_params(o) {
         return full_scale_landscape(o, params, ground_material(o, materials));
     }
+    let params = terrain_params(o);
     let t = evolved(o, params);
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
     if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(&t, path, 2048); }
@@ -665,28 +663,55 @@ pub fn world_directory(o: &Value) -> Option<&std::path::Path> {
     o["cache"].as_str().map(std::path::Path::new)
 }
 
+/// A landscape's parameters, if it is drawn at full scale: without a `scale`, the landscape is
+/// drawn as itself, in metres on the scene's planet.
+fn full_scale_params(o: &Value) -> Option<TerrainParams> {
+    if o.get("scale").is_some() { return None; }
+    let mut params = terrain_params(o);
+    if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
+    Some(params)
+}
+
+/// The world a full-scale landscape builds (`world::build`); `above_ground`, the one built to
+/// find the ground under a camera `"above_ground"` (`above_ground`), before the camera is put
+/// there.
+fn world_description(o: &Value, params: &TerrainParams, above_ground: bool) -> Description {
+    let radius = params.planet.radius;
+    let time = number(o, "time", 0.);
+    let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
+    let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
+    Description {
+        params: params.clone(), site: site_of(&o["domain"]), time, planet_cells, levels: levels(o, globe_spacing),
+        focus: match focus(o) {
+            Focus::Camera { location, lookat, .. } if above_ground => Focus::Camera { location, lookat, above_ground: true },
+            f => f,
+        },
+        exaggeration: scenery_params(o).exaggeration, close: close(o, above_ground),
+    }
+}
+
+/// Where a landscape's world manifest is (`world-<key>.json` in its `cache`), if it is a
+/// full-scale landscape with a cache; whether or not it has been built. A host without a
+/// filesystem (a browser) fetches it, and the stages it lists, to `assets::provide` them
+/// before building the scene. `o` is the landscape as the scene file's parser passes it on,
+/// with the scene's `camera` (`SceneFile::world_manifests`); `above_ground`, the world built to
+/// put a camera `"above_ground"` (see `world_description`).
+pub fn world_manifest(o: &Value, above_ground: bool) -> Option<String> {
+    let dir = world_directory(o)?;
+    let d = world_description(o, &full_scale_params(o)?, above_ground);
+    Some(dir.join(world::manifest_file(&d)).to_string_lossy().into_owned())
+}
+
 /// Scene points `y` metres above the ground under each (`x`, `y`, `z`) of `points`, on the
 /// full-scale landscape `o` (a camera's `"above_ground"`, `SceneFile::from_scenefile`): its
 /// world is built (from its `cache`, if it has one and was built before; a landscape without a
 /// cache is simulated twice), and its surface with the planet's detail found under each point.
 /// None for a scaled landscape.
 pub fn above_ground(o: &Value, points: &[Vector3<f64>]) -> Option<Vec<Vector3<f64>>> {
-    if o.get("scale").is_some() { return None; }
-    let mut params = terrain_params(o);
-    if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
+    let params = full_scale_params(o)?;
     let p = scenery_params(o);
     let radius = params.planet.radius;
-    let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
-    let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
-    let levels = levels(o, globe_spacing);
-    let focus = match focus(o) {
-        Focus::Camera { location, lookat, .. } => Focus::Camera { location, lookat, above_ground: true },
-        f => f,
-    };
-    let description = Description {
-        params, site: site_of(&o["domain"]), time: number(o, "time", 0.), planet_cells, levels,
-        focus, exaggeration: p.exaggeration, close: close(o, true),
-    };
+    let description = world_description(o, &params, true);
     let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
     let frame = world.frame.clone();
     let World { planet, globe, patches, .. } = world;
@@ -747,18 +772,10 @@ fn scenery_params(o: &Value) -> SceneryParams {
 ///   each side, on a heightfield of `displacement_spacing` (m, default 2).
 fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
     let p = scenery_params(o);
-    let radius = params.planet.radius;
-    let time = number(o, "time", 0.);
-    let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
-    let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
-    let levels = levels(o, globe_spacing);
-
     // The world: the planet, the site, and the simulations nested about the focus, each
     // driving the next at its edge (`world`), kept in the `cache` directory if there is one.
-    let description = Description {
-        params: params.clone(), site: site_of(&o["domain"]), time, planet_cells, levels,
-        focus: focus(o), exaggeration: p.exaggeration, close: close(o, false),
-    };
+    let description = world_description(o, &params, false);
+    let (radius, time) = (params.planet.radius, description.time);
     let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
     let frame = world.frame.clone();
     let finest = finest_spacing(o, &world.patches);
@@ -997,7 +1014,7 @@ fn displaced_patches(o: &Value, d: &Value, relief: &Relief, frame: &Frame, view:
     let outermost = finest * (1u64 << (n - 1)) as f64;
     let snap = |c: f64| (c / outermost).round() * outermost;
     let (cx, cz) = (snap(m.x), snap(m.z));
-    let begun = std::time::Instant::now();
+    let begun = web_time::Instant::now();
     let clipmap = Clipmap::new(relief, frame, view, p);
     // Diced for the camera as it sees them, in the frame (from the middle of its path, if it
     // moves).
@@ -1114,6 +1131,55 @@ mod tests {
         assert!(hit.normal.y > 0.);
         let off: Value = serde_json::from_str(r#"{ "glacier": false }"#).unwrap();
         assert!(terrain_params(&off).glacier.is_none());
+    }
+
+    /// The scene builder finds a landscape's world by the manifest it names, before building.
+    #[test]
+    fn test_world_manifest_is_the_one_a_build_writes() {
+        let dir = std::env::temp_dir().join(format!("landscape-manifest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = serde_json::json!({
+            "camera": { "location": [0, 3000, 0], "lookat": [0, 0, -1000], "up": [0, 1, 0], "angle": 0.8 },
+            "objects": [{
+                "type": "landscape", "seed": 5, "time": 0, "cache": dir.to_string_lossy(),
+                "domain": { "type": "patch", "cells": 16, "spacing": 1000 },
+                "planet": { "cells": 8 }, "resolution": 32, "globe": 8
+            }]
+        });
+        let manifests = SceneFile::world_manifests(doc.clone());
+        assert_eq!(manifests.len(), 1);
+        assert!(!std::path::Path::new(&manifests[0]).exists());
+        let _scene = SceneFile::from_value_overridden(doc, &crate::scenefile::Overrides { width: Some(8), height: Some(6), seed: None });
+        assert!(std::path::Path::new(&manifests[0]).exists(), "{} not written", manifests[0]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With a camera `"above_ground"`, the scene's world is keyed by where the camera is put,
+    /// which a first world finds: that one is named until it can be read, then both are.
+    #[test]
+    fn test_world_manifests_follow_a_camera_above_the_ground() {
+        let dir = std::env::temp_dir().join(format!("landscape-above-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = serde_json::json!({
+            "camera": { "location": [0, 3, 0], "lookat": [0, 3, -1000], "up": [0, 1, 0], "angle": 0.8, "above_ground": true },
+            "objects": [{
+                "type": "landscape", "seed": 5, "time": 0, "cache": dir.to_string_lossy(),
+                "domain": { "type": "patch", "cells": 16, "spacing": 1000 },
+                "planet": { "cells": 8 }, "resolution": 32, "globe": 8
+            }]
+        });
+        let before = SceneFile::world_manifests(doc.clone());
+        assert_eq!(before.len(), 1);
+        assert!(!crate::world::readable(std::path::Path::new(&before[0])));
+        let _scene = SceneFile::from_value_overridden(doc.clone(), &crate::scenefile::Overrides { width: Some(8), height: Some(6), seed: None });
+        let after = SceneFile::world_manifests(doc);
+        assert_eq!(after.len(), 2);
+        assert_eq!(after[0], before[0]);
+        assert_ne!(after[1], after[0]);
+        for m in &after {
+            assert!(crate::world::readable(std::path::Path::new(m)), "{} isn't a whole world", m);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

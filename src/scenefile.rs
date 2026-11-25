@@ -979,14 +979,14 @@ impl SceneFile {
             if reusable { kept.insert(key, built); }
             let t = start.elapsed().as_secs_f64();
             if t >= 0.1 {
-                println!("- Built {} in {:.2} s", name, t);
+                SceneFile::say(format!("- Built {} in {:.2} s", name, t));
             }
          }
          for (i, fog) in fogs {
             let start = web_time::Instant::now();
             let ground: Vec<Arc<SceneObject>> = objects.iter().map(|(_, o)| o.clone()).collect();
             objects.push((i, Arc::new(SceneFile::parse_valley_fog(&fog, &ground))));
-            println!("- Built valley_fog in {:.2} s", start.elapsed().as_secs_f64());
+            SceneFile::say(format!("- Built valley_fog in {:.2} s", start.elapsed().as_secs_f64()));
          }
          if reuse { *KEPT_OBJECTS.lock().unwrap() = Some(kept); }
          objects
@@ -4543,6 +4543,16 @@ impl SceneFile {
     /// radiance is the air's per unit of sunlight times the sun's `intensity`
     /// (`skysphere::sky_brightness_for_sun`), on the same scale as the sunlight on everything
     /// under it. So the sky can't be given a `brightness` of its own.
+    /// A skysphere without a `"cache"` of its own keeps its tables (`skysphere::table_file`)
+    /// in its scene's landscape's, if that has one: a scene that is slow to build for its
+    /// landscape is as slow again for its sky, in a browser.
+    pub fn sky_cache(objects: &mut [Value]) {
+        let Some(dir) = objects.iter().filter(|o| o["type"].as_str() == Some("landscape")).find_map(|o| o["cache"].as_str()).map(str::to_string) else { return };
+        for o in objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere") && o.get("cache").is_none()) {
+            o["cache"] = serde_json::json!(dir);
+        }
+    }
+
     pub fn sky_follows_sun(sun: &Value, objects: &mut [Value]) {
         if sun.is_null() {
             return;
@@ -4667,6 +4677,7 @@ impl SceneFile {
         }
         s.camera = SceneFile::axonometric(std::mem::take(&mut s.camera));
         SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
+        SceneFile::sky_cache(&mut s.objects);
         SceneFile::lightning_follows_sun(&s.sun, &mut s.objects);
         let max_bounding = BBox::new( // TODO
             Vector3::new(-1000., -1000., -1000.),
@@ -4847,9 +4858,18 @@ impl SceneFile {
         };
         // Tabulating the sky evaluates it, which needs the scene.
         if scene.render.sample_sky {
+            let start = web_time::Instant::now();
             scene.environment = crate::environment::Environment::build(&scene);
+            let t = start.elapsed().as_secs_f64();
+            if t >= 0.1 { SceneFile::say(format!("- Built the sky's sampling table in {:.2} s", t)); }
         }
         scene
+    }
+
+    /// A line about the build, for a person: printed, or given to the host's reporter
+    /// (`world::set_reporter`; a browser shows it on its console, where it can't print).
+    fn say(message: String) {
+        crate::world::report(&crate::world::Progress::note("scene", message));
     }
 
     /// The light BVH over a scene's sampled lights (`Scene::light_bvh`): its area lights, if
@@ -5029,6 +5049,58 @@ impl SceneFile {
             return crate::tungsten::to_scene(&doc, dir).map_err(|e| format!("{}: {}", filename, e));
         }
         Ok(doc)
+    }
+
+    /// Where the worlds of the scene's full-scale landscapes are kept (their manifests,
+    /// `terrain::object::world_manifest`), whether built yet or not: for a host without a
+    /// filesystem to fetch and provide before building the scene. Each landscape sees the
+    /// scene's camera as `from_scenefile` gives it one.
+    /// The files of tables the scene keeps in a `cache` (its skies', `skysphere::table_file`),
+    /// whether made yet or not: as `world_manifests`, for a host without a filesystem to fetch
+    /// before building the scene.
+    pub fn cached_files(doc: Value) -> Vec<String> {
+        let Ok(doc) = SceneFile::substitute_variables(doc) else { return vec![] };
+        let mut objects: Vec<Value> = doc["objects"].as_array().cloned().unwrap_or_default();
+        SceneFile::sky_follows_sun(&doc["sun"], &mut objects);
+        SceneFile::sky_cache(&mut objects);
+        objects.iter()
+            .filter(|o| o["type"].as_str() == Some("skysphere") && o["lut"].as_bool() != Some(false))
+            .filter_map(|o| Some(crate::skysphere::table_file(o["cache"].as_str()?, o)))
+            .collect()
+    }
+
+    ///
+    /// A camera `"above_ground"` is put above the ground of a world built to find it first, as
+    /// `from_scenefile` puts it, and the landscape's own world is keyed by where it ends up. So
+    /// that world is named only once the first can be read without simulating it (its files
+    /// on disk, or provided, `world::readable`): until then only the first is. A host asks
+    /// again once it has provided what it was told of, until nothing new is named.
+    pub fn world_manifests(doc: Value) -> Vec<String> {
+        let Ok(doc) = SceneFile::substitute_variables(doc) else { return vec![] };
+        let landscapes: Vec<&Value> = doc["objects"].as_array().into_iter().flatten()
+            .filter(|o| o["type"].as_str() == Some("landscape")).collect();
+        let mut manifests = vec![];
+        let mut camera = doc["camera"].clone();
+        if camera["above_ground"].as_bool() == Some(true) && let Some(l) = landscapes.first() {
+            let mut l = (*l).clone();
+            l["camera"] = camera.clone();
+            let Some(first) = crate::terrain::object::world_manifest(&l, true) else { return manifests };
+            let readable = crate::world::readable(std::path::Path::new(&first));
+            manifests.push(first);
+            if !readable { return manifests; }
+            let at = |k: &str| SceneFile::parse_vec3_def(&camera, k, Vector3::zeros());
+            if let Some(p) = crate::terrain::object::above_ground(&l, &[at("location"), at("lookat")]) {
+                camera["location"] = serde_json::json!([p[0].x, p[0].y, p[0].z]);
+                camera["lookat"] = serde_json::json!([p[1].x, p[1].y, p[1].z]);
+            }
+        }
+        let camera = SceneFile::axonometric(camera);
+        manifests.extend(landscapes.into_iter().filter_map(|o| {
+            let mut o = o.clone();
+            if o.get("camera").is_none() { o["camera"] = camera.clone(); }
+            crate::terrain::object::world_manifest(&o, false)
+        }));
+        manifests
     }
 
     pub fn from_file(filename: &str, overrides: &Overrides) -> Scene {

@@ -3058,6 +3058,13 @@
           "doc": "Distance from detail_center over which waves are displaced, m.",
           "min": 1
         },
+        {
+          "name": "surf_grid",
+          "kind": "number",
+          "default": 1,
+          "doc": "Over a landscape, the spacing (m) of the grid on which the surf is found about detail_center, where breaking waves are drawn in relief.",
+          "min": 0.05
+        },
         {"name": "debug", "kind": "boolean", "default": false, "doc": "Shade by surface normal."}
       ],
       "example": {"type": "ocean", "wind": [20, 5]},

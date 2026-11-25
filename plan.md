@@ -2971,11 +2971,20 @@ transport amplitudes in position and wavevector, though for deep water).
     face (a model choice), wet above it as far as water wicks; the swell on the sea's surface
     too, a dozen long-crested waves from a narrow band (`WaveField::with_swell`).
   - Found: from offshore the surf is a thin line, as it should be for a metre of waves on a
-    1:16 shore (a 30-40 m surf zone); a long swell's is wider. The breakers are foam on a flat
-    sea (no breaking face); the swash a wet sand without a water film's sheen; the kernels
+    1:16 shore (a 30-40 m surf zone); a long swell's is wider. The swash is a wet sand without
+    a water film's sheen; the kernels
     (GPU) know neither the surf nor the swell, so such a sea is the CPU's. A black speckle at
     the shore was the sea's rays leaving from under it (its hit uncertain by centimetres, a
     sphere the planet's size), now offset by the hit's error.
+  - Breakers in relief (`Surf::height`, `breaker`): within the sea's displaced region
+    (`detail_center`, `detail_distance`) the surf's state is found once on a 1 m grid
+    (`Surf::with_grid`, `"surf_grid"`; a ray cast down per point, 5 s for 600 m square), and the
+    surface there is the trains' waves in place of the open sea's below the closure depth: a
+    peaked crest over flat troughs as they shoal, the front steepening near breaking, and once
+    broken a bore (a front 3% of the wavelength, the back falling away), its height γ d at
+    most, the mean level kept. Seen from the beach the breakers stand as lines of dark faces
+    under white crests. Not yet: an overhanging lip (a height field can't), the faces'
+    translucence, the waves moving with `time`. Put `detail_center` over the surf zone.
 - Found after merging master (closed basins, geology): on the alpine test site (30°N, in the
   subtropical dry belt) the closed basins cut nearly all of a patch's drainage (its largest
   catchment fell from 1500 to 37 km²), so it has no rivers; with `"evaporation": 0` they come

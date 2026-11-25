@@ -1027,6 +1027,9 @@ pub struct Ocean {
     /// For transparent water, its absorption per metre: shadow rays from under water pass up
     /// through the surface.
     pub absorption: Option<Color>,
+    /// The waves breaking over the shallows, drawn in relief where the surf has a grid
+    /// (`Surf::with_grid`), in place of the open sea's waves there.
+    pub surf: Option<Surf>,
 }
 
 impl Ocean {
@@ -1061,7 +1064,24 @@ impl Ocean {
         if a <= 0. {
             return altitude;
         }
-        altitude - a * self.waves.at(p.x, p.z).x
+        altitude - a * self.relief(p.x, p.z)
+    }
+
+    /// The waves' height at (x, z): the open sea's, giving way to the surf's in the shallows.
+    fn relief(&self, x: f64, z: f64) -> f64 {
+        let open = self.waves.at(x, z).x;
+        match self.surf.as_ref().and_then(|s| s.height(&Vector3::new(x, 0., z))) {
+            Some((eta, surf)) => open + (eta - open) * surf,
+            None => open,
+        }
+    }
+
+    /// The greatest height of the waves, and slope, open sea and surf together.
+    fn extent(&self) -> (f64, f64) {
+        match self.surf.as_ref().and_then(|s| s.grid.as_ref()) {
+            Some(g) => (self.waves.max_height.max(g.max_height), self.waves.max_slope + g.max_slope),
+            None => (self.waves.max_height, self.waves.max_slope),
+        }
     }
 
     /// The local vertical and horizontal axes (x and z at the origin).
@@ -1075,6 +1095,20 @@ impl Ocean {
     pub fn normal_at(&self, p: &Vector3<f64>) -> Vector3<f64> {
         let (up, x, z) = self.frame(p);
         let w = self.waves.at(p.x, p.z);
+        // In the surf, its slopes too, by differences across a few centimetres: the open sea's
+        // giving way to them.
+        if let Some(surf) = &self.surf {
+            let at = |dx: f64, dz: f64| surf.height(&Vector3::new(p.x + dx, 0., p.z + dz));
+            if let Some((_, b)) = at(0., 0.) && b > 0. {
+                let e = 0.02;
+                let lift = |v: Option<(f64, f64)>| v.map_or(0., |(eta, b)| eta * b);
+                let blend = |v: Option<(f64, f64)>| v.map_or(b, |(_, b)| b);
+                let (xp, xm, zp, zm) = (at(e, 0.), at(-e, 0.), at(0., e), at(0., -e));
+                let sx = (lift(xp) - lift(xm)) / (2. * e) + (1. - b) * w.y - w.x * (blend(xp) - blend(xm)) / (2. * e);
+                let sz = (lift(zp) - lift(zm)) / (2. * e) + (1. - b) * w.z - w.x * (blend(zp) - blend(zm)) / (2. * e);
+                return (up - x * sx - z * sz).normalize();
+            }
+        }
         (up - x * w.y - z * w.z).normalize()
     }
 
@@ -1126,7 +1160,8 @@ impl Ocean {
     /// ray refracted into the water comes back up through it), by stepping no further than the
     /// surface could move to meet the ray, then bisecting.
     fn march(&self, r: &Ray, t0: f64, t1: f64) -> Option<f64> {
-        let fade_rate = 1.5 / (0.5 * self.detail_distance) * self.waves.max_height;
+        let (max_height, max_slope) = self.extent();
+        let fade_rate = 1.5 / (0.5 * self.detail_distance) * max_height;
         // A ray leaving the surface starts on it: step off it first.
         let mut t = t0 + 1e-4;
         let start = self.above(&(r.ro + r.rd * t));
@@ -1138,7 +1173,7 @@ impl Ocean {
             // Towards the surface: down from above, up from below.
             let descent = (-side * r.rd.dot(&up)).max(0.);
             let horizontal = (1. - r.rd.dot(&up).powi(2)).max(0.).sqrt();
-            let rate = descent + horizontal * (self.waves.max_slope + fade_rate) + 1e-6;
+            let rate = descent + horizontal * (max_slope + fade_rate) + 1e-6;
             let step = (f / rate).max(0.01).min(t1 - t + 0.01);
             let next = t + step;
             let g = side * self.above(&(r.ro + r.rd * next));
@@ -1211,13 +1246,13 @@ impl Ocean {
 
 impl Geometry for Ocean {
     fn ocean(&self) -> Option<&Ocean> {
-        // (The kernels' sea has no swell yet: one with a swell is the CPU's.)
-        self.waves.swell.is_empty().then_some(self)
+        // (The kernels' sea has no swell or surf yet: one with either is the CPU's.)
+        (self.waves.swell.is_empty() && self.surf.is_none()).then_some(self)
     }
 
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let r = Ray { ro: r.ro, rd: r.rd.normalize() };
-        let h = self.waves.max_height;
+        let h = self.extent().0;
         let hit = |t: f64| {
             let point = r.ro + r.rd * t;
             Some(RawIntersection { face: 0, part: 0, dist: t, point, normal: self.normal_at(&point) })
@@ -1280,7 +1315,7 @@ impl Geometry for Ocean {
     fn transmits(&self) -> bool { self.absorption.is_some() }
 
     fn bounds(&self) -> BBox {
-        let h = self.waves.max_height;
+        let h = self.extent().0;
         match self.center() {
             Some(c) => {
                 let r = Vector3::repeat(self.planet_radius.unwrap() + h);
@@ -1429,6 +1464,8 @@ pub struct Surf {
     /// Each wave's height about the root-mean-square, varying along its crest and from wave to
     /// wave (wave groups).
     pub noise: crate::noise::PerlinNoise,
+    /// Its state found beforehand about where the sea is drawn in relief (`with_grid`).
+    pub grid: Option<std::sync::Arc<SurfGrid>>,
 }
 
 /// A train of waves arriving at the shore, as it is out at sea: its root-mean-square height
@@ -1442,64 +1479,262 @@ pub struct Train {
 }
 
 impl Surf {
-    /// The white water at `p`, 0 to 1, and the fraction of waves breaking there. In the surf
-    /// zone the waves are refracted: their crests swing round towards the depth contours, as the
-    /// part in deeper water outruns the part in shallower (Snell's law, sin θ / c the same
-    /// all the way in, over contours taken as straight and parallel), and their heights change
-    /// by K_r = √(cos θ₀ / cos θ) as the crests spread or bunch, as well as by shoaling. The
-    /// crests are laid out by their phase: across the shore, on Dean's profile (y = (d / A)^1.5
-    /// from the shore) in shallow water, S = ∫ k dy = 1.5 ω y^(2/3) / √(g A), so they follow the
-    /// depth contours (what angle Snell's law leaves them there is small). A wave, its height varying about the root-mean-square from wave
-    /// to wave and along its crest, breaks where that height reaches 0.78 of the depth, and is
-    /// white on its front and behind it with the foam it leaves, fading as it ages. Waves travelling away from the shore (an offshore wind's) never reach it:
-    /// none break.
-    pub fn white(&self, p: &Vector3<f64>) -> (f64, f64) {
-        let g = 9.81;
-        let Some(d) = (self.depth)(p) else { return (0., 0.) };
-        if d <= 0. { return (1., 1.); }
-        // Out to sea where the depth increases, from its slope across twenty metres (the
-        // ground's small bumps would turn it from point to point).
+    /// The water's depth at `p` and which way is out to sea there (from the depth's slope
+    /// across twenty metres: the ground's small bumps would turn it from point to point), from
+    /// the grid where it has them, else by asking the ground. None where it doesn't know; no
+    /// direction where the bed is flat, or over land.
+    fn bed(&self, p: &Vector3<f64>) -> Option<(f64, Option<Vector2<f64>>)> {
+        if let Some(g) = &self.grid && let Some(d) = g.depth(p.x, p.z) {
+            return Some((d, g.offshore(p.x, p.z)));
+        }
+        let d = (self.depth)(p)?;
+        if d <= 0. { return Some((d, None)); }
         let e = 10.;
         let at = |dx: f64, dz: f64| (self.depth)(&(p + Vector3::new(dx, 0., dz)));
-        let (Some(xp), Some(xm), Some(zp), Some(zm)) = (at(e, 0.), at(-e, 0.), at(0., e), at(0., -e)) else { return (0., 0.) };
+        let (Some(xp), Some(xm), Some(zp), Some(zm)) = (at(e, 0.), at(-e, 0.), at(0., e), at(0., -e)) else { return None };
         let gradient = Vector2::new(xp - xm, zp - zm) / (2. * e);
-        if gradient.norm() < 1e-6 { return (0., 0.); }
-        let offshore = gradient.normalize();
+        Some((d, (gradient.norm() >= 1e-6).then(|| gradient.normalize())))
+    }
+
+    /// Each train as it arrives in water `d` deep where `offshore` is out to sea: its
+    /// root-mean-square height grown by shoaling and refraction (0 for a train that never
+    /// reaches the shore), and the phase of its crests. In the surf zone the waves are
+    /// refracted: their crests swing round towards the depth contours, as the part in deeper
+    /// water outruns the part in shallower (Snell's law, sin θ / c the same all the way in,
+    /// over contours taken as straight and parallel), and their heights change by
+    /// K_r = √(cos θ₀ / cos θ) as the crests spread or bunch, as well as by shoaling. The crests
+    /// are laid out by their phase: across the shore, on Dean's profile (y = (d / A)^1.5 from
+    /// the shore) in shallow water, S = ∫ k dy = 1.5 ω y^(2/3) / √(g A), so they follow the
+    /// depth contours (what angle Snell's law leaves them there is small; an along-shore term
+    /// would need a coordinate along a shore that curves). Waves travelling away from the shore
+    /// (an offshore wind's) never reach it.
+    fn arriving(&self, d: f64, offshore: Vector2<f64>) -> Vec<(f64, f64)> {
+        let g = 9.81;
         let along = Vector2::new(-offshore.y, offshore.x);
         let y = (d / self.dean_a).powf(1.5);
-        // Each train as it arrives here: its height grown by shoaling and refraction, and the
-        // phase of its crests.
-        let arriving: Vec<(f64, f64, f64)> = self.trains.iter().filter_map(|w| {
-            // The angle it comes in at, out at sea, from the shore's normal.
+        self.trains.iter().map(|w| {
             let cos0 = w.heading.dot(&-offshore);
-            if cos0 <= 0.05 { return None; }
+            let phase = 1.5 * w.omega * y.powf(2. / 3.) / (g * self.dean_a).sqrt();
+            if cos0 <= 0.05 { return (0., phase); }
             let sin0 = w.heading.dot(&along);
             let k0 = w.omega * w.omega / g;
             let sin = (sin0 * k0 / wavenumber(w.omega, d)).clamp(-1., 1.);
             let refraction = (cos0 / (1. - sin * sin).sqrt().max(1e-3)).sqrt();
-            // (The crests follow the depth contours: by Snell's law what angle is left in the
-            // surf zone is small, and an along-shore term would need a coordinate along a shore
-            // that curves.)
-            let phase = 1.5 * w.omega * y.powf(2. / 3.) / (g * self.dean_a).sqrt();
-            Some((w.hrms * shoaling(w.omega, d) * refraction, phase, w.omega))
-        }).collect();
+            (w.hrms * shoaling(w.omega, d) * refraction, phase)
+        }).collect()
+    }
+
+    /// The surf at `p`: the depth, and each train's height and phase there (`arriving`), from
+    /// the grid where it has them. None where the depth isn't known, or no train arrives.
+    fn state(&self, p: &Vector3<f64>) -> Option<(f64, Vec<(f64, f64)>)> {
+        if let Some(g) = &self.grid && let Some(s) = g.state(p.x, p.z) {
+            return Some(s);
+        }
+        let (d, offshore) = self.bed(p)?;
+        if d <= 0. { return Some((d, vec![])); }
+        Some((d, self.arriving(d, offshore?)))
+    }
+
+    /// A wave's height at `p` in train `k`, of root-mean-square `h` there, at `phase`: varying
+    /// about the root-mean-square from wave to wave (wave groups) and along its crest, smoothly
+    /// with the phase, so that the surface does too.
+    fn wave_height(&self, p: &Vector3<f64>, k: usize, h: f64, phase: f64) -> f64 {
+        let n = 0.5 + 0.5 * self.noise.noise(p.x / 40., p.z / 40., phase / std::f64::consts::TAU * 0.37 + 7.1 * k as f64);
+        h * (0.4 + 1.2 * n)
+    }
+
+    /// The white water at `p`, 0 to 1, and the fraction of waves breaking there. A wave, its
+    /// height varying about the root-mean-square from wave to wave and along its crest, breaks
+    /// where that height reaches 0.78 of the depth, and is white on its front and behind it
+    /// with the foam it leaves, fading as it ages. Over land, all white.
+    pub fn white(&self, p: &Vector3<f64>) -> (f64, f64) {
+        let Some((d, arriving)) = self.state(p) else { return (0., 0.) };
+        if d <= 0. { return (1., 1.); }
         // The fraction breaking, of the trains together (their energies add).
         let hrms = arriving.iter().map(|a| a.0 * a.0).sum::<f64>().sqrt();
+        if hrms <= 0. { return (0., 0.); }
         let breaking = breaking_fraction(hrms, d);
         if breaking <= 0. { return (0., 0.); }
-        let white = arriving.iter().enumerate().map(|(k, &(h, phase, omega))| {
-            // This wave's height here, about the train's root-mean-square.
-            let wave = (phase / std::f64::consts::TAU).floor();
-            let n = 0.5 + 0.5 * self.noise.noise(p.x / 40., p.z / 40., wave * 0.37 + 7.1 * k as f64);
-            let height = h * (0.4 + 1.2 * n);
+        let white = arriving.iter().enumerate().filter(|a| a.1.0 > 0.).map(|(k, &(h, phase))| {
+            let height = self.wave_height(p, k, h, phase);
             // A broken wave's foam: the roller on its front, and behind it (seaward: the phase
             // grows out to sea) the foam it left as it passed, as old as the phase since its
             // crest over ω, fading as the whitecaps' does (`FOAM_DECAY`); so the inner surf
             // zone, where every wave breaks, stays about half white between them.
-            let age = (phase / std::f64::consts::TAU).rem_euclid(1.) * std::f64::consts::TAU / omega;
-            crate::math::smoothstep(0.95, 1.05, height / (BREAKING_INDEX * d)) * (-age / FOAM_DECAY).exp()
+            let u = (phase / std::f64::consts::TAU).rem_euclid(1.);
+            let age = u * std::f64::consts::TAU / self.trains[k].omega;
+            // The roller rides the front face, the last few hundredths of the cycle before the
+            // crest.
+            let roller = crate::math::smoothstep(1. - 2. * BORE_FRONT, 1. - 0.5 * BORE_FRONT, u);
+            crate::math::smoothstep(0.95, 1.05, height / (BREAKING_INDEX * d)) * (-age / FOAM_DECAY).exp().max(roller)
         }).fold(0., f64::max);
         (white, breaking)
+    }
+
+    /// The surface's height at `p` (m, about the mean sea) from the waves in the surf, and how
+    /// much they take the place of the open sea's (`Ocean::above`), from the grid only (None
+    /// beyond it). Each wave rises as it shoals into a peaked crest between long flat troughs,
+    /// its front steepening as it nears breaking (by `breaker`), and once broken runs in as a
+    /// bore, a steep front of white water with the water behind it falling away, its height
+    /// limited by the depth (γ d); where the water is deeper than the shoreface they fade
+    /// back into the open sea's waves.
+    pub fn height(&self, p: &Vector3<f64>) -> Option<(f64, f64)> {
+        let (d, arriving) = self.grid.as_ref()?.state(p.x, p.z)?;
+        if d <= 0. { return Some((0., 1.)); }
+        let surf = 1. - crate::math::smoothstep(0.3 * crate::terrain::scenery::CLOSURE_DEPTH, crate::terrain::scenery::CLOSURE_DEPTH, d);
+        if surf <= 0. { return Some((0., 0.)); }
+        let eta = arriving.iter().enumerate().filter(|a| a.1.0 > 0.).map(|(k, &(h, phase))| {
+            let height = self.wave_height(p, k, h, phase);
+            let steep = height / (BREAKING_INDEX * d);
+            let broken = crate::math::smoothstep(0.95, 1.05, steep);
+            let u = (phase / std::f64::consts::TAU).rem_euclid(1.);
+            height.min(BREAKING_INDEX * d) * breaker(u, steep.min(1.), broken)
+        }).sum::<f64>();
+        Some((eta, surf))
+    }
+}
+
+/// The bore's front, as a fraction of the wave's length: a metre or so in the inner surf.
+const BORE_FRONT: f64 = 0.03;
+/// How fast the water behind a bore falls away, as a fraction of the wave's length.
+const BORE_BACK: f64 = 0.35;
+
+/// A wave in the surf's elevation, in units of its height, about its mean (so the sea's mean
+/// level stays put), at `u` of the cycle from its crest (seaward: the crest ahead of it, the
+/// shoreward one, at 0, the one behind at 1). Unbroken, as it shoals: a peaked crest over long
+/// flat troughs, like a cnoidal wave, its front (towards 1) steepening by `steep`, its height
+/// over the most the water holds; broken (`broken`, 0 to 1), a bore: a steep front, and behind
+/// it the water falling away in a long tail (as the surf zone's measured sawtooth waves).
+pub fn breaker(u: f64, steep: f64, broken: f64) -> f64 {
+    let half = std::f64::consts::PI.sqrt() / 2.;
+    let gauss = |x: f64, w: f64| (-(x / w).powi(2)).exp();
+    let (wb, wf) = (0.3, 0.3 * (1. - 0.6 * steep.clamp(0., 1.)));
+    // (Over its height, crest to trough: the two halves meet about where their widths share
+    // the cycle.)
+    let meet = wb / (wb + wf);
+    let trough = gauss(meet, wb) + gauss(1. - meet, wf);
+    let unbroken = (gauss(u, wb) + gauss(1. - u, wf) - (wb + wf) * half) / (1. - trough);
+    let tail = (-1. / BORE_BACK).exp();
+    let back = ((-u / BORE_BACK).exp() - tail) / (1. - tail);
+    let back_mean = (BORE_BACK * (1. - tail) - tail) / (1. - tail);
+    let bore = back + gauss(1. - u, BORE_FRONT) - back_mean - BORE_FRONT * half;
+    unbroken + (bore - unbroken) * broken.clamp(0., 1.)
+}
+
+/// The surf's state on a grid about the sea's detail centre, where the sea's surface is drawn
+/// in relief: the depth, and each train's height and phase (`Surf::arriving`), each found once,
+/// so that the surface can be asked for its height many times along a ray.
+pub struct SurfGrid {
+    /// The grid's corner (x, z), its spacing and how many points a side.
+    corner: Vector2<f64>,
+    step: f64,
+    n: usize,
+    /// At each point the depth (NaN where unknown), the way out to sea (x, z; zero where there
+    /// is none) and each train's height and phase.
+    cells: Vec<f64>,
+    trains: usize,
+    /// Bounds on the surf's height (m) and slope, for marching rays to the surface.
+    pub max_height: f64,
+    pub max_slope: f64,
+}
+
+impl SurfGrid {
+    fn stride(&self) -> usize { 3 + 2 * self.trains }
+
+    /// Bilinear weights and the cells' indices about (x, z), if inside.
+    fn corners(&self, x: f64, z: f64) -> Option<([usize; 4], [f64; 4])> {
+        let fx = (x - self.corner.x) / self.step;
+        let fz = (z - self.corner.y) / self.step;
+        if !(fx >= 0. && fz >= 0.) { return None; }
+        let (i, j) = (fx.floor() as usize, fz.floor() as usize);
+        if i + 1 >= self.n || j + 1 >= self.n { return None; }
+        let (a, b) = (fx - i as f64, fz - j as f64);
+        let at = |i: usize, j: usize| (j * self.n + i) * self.stride();
+        Some(([at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)], [(1. - a) * (1. - b), a * (1. - b), (1. - a) * b, a * b]))
+    }
+
+    fn lerp(&self, (idx, w): &([usize; 4], [f64; 4]), field: usize) -> f64 {
+        (0..4).map(|c| self.cells[idx[c] + field] * w[c]).sum()
+    }
+
+    fn depth(&self, x: f64, z: f64) -> Option<f64> {
+        let c = self.corners(x, z)?;
+        let d = self.lerp(&c, 0);
+        d.is_finite().then_some(d)
+    }
+
+    fn offshore(&self, x: f64, z: f64) -> Option<Vector2<f64>> {
+        let c = self.corners(x, z)?;
+        let o = Vector2::new(self.lerp(&c, 1), self.lerp(&c, 2));
+        (o.norm() > 1e-6).then(|| o.normalize())
+    }
+
+    fn state(&self, x: f64, z: f64) -> Option<(f64, Vec<(f64, f64)>)> {
+        let c = self.corners(x, z)?;
+        let d = self.lerp(&c, 0);
+        if !d.is_finite() { return None; }
+        Some((d, (0..self.trains).map(|k| (self.lerp(&c, 3 + 2 * k), self.lerp(&c, 4 + 2 * k))).collect()))
+    }
+}
+
+impl Surf {
+    /// This surf with its state found on a grid of `step` metres over the square `half` metres
+    /// about `centre` (x, z), and bounds on the surface it makes there.
+    pub fn with_grid(mut self, centre: Vector2<f64>, half: f64, step: f64) -> Surf {
+        use rayon::prelude::*;
+        // Ten metres more about it, for the depth's slope at its edges.
+        let margin = (10. / step).ceil() as usize;
+        let inner = (2. * half / step).ceil() as usize + 1;
+        let m = inner + 2 * margin;
+        let corner = centre - Vector2::new(half, half) - Vector2::new(1., 1.) * (margin as f64 * step);
+        let sea_level = |x: f64, z: f64| Vector3::new(x, 0., z);
+        let depths: Vec<f64> = (0..m * m).into_par_iter().map(|c| {
+            let (i, j) = (c % m, c / m);
+            (self.depth)(&sea_level(corner.x + i as f64 * step, corner.y + j as f64 * step)).unwrap_or(f64::NAN)
+        }).collect();
+        let trains = self.trains.len();
+        let stride = 3 + 2 * trains;
+        let e = margin;
+        let cells: Vec<Vec<f64>> = (0..inner * inner).into_par_iter().map(|c| {
+            let (i, j) = (c % inner + margin, c / inner + margin);
+            let at = |i: usize, j: usize| depths[j * m + i];
+            let d = at(i, j);
+            let mut cell = vec![d, 0., 0.];
+            let gradient = Vector2::new(at(i + e, j) - at(i - e, j), at(i, j + e) - at(i, j - e));
+            let offshore = (d > 0. && gradient.norm() > 1e-6 * step * e as f64).then(|| gradient.normalize());
+            match offshore {
+                Some(o) if d.is_finite() => {
+                    cell[1] = o.x;
+                    cell[2] = o.y;
+                    for (h, phase) in self.arriving(d, o) { cell.push(h); cell.push(phase); }
+                },
+                _ => cell.extend(std::iter::repeat_n(0., 2 * trains)),
+            }
+            cell
+        }).collect();
+        // Bounds: each wave no higher than 1.6 times its train's root-mean-square or the most
+        // the water holds, and its slope no more than its bore's front's, the steepest part
+        // of the waveform (`breaker`), over its length here.
+        let front = 1. / (BORE_FRONT * std::f64::consts::FRAC_1_SQRT_2 * (0.5f64).exp());
+        let (mut max_height, mut max_slope) = (0f64, 0f64);
+        for cell in &cells {
+            let d = cell[0];
+            if d.is_nan() || d <= 0. || d > crate::terrain::scenery::CLOSURE_DEPTH { continue; }
+            let (mut h, mut s) = (0., 0.);
+            for (k, w) in self.trains.iter().enumerate() {
+                let height = (1.6 * cell[3 + 2 * k]).min(BREAKING_INDEX * d);
+                h += height;
+                s += height * front * wavenumber(w.omega, d) / std::f64::consts::TAU;
+            }
+            max_height = max_height.max(h);
+            max_slope = max_slope.max(s);
+        }
+        self.grid = Some(std::sync::Arc::new(SurfGrid {
+            corner: centre - Vector2::new(half, half), step, n: inner, cells: cells.concat(), trains,
+            max_height: 1.2 * max_height, max_slope: 1.5 * max_slope,
+        }));
+        debug_assert_eq!(self.grid.as_ref().unwrap().cells.len(), inner * inner * stride);
+        self
     }
 }
 
@@ -2023,6 +2258,54 @@ pub fn create_ocean_over(opts: &Value, ground: Option<std::sync::Arc<crate::scen
     let waves = waves_of(opts);
     let radius = SceneFile::parse_number(&opts["planet_radius"], crate::planet::EARTH_RADIUS);
     let planet_radius = (radius > 0.).then_some(radius);
+    let detail_center = SceneFile::parse_vec2_def(opts, "detail_center", Vector2::zeros());
+    let detail_distance = SceneFile::parse_number(&opts["detail_distance"], 300.).max(1.);
+    let surf = ground.map(|ground| {
+        // The waves' height as they arrive: the open sea's significant height, four times
+        // its surface's standard deviation; H_rms = H_s / √2 for Rayleigh-distributed waves.
+        let (_, sd) = waves.height_exceeded(0.5);
+        let hrms = 4. * sd / 2f64.sqrt();
+        // Their period: the spectrum's peak, the fully developed sea's or a younger one's
+        // over the fetch (`jonswap_peak`), as deep-water waves: ω² = 2π g / λ.
+        let fetch = SceneFile::parse_number(&opts["fetch"], f64::INFINITY);
+        let omega = (2. * std::f64::consts::PI * 9.81 / jonswap_peak(wind.norm(), fetch.min(1e12))).sqrt();
+        let centre = planet_radius.map(|r| Vector3::new(0., -r, 0.));
+        let (above, reach) = (200., 2000.);
+        // And any swell: waves raised by a distant storm, longer and often higher than the
+        // wind's own (`"swell": {"height", "period", "direction"}`: significant height, m;
+        // period, s; the way it travels, x and z).
+        let mut trains = vec![];
+        if wind.norm() > 0.1 { trains.push(Train { hrms, omega, heading: wind.normalize() }); }
+        let swell = &opts["swell"];
+        if swell.is_object() {
+            let height = SceneFile::parse_number(&swell["height"], 1.).max(0.);
+            let period = SceneFile::parse_number(&swell["period"], 10.).max(1.);
+            let heading = SceneFile::parse_vec2_def(swell, "direction", Vector2::new(-1., 0.));
+            if height > 0. && heading.norm() > 0. {
+                trains.push(Train { hrms: height / 2f64.sqrt(), omega: std::f64::consts::TAU / period, heading: heading.normalize() });
+            }
+        }
+        let surf = Surf { trains, dean_a: crate::terrain::scenery::dean_a(crate::terrain::scenery::BEACH_SAND),
+            noise: crate::noise::PerlinNoise::shuffled(0x5afe), grid: None, depth: std::sync::Arc::new(move |p: &Vector3<f64>| {
+            // Sea level under `p`, and the ground below it.
+            let (up, level) = match centre {
+                Some(c) => { let u = (p - c).normalize(); (u, c + u * (-c.y)) },
+                None => (Vector3::y(), Vector3::new(p.x, 0., p.z)),
+            };
+            let ray = Ray { ro: level + up * above, rd: -up };
+            let hit = ground.geometry.intersects(&ray)?;
+            (hit.dist <= above + reach).then_some(hit.dist - above)
+        }) };
+        // Where the sea is drawn in relief, the surf's state on a grid a metre apart
+        // (`"surf_grid"`), so that its waves stand up there.
+        let step = SceneFile::parse_number(&opts["surf_grid"], 1.).max(0.05);
+        let started = web_time::Instant::now();
+        let surf = surf.with_grid(detail_center, detail_distance, step);
+        let g = surf.grid.as_ref().unwrap();
+        crate::world::report(&crate::world::Progress::note("ocean", format!("Ocean: the surf about [{:.0}, {:.0}] on a grid of {} m in {:.1}s: waves up to {:.2} m high, slopes up to {:.2}",
+            detail_center.x, detail_center.y, step, started.elapsed().as_secs_f64(), g.max_height, g.max_slope)));
+        surf
+    });
     let material: Box<dyn MaterialModel + Sync + Send> = if opts["debug"].as_bool() == Some(true) {
         Box::new(NormalShade {})
     } else {
@@ -2032,52 +2315,10 @@ pub fn create_ocean_over(opts: &Value, ground: Option<std::sync::Arc<crate::scen
         if coverage > 0. {
             m.foam = Some(Foam::new(waves_of(opts), wind, coverage, SceneFile::parse_color_def(opts, "foam_albedo", Color::new(0.6, 0.6, 0.6))));
         }
-        if let Some(ground) = ground {
-            // The waves' height as they arrive: the open sea's significant height, four times
-            // its surface's standard deviation; H_rms = H_s / √2 for Rayleigh-distributed waves.
-            let (_, sd) = waves.height_exceeded(0.5);
-            let hrms = 4. * sd / 2f64.sqrt();
-            // Their period: the spectrum's peak, the fully developed sea's or a younger one's
-            // over the fetch (`jonswap_peak`), as deep-water waves: ω² = 2π g / λ.
-            let fetch = SceneFile::parse_number(&opts["fetch"], f64::INFINITY);
-            let omega = (2. * std::f64::consts::PI * 9.81 / jonswap_peak(wind.norm(), fetch.min(1e12))).sqrt();
-            let centre = planet_radius.map(|r| Vector3::new(0., -r, 0.));
-            let (above, reach) = (200., 2000.);
-            // And any swell: waves raised by a distant storm, longer and often higher than the
-            // wind's own (`"swell": {"height", "period", "direction"}`: significant height, m;
-            // period, s; the way it travels, x and z).
-            let mut trains = vec![];
-            if wind.norm() > 0.1 { trains.push(Train { hrms, omega, heading: wind.normalize() }); }
-            let swell = &opts["swell"];
-            if swell.is_object() {
-                let height = SceneFile::parse_number(&swell["height"], 1.).max(0.);
-                let period = SceneFile::parse_number(&swell["period"], 10.).max(1.);
-                let heading = SceneFile::parse_vec2_def(swell, "direction", Vector2::new(-1., 0.));
-                if height > 0. && heading.norm() > 0. {
-                    trains.push(Train { hrms: height / 2f64.sqrt(), omega: std::f64::consts::TAU / period, heading: heading.normalize() });
-                }
-            }
-            m.surf = Some(Surf { trains, dean_a: crate::terrain::scenery::dean_a(crate::terrain::scenery::BEACH_SAND),
-                noise: crate::noise::PerlinNoise::shuffled(0x5afe), depth: std::sync::Arc::new(move |p: &Vector3<f64>| {
-                // Sea level under `p`, and the ground below it.
-                let (up, level) = match centre {
-                    Some(c) => { let u = (p - c).normalize(); (u, c + u * (-c.y)) },
-                    None => (Vector3::y(), Vector3::new(p.x, 0., p.z)),
-                };
-                let ray = Ray { ro: level + up * above, rd: -up };
-                let hit = ground.geometry.intersects(&ray)?;
-                (hit.dist <= above + reach).then_some(hit.dist - above)
-            }) });
-        }
+        m.surf = surf.clone();
         Box::new(m)
     };
-    let ocean = Ocean {
-        planet_radius,
-        waves,
-        detail_center: SceneFile::parse_vec2_def(opts, "detail_center", Vector2::zeros()),
-        detail_distance: SceneFile::parse_number(&opts["detail_distance"], 300.).max(1.),
-        absorption: absorption(opts),
-    };
+    let ocean = Ocean { planet_radius, waves, detail_center, detail_distance, absorption: absorption(opts), surf };
     SceneObject { geometry: Box::new(ocean), medium: Box::new(Solid { m: material }) }
 }
 
@@ -2098,6 +2339,7 @@ pub fn surface(opts: &Value) -> std::sync::Arc<Ocean> {
         detail_center: SceneFile::parse_vec2_def(opts, "detail_center", Vector2::zeros()),
         detail_distance: SceneFile::parse_number(&opts["detail_distance"], 300.).max(1.),
         absorption: absorption(opts),
+        surf: None,
     });
     cache.lock().unwrap().insert(key, ocean.clone());
     ocean
@@ -2123,6 +2365,7 @@ mod curved_tests {
             detail_center: Vector2::zeros(),
             detail_distance: 300.,
             absorption: None,
+            surf: None,
         }
     }
 
@@ -2230,7 +2473,7 @@ mod curved_tests {
         let a = crate::terrain::scenery::dean_a(0.3);
         let beach = |trains: Vec<Train>| Surf {
             depth: std::sync::Arc::new(move |p: &Vector3<f64>| Some(a * p.x.max(0.).powf(2. / 3.))),
-            trains, dean_a: a, noise: crate::noise::PerlinNoise::shuffled(1),
+            trains, dean_a: a, noise: crate::noise::PerlinNoise::shuffled(1), grid: None,
         };
         let train = |hrms: f64, period: f64, heading: Vector2<f64>| Train { hrms, omega: std::f64::consts::TAU / period, heading: heading.normalize() };
         let surf = |heading: Vector2<f64>| beach(vec![train(0.84, 5.3, heading)]);
@@ -2270,6 +2513,74 @@ mod curved_tests {
     }
 
     #[test]
+    fn test_breakers_stand_up_and_run_in_as_bores() {
+        let n = 20000;
+        let at = |i: usize| (i as f64 + 0.5) / n as f64;
+        for (steep, broken) in [(0.2, 0.), (0.9, 0.), (1., 0.5), (1., 1.)] {
+            let f = |u: f64| breaker(u, steep, broken);
+            // The sea's mean level stays where it was.
+            let mean = (0..n).map(|i| f(at(i))).sum::<f64>() / n as f64;
+            assert!(mean.abs() < 0.01, "{} at {} {}", mean, steep, broken);
+            // Continuous through the crest (the cycle's ends), and highest there.
+            assert!((f(1e-9) - f(1. - 1e-9)).abs() < 0.02, "{} {}", f(1e-9), f(1. - 1e-9));
+            assert!((0..n).all(|i| f(at(i)) <= f(0.) + 1e-3));
+            // A crest over a flat trough, a wave's height high (in units of it).
+            let range = f(0.) - (0..n).map(|i| f(at(i))).fold(f64::INFINITY, f64::min);
+            assert!((range - 1.).abs() < 0.05, "{}", range);
+        }
+        // The steepest slope of the front (towards 1) and of the back.
+        let slopes = |steep: f64, broken: f64| {
+            let d = |i: usize| (breaker(at(i + 1), steep, broken) - breaker(at(i), steep, broken)) * n as f64;
+            ((n / 2..n - 1).map(d).fold(0., f64::max), (0..n / 2).map(d).fold(0., f64::min).abs())
+        };
+        // Gentle and nearly even far from breaking; steeper in front near it; a bore's front
+        // a wall beside its back.
+        let (calm, near, bore) = (slopes(0.2, 0.), slopes(0.95, 0.), slopes(1., 1.));
+        assert!(calm.0 < 1.5 * calm.1, "{:?}", calm);
+        assert!(near.0 > 1.8 * near.1 && near.0 > 1.5 * calm.0, "{:?} {:?}", near, calm);
+        assert!(bore.0 > 5. * bore.1, "{:?}", bore);
+    }
+
+    #[test]
+    fn test_the_surf_stands_up_over_the_shallows() {
+        // A straight beach of Dean's profile, the sea out along +x, a 1.5 m, 11 s swell coming
+        // straight in, the surf found on a grid about the beach.
+        let a = crate::terrain::scenery::dean_a(0.3);
+        let swell = Train { hrms: 1.5 / 2f64.sqrt(), omega: std::f64::consts::TAU / 11., heading: Vector2::new(-1., 0.) };
+        let surf = Surf {
+            depth: std::sync::Arc::new(move |p: &Vector3<f64>| Some(a * p.x.max(0.).powf(2. / 3.))),
+            trains: vec![swell], dean_a: a, noise: crate::noise::PerlinNoise::shuffled(1), grid: None,
+        }.with_grid(Vector2::new(150., 0.), 150., 1.);
+        let g = surf.grid.as_ref().unwrap();
+        assert!(g.max_height > 0.5 && g.max_height < 5., "{}", g.max_height);
+        // The grid gives what asking the ground does.
+        let p = Vector3::new(83.3, 0., 17.6);
+        let (w, exact) = (surf.white(&p), Surf { grid: None, ..surf.clone() }.white(&p));
+        assert!((w.1 - exact.1).abs() < 0.02, "{:?} {:?}", w, exact);
+        // The surface: crests and troughs across the surf zone, none over land, and none higher
+        // than the water there holds.
+        let heights: Vec<(f64, f64)> = (0..2800).map(|i| {
+            let x = 0.1 * i as f64;
+            (x, surf.height(&Vector3::new(x, 0., 3.)).map_or(0., |(eta, b)| eta * b))
+        }).collect();
+        let span = |lo: f64, hi: f64| {
+            let v: Vec<f64> = heights.iter().filter(|h| h.0 >= lo && h.0 < hi).map(|h| h.1).collect();
+            v.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - v.iter().cloned().fold(f64::INFINITY, f64::min)
+        };
+        assert!(span(20., 150.) > 0.5, "{}", span(20., 150.));
+        assert!(heights.iter().all(|&(x, h)| h <= BREAKING_INDEX * a * x.powf(2. / 3.) + 0.05), "too high");
+        // An ocean with it has the surf's relief, and is the CPU's.
+        let ocean = Ocean { planet_radius: None, waves: WaveField::sea(Vector2::new(1., 0.), 0., 1, SeaState::default()),
+            detail_center: Vector2::new(150., 0.), detail_distance: 300., absorption: None, surf: Some(surf) };
+        assert!(ocean.ocean().is_none());
+        let hit = |x: f64| ocean.intersects(&Ray { ro: Vector3::new(x, 20., 3.), rd: -Vector3::y() }).map(|h| 20. - h.dist);
+        let crest = heights.iter().filter(|h| h.0 > 20. && h.0 < 150.).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+        let expect = ocean.relief(crest.0, 3.);
+        assert!(expect > ocean.waves.at(crest.0, 3.).x + 0.2, "{}", expect);
+        assert!((hit(crest.0).unwrap() - expect).abs() < 0.2, "{:?} {}", hit(crest.0), expect);
+    }
+
+    #[test]
     fn test_a_swell_rolls_in_long_crests() {
         // A 2 m, 12 s swell on an almost calm sea: its height is the one asked for.
         let calm = WaveField::sea(Vector2::new(1., 0.), 0., 1, SeaState::default());
@@ -2294,7 +2605,7 @@ mod curved_tests {
         }
         assert!(along > 3. * across, "{} {}", along, across);
         // And such a sea is the CPU's (the kernels have no swell).
-        let ocean = Ocean { planet_radius: None, waves: swell, detail_center: Vector2::zeros(), detail_distance: 300., absorption: None };
+        let ocean = Ocean { planet_radius: None, waves: swell, detail_center: Vector2::zeros(), detail_distance: 300., absorption: None, surf: None };
         assert!(ocean.ocean().is_none());
     }
 

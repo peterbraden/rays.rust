@@ -4441,52 +4441,52 @@
         "inputs": [
           {
             "node": "fractal",
-            "scale": 3,
+            "scale": 2.7403,
             "seed": 601,
             "style": "billow",
-            "smallest": 0.004,
-            "amplitude": 0.05,
-            "roughness": 0.55
+            "smallest": 0.0027,
+            "amplitude": 0.0322,
+            "roughness": 0.6028
           },
           {
             "node": "fractal",
-            "scale": 0.02,
+            "scale": 0.0796,
             "seed": 602,
-            "smallest": 0.002,
-            "amplitude": 0.0015
+            "smallest": 0.0056,
+            "amplitude": 0.0017
           }
         ]
       },
       "mottle": {
         "node": "fractal",
-        "scale": 4,
+        "scale": 8.4829,
         "seed": 603,
-        "smallest": 0.01,
-        "roughness": 0.55
+        "smallest": 0.0051,
+        "roughness": 0.7871
       },
       "crystals": {
         "node": "warp",
-        "amount": 0.0015,
-        "scale": 0.006,
+        "amount": 0.0005,
+        "scale": 0.0021,
         "seed": 605,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.005,
+          "scale": 0.0174,
           "seed": 604
         }
       },
       "stains": {
         "node": "smoothstep",
-        "from": 0.15,
-        "to": 0.45,
+        "from": 0.4032,
+        "to": 0.5486,
         "input": {
           "node": "fractal",
-          "scale": 15,
+          "scale": 7.3048,
           "seed": 606,
-          "smallest": 0.1,
-          "roughness": 0.6
+          "smallest": 0.2183,
+          "roughness": 0.6407
         }
       },
       "streaks": {
@@ -4498,22 +4498,22 @@
             "to": 70,
             "breakup": {
               "node": "fractal",
-              "scale": 5,
+              "scale": 17.617,
               "seed": 607,
-              "amplitude": 10
+              "amplitude": 11.866
             }
           },
           {
             "node": "smoothstep",
-            "from": 0.05,
-            "to": 0.35,
+            "from": 0.0265,
+            "to": 0.4341,
             "input": {
               "node": "fractal",
-              "scale": 1.5,
+              "scale": 2.0301,
               "seed": 608,
               "plan": true,
-              "smallest": 0.01,
-              "roughness": 0.6
+              "smallest": 0.0122,
+              "roughness": 0.7216
             }
           }
         ]
@@ -4528,26 +4528,26 @@
           },
           {
             "node": "smoothstep",
-            "from": 0.05,
-            "to": 0.12,
+            "from": 0.2449,
+            "to": 0.0025,
             "input": {
               "node": "add",
               "inputs": [
                 {
                   "node": "fractal",
-                  "scale": 2,
+                  "scale": 0.5543,
                   "seed": 609,
-                  "smallest": 0.01
+                  "smallest": 0.0213
                 },
                 {
                   "node": "multiply",
                   "inputs": [
-                    0.5,
+                    0.9195,
                     {
                       "node": "fractal",
-                      "scale": 0.1,
+                      "scale": 0.0642,
                       "seed": 610,
-                      "smallest": 0.003
+                      "smallest": 0.0011
                     }
                   ]
                 }
@@ -4566,29 +4566,29 @@
           },
           {
             "node": "smoothstep",
-            "from": 0.1,
-            "to": 0.3,
+            "from": 0.1459,
+            "to": 0.5999,
             "input": {
               "node": "fractal",
-              "scale": 4,
+              "scale": 14.128,
               "seed": 611,
-              "smallest": 0.5
+              "smallest": 0.4921
             }
           },
           {
             "node": "smoothstep",
-            "from": 0.5,
-            "to": 0.42,
+            "from": 0.3721,
+            "to": 0.3279,
             "input": {
               "node": "warp",
-              "amount": 0.03,
-              "scale": 0.08,
+              "amount": 0.0468,
+              "scale": 0.0712,
               "seed": 613,
               "octaves": 2,
               "input": {
                 "node": "cells",
                 "style": "f1",
-                "scale": 0.1,
+                "scale": 0.0833,
                 "seed": 612
               }
             }
@@ -4606,12 +4606,12 @@
               "pattern": "$mottle",
               "color_map": [
                 [
-                  -0.6,
+                  -0.2216,
                   {
                     "pattern": "$crystals",
                     "color_map": [
                       [
-                        0,
+                        0.002,
                         [
                           0.14,
                           0.135,
@@ -4619,15 +4619,15 @@
                         ]
                       ],
                       [
-                        0.25,
+                        0.129,
                         [
-                          0.26,
-                          0.255,
-                          0.25
+                          0.1308,
+                          0.1293,
+                          0.0678
                         ]
                       ],
                       [
-                        0.6,
+                        0.3068,
                         [
                           0.33,
                           0.31,
@@ -4635,23 +4635,23 @@
                         ]
                       ],
                       [
-                        1,
+                        0.51,
                         [
-                          0.4,
-                          0.37,
-                          0.34
+                          0.013,
+                          0.0059,
+                          0.003
                         ]
                       ]
                     ]
                   }
                 ],
                 [
-                  0.6,
+                  0.4978,
                   {
                     "pattern": "$crystals",
                     "color_map": [
                       [
-                        0,
+                        -0.1598,
                         [
                           0.17,
                           0.165,
@@ -4659,15 +4659,15 @@
                         ]
                       ],
                       [
-                        0.25,
+                        0.0902,
                         [
-                          0.33,
-                          0.32,
-                          0.31
+                          0.2865,
+                          0.2818,
+                          0.246
                         ]
                       ],
                       [
-                        0.6,
+                        0.4403,
                         [
                           0.42,
                           0.4,
@@ -4675,11 +4675,11 @@
                         ]
                       ],
                       [
-                        1,
+                        0.8404,
                         [
-                          0.5,
-                          0.47,
-                          0.43
+                          0.4063,
+                          0.3864,
+                          0.3211
                         ]
                       ]
                     ]
@@ -4699,12 +4699,12 @@
             "albedo": {
               "pattern": {
                 "node": "fractal",
-                "scale": 2,
+                "scale": 0.5921,
                 "seed": 614
               },
               "color_map": [
                 [
-                  -0.5,
+                  -0.4013,
                   [
                     0.3,
                     0.2,
@@ -4712,7 +4712,7 @@
                   ]
                 ],
                 [
-                  0.5,
+                  0.3796,
                   [
                     0.42,
                     0.3,
@@ -4723,7 +4723,7 @@
             }
           },
           "mask": "$stains",
-          "coverage": 0.6
+          "coverage": 0.0267
         },
         {
           "material": {
@@ -4743,31 +4743,31 @@
             "albedo": {
               "pattern": {
                 "node": "fractal",
-                "scale": 0.05,
+                "scale": 0.1132,
                 "seed": 615
               },
               "color_map": [
                 [
-                  -0.5,
+                  -0.3812,
                   [
-                    0.38,
-                    0.39,
-                    0.36
+                    0.0043,
+                    0.003,
+                    0.003
                   ]
                 ],
                 [
-                  0.5,
+                  0.5796,
                   [
-                    0.55,
-                    0.56,
-                    0.52
+                    0.1181,
+                    0.0685,
+                    0.0403
                   ]
                 ]
               ]
             }
           },
           "mask": "$grey_lichen",
-          "coverage": 0.7
+          "coverage": 0.9496
         },
         {
           "material": {
@@ -4776,12 +4776,12 @@
               "pattern": {
                 "node": "cells",
                 "style": "edges",
-                "scale": 0.004,
+                "scale": 0.0096,
                 "seed": 616
               },
               "color_map": [
                 [
-                  0,
+                  -0.3292,
                   [
                     0.03,
                     0.03,
@@ -4789,7 +4789,7 @@
                   ]
                 ],
                 [
-                  0.08,
+                  -0.1694,
                   [
                     0.03,
                     0.03,
@@ -4797,7 +4797,7 @@
                   ]
                 ],
                 [
-                  0.14,
+                  -0.0495,
                   [
                     0.5,
                     0.56,
@@ -4805,7 +4805,7 @@
                   ]
                 ],
                 [
-                  0.5,
+                  0.6696,
                   [
                     0.6,
                     0.66,
@@ -5007,7 +5007,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved+free",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "variables.relief.inputs.0.scale": 2.7403,
             "variables.relief.inputs.0.smallest": 0.0027,
@@ -5102,11 +5102,13 @@
             "material.layers.4.material.albedo.color_map.0.0": -0.3292,
             "material.layers.4.material.albedo.color_map.1.0": -0.1694,
             "material.layers.4.material.albedo.color_map.2.0": -0.0495,
-            "material.layers.4.material.albedo.color_map.3.0": 0.6696
+            "material.layers.4.material.albedo.color_map.3.0": 0.6696,
+            "scale": 0.9084
           }
         }
       }
-    ]
+    ],
+    "scale": 0.9084
   },
   "limestone_cliff": {
     "show": "landscape",
@@ -5709,21 +5711,21 @@
       "big": {
         "node": "multiply",
         "inputs": [
-          0.12,
+          0.2412,
           {
             "node": "smoothstep",
             "from": 0.0,
-            "to": 0.22,
+            "to": 0.4494,
             "input": {
               "node": "warp",
-              "amount": 0.06999999999999999,
-              "scale": 0.24499999999999997,
+              "amount": 0.0239,
+              "scale": 0.2205,
               "seed": 662,
               "octaves": 2,
               "input": {
                 "node": "cells",
                 "style": "edges",
-                "scale": 0.35,
+                "scale": 0.1156,
                 "seed": 661
               }
             }
@@ -5731,21 +5733,21 @@
           {
             "node": "add",
             "inputs": [
-              0.6,
+              0.8921,
               {
                 "node": "multiply",
                 "inputs": [
-                  0.4,
+                  0.1601,
                   {
                     "node": "warp",
-                    "amount": 0.06999999999999999,
-                    "scale": 0.24499999999999997,
+                    "amount": 0.0239,
+                    "scale": 0.2205,
                     "seed": 662,
                     "octaves": 2,
                     "input": {
                       "node": "cells",
                       "style": "id",
-                      "scale": 0.35,
+                      "scale": 0.1156,
                       "seed": 661
                     }
                   }
@@ -5758,21 +5760,21 @@
       "mid": {
         "node": "multiply",
         "inputs": [
-          0.04,
+          0.0411,
           {
             "node": "smoothstep",
             "from": 0.0,
-            "to": 0.22,
+            "to": 0.3009,
             "input": {
               "node": "warp",
-              "amount": 0.022000000000000002,
-              "scale": 0.077,
+              "amount": 0.0117,
+              "scale": 0.1045,
               "seed": 664,
               "octaves": 2,
               "input": {
                 "node": "cells",
                 "style": "edges",
-                "scale": 0.11,
+                "scale": 0.3338,
                 "seed": 663
               }
             }
@@ -5780,21 +5782,21 @@
           {
             "node": "add",
             "inputs": [
-              0.6,
+              0.3014,
               {
                 "node": "multiply",
                 "inputs": [
-                  0.4,
+                  0.173,
                   {
                     "node": "warp",
-                    "amount": 0.022000000000000002,
-                    "scale": 0.077,
+                    "amount": 0.0117,
+                    "scale": 0.1045,
                     "seed": 664,
                     "octaves": 2,
                     "input": {
                       "node": "cells",
                       "style": "id",
-                      "scale": 0.11,
+                      "scale": 0.3338,
                       "seed": 663
                     }
                   }
@@ -5807,21 +5809,21 @@
       "small": {
         "node": "multiply",
         "inputs": [
-          0.012,
+          0.0103,
           {
             "node": "smoothstep",
             "from": 0.0,
-            "to": 0.22,
+            "to": 0.1401,
             "input": {
               "node": "warp",
-              "amount": 0.007000000000000001,
-              "scale": 0.0245,
+              "amount": 0.0052,
+              "scale": 0.0881,
               "seed": 666,
               "octaves": 2,
               "input": {
                 "node": "cells",
                 "style": "edges",
-                "scale": 0.035,
+                "scale": 0.0183,
                 "seed": 665
               }
             }
@@ -5829,21 +5831,21 @@
           {
             "node": "add",
             "inputs": [
-              0.6,
+              0.3003,
               {
                 "node": "multiply",
                 "inputs": [
-                  0.4,
+                  0.4851,
                   {
                     "node": "warp",
-                    "amount": 0.007000000000000001,
-                    "scale": 0.0245,
+                    "amount": 0.0052,
+                    "scale": 0.0881,
                     "seed": 666,
                     "octaves": 2,
                     "input": {
                       "node": "cells",
                       "style": "id",
-                      "scale": 0.035,
+                      "scale": 0.0183,
                       "seed": 665
                     }
                   }
@@ -5855,40 +5857,40 @@
       },
       "id_big": {
         "node": "warp",
-        "amount": 0.07,
-        "scale": 0.245,
+        "amount": 0.2413,
+        "scale": 0.0849,
         "seed": 662,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.35,
+          "scale": 0.1156,
           "seed": 661
         }
       },
       "id_mid": {
         "node": "warp",
-        "amount": 0.022,
-        "scale": 0.077,
+        "amount": 0.0108,
+        "scale": 0.1045,
         "seed": 664,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.11,
+          "scale": 0.3338,
           "seed": 663
         }
       },
       "id_small": {
         "node": "warp",
-        "amount": 0.007,
-        "scale": 0.0245,
+        "amount": 0.0129,
+        "scale": 0.0881,
         "seed": 666,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.035,
+          "scale": 0.0183,
           "seed": 665
         }
       },
@@ -5896,33 +5898,33 @@
         [
           0,
           [
-            0.102,
-            0.098,
-            0.093
+            0.0565,
+            0.0612,
+            0.0629
           ]
         ],
         [
           0.3,
           [
-            0.17,
-            0.162,
-            0.153
+            0.1324,
+            0.1166,
+            0.0725
           ]
         ],
         [
           0.6,
           [
-            0.23,
-            0.221,
-            0.204
+            0.2138,
+            0.1991,
+            0.1752
           ]
         ],
         [
           0.85,
           [
-            0.281,
-            0.255,
-            0.23
+            0.2941,
+            0.2583,
+            0.2149
           ]
         ],
         [
@@ -5936,9 +5938,9 @@
       ],
       "tone": {
         "node": "fractal",
-        "scale": 25,
+        "scale": 24.274,
         "seed": 667,
-        "smallest": 1
+        "smallest": 0.8189
       }
     },
     "material": {
@@ -5950,11 +5952,11 @@
           "b": {
             "node": "multiply",
             "inputs": [
-              0.12,
+              0.0966,
               {
                 "node": "smoothstep",
                 "from": 0,
-                "to": 0.04,
+                "to": -0.0278,
                 "input": {
                   "node": "max",
                   "inputs": [
@@ -5968,7 +5970,7 @@
         },
         "color_map": [
           [
-            0.0,
+            0.0065,
             {
               "pattern": {
                 "node": "subtract",
@@ -5976,11 +5978,11 @@
                 "b": {
                   "node": "multiply",
                   "inputs": [
-                    0.04,
+                    0.031,
                     {
                       "node": "smoothstep",
                       "from": 0,
-                      "to": 0.012,
+                      "to": 0.1061,
                       "input": "$small"
                     }
                   ]
@@ -5988,12 +5990,12 @@
               },
               "color_map": [
                 [
-                  0.0,
+                  -0.0178,
                   {
                     "pattern": "$small",
                     "color_map": [
                       [
-                        0,
+                        -0.005,
                         [
                           0.05,
                           0.048,
@@ -6001,7 +6003,7 @@
                         ]
                       ],
                       [
-                        0.004,
+                        0.0029,
                         {
                           "pattern": "$id_small",
                           "color_map": "$palette",
@@ -6012,7 +6014,7 @@
                   }
                 ],
                 [
-                  0.006,
+                  -0.0115,
                   {
                     "pattern": "$id_mid",
                     "color_map": "$palette",
@@ -6023,44 +6025,44 @@
             }
           ],
           [
-            0.02,
+            0.0273,
             {
               "pattern": "$id_big",
               "color_map": [
                 [
-                  0,
+                  -0.4744,
                   [
-                    0.12,
-                    0.115,
-                    0.11
+                    0.106,
+                    0.1017,
+                    0.0989
                   ]
                 ],
                 [
-                  0.3,
+                  0.0576,
                   [
-                    0.2,
-                    0.19,
-                    0.18
+                    0.1199,
+                    0.1287,
+                    0.1249
                   ]
                 ],
                 [
-                  0.6,
+                  0.5896,
                   [
-                    0.27,
-                    0.26,
-                    0.24
+                    0.2032,
+                    0.21,
+                    0.2009
                   ]
                 ],
                 [
-                  0.8,
+                  0.9443,
                   [
-                    0.3,
-                    0.31,
-                    0.24
+                    0.3177,
+                    0.3288,
+                    0.2634
                   ]
                 ],
                 [
-                  1,
+                  1.299,
                   [
                     0.38,
                     0.37,
@@ -6090,9 +6092,7 @@
         "source": "ambientcg:Gravel043",
         "licence": "CC0",
         "size": 1.6,
-        "usage": {
-          "scale": 0.2
-        },
+        "usage": {},
         "params": [
           {
             "field": "scale",
@@ -6260,7 +6260,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved+free",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "variables.big.inputs.0": 0.2412,
             "variables.big.inputs.1.to": 0.4494,
@@ -6357,11 +6357,13 @@
               0.3288,
               0.2634
             ],
-            "material.albedo.color_map.1.1.color_map.4.0": 1.299
+            "material.albedo.color_map.1.1.color_map.4.0": 1.299,
+            "scale": 0.1843
           }
         }
       }
-    ]
+    ],
+    "scale": 0.1843
   },
   "river_gravel": {
     "show": "landscape",
@@ -7909,45 +7911,45 @@
       "bed_id": {
         "node": "transform",
         "scale": [
-          40,
+          16.645,
           1,
-          40
+          37.608
         ],
         "input": {
           "node": "warp",
-          "amount": 0.003,
-          "scale": 0.4,
+          "amount": 0.0014,
+          "scale": 0.1006,
           "seed": 862,
           "octaves": 2,
           "input": {
             "node": "cells",
             "style": "id",
-            "scale": 0.09,
+            "scale": 0.0921,
             "seed": 861
           }
         }
       },
       "parting": {
         "node": "smoothstep",
-        "from": 0.035,
+        "from": 0.1065,
         "to": 0.0,
         "input": {
           "node": "transform",
           "scale": [
-            40,
+            40.235,
             1,
-            40
+            19.736
           ],
           "input": {
             "node": "warp",
-            "amount": 0.003,
-            "scale": 0.4,
+            "amount": 0.0014,
+            "scale": 0.1006,
             "seed": 862,
             "octaves": 2,
             "input": {
               "node": "cells",
               "style": "edges",
-              "scale": 0.09,
+              "scale": 0.0921,
               "seed": 861
             }
           }
@@ -7955,25 +7957,25 @@
       },
       "rim": {
         "node": "smoothstep",
-        "from": 0.12,
-        "to": 0.03,
+        "from": 0.3297,
+        "to": 0.1403,
         "input": {
           "node": "transform",
           "scale": [
-            40,
+            17.076,
             1,
-            40
+            19.671
           ],
           "input": {
             "node": "warp",
-            "amount": 0.003,
-            "scale": 0.4,
+            "amount": 0.0014,
+            "scale": 0.1006,
             "seed": 862,
             "octaves": 2,
             "input": {
               "node": "cells",
               "style": "edges",
-              "scale": 0.09,
+              "scale": 0.0921,
               "seed": 861
             }
           }
@@ -7984,25 +7986,25 @@
         "inputs": [
           {
             "node": "smoothstep",
-            "from": 0.02,
+            "from": -0.0688,
             "to": 0.0,
             "input": {
               "node": "transform",
               "scale": [
                 1,
-                5,
+                5.1682,
                 1
               ],
               "input": {
                 "node": "warp",
-                "amount": 0.03,
-                "scale": 0.15,
+                "amount": 0.115,
+                "scale": 0.1201,
                 "seed": 864,
                 "octaves": 2,
                 "input": {
                   "node": "cells",
                   "style": "edges",
-                  "scale": 0.22,
+                  "scale": 0.1597,
                   "seed": 863
                 }
               }
@@ -8010,11 +8012,11 @@
           },
           {
             "node": "smoothstep",
-            "from": -0.2,
-            "to": 0.2,
+            "from": -0.1643,
+            "to": 0.1992,
             "input": {
               "node": "fractal",
-              "scale": 0.6,
+              "scale": 1.1683,
               "seed": 865
             }
           }
@@ -8024,81 +8026,81 @@
         "node": "transform",
         "scale": [
           1,
-          5,
+          3.6272,
           1
         ],
         "input": {
           "node": "warp",
-          "amount": 0.03,
-          "scale": 0.15,
+          "amount": 0.115,
+          "scale": 0.1201,
           "seed": 864,
           "octaves": 2,
           "input": {
             "node": "cells",
             "style": "id",
-            "scale": 0.22,
+            "scale": 0.1597,
             "seed": 863
           }
         }
       },
       "grain": {
         "node": "fractal",
-        "scale": 0.08,
+        "scale": 0.0271,
         "seed": 866,
-        "smallest": 0.002,
-        "roughness": 0.6
+        "smallest": 0.0006,
+        "roughness": 0.3862
       },
       "beds": [
         [
           0,
           [
-            0.273,
-            0.1134,
-            0.0385
+            0.2318,
+            0.0804,
+            0.0156
           ]
         ],
         [
           0.25,
           [
-            0.3055,
-            0.1479,
-            0.0548
+            0.2639,
+            0.1117,
+            0.0432
           ]
         ],
         [
           0.5,
           [
-            0.3133,
-            0.1736,
-            0.0731
+            0.3481,
+            0.1538,
+            0.0385
           ]
         ],
         [
           0.75,
           [
-            0.3338,
-            0.195,
-            0.0972
+            0.3922,
+            0.2138,
+            0.0996
           ]
         ],
         [
           1,
           [
-            0.2921,
-            0.1361,
-            0.0484
+            0.2138,
+            0.1022,
+            0.0403
           ]
         ]
       ],
       "parting_colour": [
-        0.2002,
-        0.0638,
-        0.0411
+        0.1552,
+        0.041,
+        0.0177
       ],
       "joint_colour": [
-        0.1124,
-        0.0515,
-        0.0365
+        0.0462,
+        0.0175,
+        0.0108
       ]
     },
     "material": {
@@ -8107,12 +8109,12 @@
         "pattern": "$joints",
         "color_map": [
           [
-            0,
+            0.2619,
             {
               "pattern": "$parting",
               "color_map": [
                 [
-                  0,
+                  0.3868,
                   {
                     "pattern": {
                       "node": "add",
@@ -8120,21 +8122,21 @@
                         {
                           "node": "multiply",
                           "inputs": [
-                            0.8,
+                            1.1651,
                             "$bed_id"
                           ]
                         },
                         {
                           "node": "multiply",
                           "inputs": [
-                            0.25,
+                            0.2929,
                             "$block_id"
                           ]
                         },
                         {
                           "node": "multiply",
                           "inputs": [
-                            0.25,
+                            0.5345,
                             "$grain"
                           ]
                         },
@@ -8151,14 +8153,14 @@
                   }
                 ],
                 [
-                  1,
+                  1.0127,
                   "$parting_colour"
                 ]
               ]
             }
           ],
           [
-            1,
+            1.3208,
             "$joint_colour"
           ]
         ]
@@ -8281,7 +8283,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.7329,
             "variables.beds.0.1": [
@@ -8363,7 +8365,7 @@
         }
       }
     ],
-    "scale": 0.7059
+    "scale": 0.5174
   },
   "pebble_bed": {
     "show": "landscape",
@@ -8372,17 +8374,17 @@
       "big": {
         "node": "smoothstep",
         "from": 0.0,
-        "to": 0.25,
+        "to": 0.4462,
         "input": {
           "node": "warp",
-          "amount": 0.0132,
-          "scale": 0.066,
+          "amount": 0.0246,
+          "scale": 0.2083,
           "seed": 861,
           "octaves": 2,
           "input": {
             "node": "cells",
             "style": "edges",
-            "scale": 0.11,
+            "scale": 0.0974,
             "seed": 811
           }
         }
@@ -8390,68 +8392,68 @@
       "small": {
         "node": "smoothstep",
         "from": 0.0,
-        "to": 0.25,
+        "to": 0.4116,
         "input": {
           "node": "warp",
-          "amount": 0.006,
-          "scale": 0.03,
+          "amount": 0.0167,
+          "scale": 0.0077,
           "seed": 863,
           "octaves": 2,
           "input": {
             "node": "cells",
             "style": "edges",
-            "scale": 0.05,
+            "scale": 0.106,
             "seed": 813
           }
         }
       },
       "id_big": {
         "node": "warp",
-        "amount": 0.0132,
-        "scale": 0.066,
+        "amount": 0.0246,
+        "scale": 0.2083,
         "seed": 861,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.11,
+          "scale": 0.0974,
           "seed": 811
         }
       },
       "id_small": {
         "node": "warp",
-        "amount": 0.006,
-        "scale": 0.03,
+        "amount": 0.0167,
+        "scale": 0.0077,
         "seed": 863,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.05,
+          "scale": 0.106,
           "seed": 813
         }
       },
       "pale": [
-        0.5968,
-        0.4151,
-        0.2355
+        0.3081,
+        0.2096,
+        0.1187
       ],
       "pale2": [
-        0.7281,
-        0.5233,
-        0.3167
+        0.4703,
+        0.3483,
+        0.2176
       ],
       "dark": [
-        0.0672,
-        0.0489,
-        0.0325
+        0.1023,
+        0.0718,
+        0.0433
       ],
       "gap": [
-        0.0341,
-        0.0219,
-        0.0123
+        0.0418,
+        0.029,
+        0.0173
       ],
-      "dark_share": 0.5154
+      "dark_share": 0.6609
     },
     "material": {
       "type": "lambertian",
@@ -8463,7 +8465,7 @@
             {
               "node": "multiply",
               "inputs": [
-                0.85,
+                2.1249,
                 "$small"
               ]
             }
@@ -8471,15 +8473,15 @@
         },
         "color_map": [
           [
-            0.0,
+            -0.3413,
             "$gap"
           ],
           [
-            0.25,
+            0.1579,
             "$gap"
           ],
           [
-            0.45,
+            0.5573,
             {
               "pattern": {
                 "node": "blend",
@@ -8487,15 +8489,15 @@
                 "b": "$id_big",
                 "mask": {
                   "node": "smoothstep",
-                  "from": -0.05,
-                  "to": 0.05,
+                  "from": -0.3403,
+                  "to": -0.1049,
                   "input": {
                     "node": "subtract",
                     "a": "$big",
                     "b": {
                       "node": "multiply",
                       "inputs": [
-                        0.85,
+                        0.4051,
                         "$small"
                       ]
                     }
@@ -8505,11 +8507,11 @@
               "interpolation": "step",
               "color_map": [
                 [
-                  0,
+                  -0.0687,
                   "$pale"
                 ],
                 [
-                  0.4,
+                  0.3939,
                   "$pale2"
                 ],
                 [
@@ -8597,7 +8599,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.9228,
             "variables.dark_share": 0.6609,
@@ -8648,7 +8650,7 @@
         }
       }
     ],
-    "scale": 1.0846
+    "scale": 1.0009
   },
   "angular_rubble": {
     "show": "landscape",
@@ -8900,76 +8902,76 @@
       "grain": {
         "node": "transform",
         "scale": [
-          5,
+          10.439,
           1,
           1
         ],
         "input": {
           "node": "fractal",
-          "scale": 0.4,
+          "scale": 0.1001,
           "seed": 831,
-          "smallest": 0.002,
-          "roughness": 0.7
+          "smallest": 0.0021,
+          "roughness": 0.6772
         }
       },
       "drift": {
         "node": "transform",
         "scale": [
-          5,
+          8.0781,
           1,
           1
         ],
         "input": {
           "node": "fractal",
-          "scale": 0.6,
+          "scale": 0.497,
           "seed": 832,
-          "smallest": 0.03
+          "smallest": 0.0118
         }
       },
       "speck": {
         "node": "warp",
-        "amount": 0.008,
-        "scale": 0.03,
+        "amount": 0.0098,
+        "scale": 0.0231,
         "seed": 834,
         "octaves": 3,
         "input": {
           "node": "cells",
           "style": "f1",
-          "scale": 0.02,
+          "scale": 0.0051,
           "seed": 833
         }
       },
-      "cover": 0.31,
+      "cover": 0.7927,
       "dark": [
-        0.0014,
-        0.0011,
-        0.0008
+        0.003,
+        0.003,
+        0.003
       ],
       "rust": [
-        0.1938,
-        0.0881,
-        0.0427
+        0.02,
+        0.0118,
+        0.0074
       ],
       "lichen": [
-        0.1975,
-        0.2748,
-        0.2652
+        0.2146,
+        0.2277,
+        0.1769
       ],
       "lichen2": [
-        0.1154,
-        0.1613,
-        0.155
+        0.0381,
+        0.0087,
+        0.003
       ],
       "clumps": {
         "node": "warp",
-        "amount": 0.008,
-        "scale": 0.02,
+        "amount": 0.016,
+        "scale": 0.0084,
         "seed": 872,
         "octaves": 3,
         "input": {
           "node": "cells",
           "style": "f1",
-          "scale": 0.025,
+          "scale": 0.024,
           "seed": 871
         }
       }
@@ -8984,11 +8986,11 @@
               "pattern": "$grain",
               "color_map": [
                 [
-                  -0.5,
+                  -0.5781,
                   "$dark"
                 ],
                 [
-                  0.1,
+                  -0.2522,
                   [
                     0.14,
                     0.07,
@@ -8996,7 +8998,7 @@
                   ]
                 ],
                 [
-                  0.6,
+                  0.0193,
                   "$rust"
                 ]
               ]
@@ -9020,16 +9022,16 @@
             "albedo": {
               "pattern": {
                 "node": "fractal",
-                "scale": 0.03,
+                "scale": 0.1076,
                 "seed": 836
               },
               "color_map": [
                 [
-                  -0.5,
+                  -0.2525,
                   "$lichen2"
                 ],
                 [
-                  0.5,
+                  0.3593,
                   "$lichen"
                 ]
               ]
@@ -9110,7 +9112,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.718,
             "variables.dark": [
@@ -9157,7 +9159,7 @@
         }
       }
     ],
-    "scale": 0.7304
+    "scale": 0.5244
   },
   "mossy_slab": {
     "show": "landscape",
@@ -9165,26 +9167,26 @@
     "variables": {
       "patch": {
         "node": "warp",
-        "amount": 0.04,
-        "scale": 0.06,
+        "amount": 0.0955,
+        "scale": 0.0291,
         "seed": 842,
         "octaves": 3,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.04,
+          "scale": 0.1597,
           "seed": 841
         }
       },
       "cover": {
         "node": "smoothstep",
-        "from": -0.4,
-        "to": 0.2,
+        "from": -0.6011,
+        "to": 0.4307,
         "input": {
           "node": "fractal",
-          "scale": 0.5,
+          "scale": 0.175,
           "seed": 843,
-          "smallest": 0.01
+          "smallest": 0.0027
         }
       },
       "cracks": {
@@ -9192,58 +9194,58 @@
         "inputs": [
           {
             "node": "smoothstep",
-            "from": 0.008,
+            "from": 0.2605,
             "to": 0.0,
             "input": {
               "node": "warp",
-              "amount": 0.1,
-              "scale": 0.5,
+              "amount": 0.1672,
+              "scale": 0.1372,
               "seed": 845,
               "octaves": 2,
               "input": {
                 "node": "cells",
                 "style": "edges",
-                "scale": 0.9,
+                "scale": 0.4195,
                 "seed": 844
               }
             }
           },
           {
             "node": "smoothstep",
-            "from": 0.1,
-            "to": 0.35,
+            "from": -0.1708,
+            "to": 0.3441,
             "input": {
               "node": "fractal",
-              "scale": 1.2,
+              "scale": 2.5508,
               "seed": 847
             }
           }
         ]
       },
       "rock": [
-        0.1638,
-        0.1686,
-        0.1748
+        0.1045,
+        0.1049,
+        0.0864
       ],
       "yellow": [
-        0.2337,
-        0.2404,
-        0.0757
+        0.2822,
+        0.2737,
+        0.0865
       ],
       "olive": [
-        0.1717,
-        0.1833,
-        0.0872
+        0.1629,
+        0.1581,
+        0.0901
       ],
       "grey": [
-        0.1991,
-        0.2017,
-        0.1895
+        0.2447,
+        0.2286,
+        0.1795
       ],
       "black": [
-        0.1015,
-        0.0985,
-        0.0805
+        0.0435,
+        0.0458,
+        0.0338
       ]
     },
     "material": {
@@ -9252,7 +9254,7 @@
         "pattern": "$cracks",
         "color_map": [
           [
-            0,
+            0.1112,
             {
               "pattern": {
                 "node": "multiply",
@@ -9261,7 +9263,7 @@
                   {
                     "node": "add",
                     "inputs": [
-                      0.05,
+                      0.2425,
                       "$patch"
                     ]
                   }
@@ -9269,31 +9271,31 @@
               },
               "color_map": [
                 [
-                  0,
+                  0.252,
                   "$rock"
                 ],
                 [
-                  0.1,
+                  0.3083,
                   "$rock"
                 ],
                 [
-                  0.12,
+                  0.3196,
                   "$grey"
                 ],
                 [
-                  0.35,
+                  0.4491,
                   "$olive"
                 ],
                 [
-                  0.6,
+                  0.5899,
                   "$yellow"
                 ],
                 [
-                  0.85,
+                  0.7307,
                   "$black"
                 ],
                 [
-                  1.05,
+                  0.8434,
                   "$olive"
                 ]
               ],
@@ -9301,7 +9303,7 @@
             }
           ],
           [
-            1,
+            0.9885,
             [
               0.02,
               0.02,
@@ -9390,7 +9392,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.713,
             "variables.rock": [
@@ -9446,7 +9448,7 @@
         }
       }
     ],
-    "scale": 1.3603
+    "scale": 0.9699
   },
   "ochre_crust": {
     "show": "landscape",
@@ -9726,7 +9728,7 @@
     "show": "landscape",
     "doc": "A forest trail's compacted brown earth, fine grit and crumbs, with pale stones of mixed sizes scattered sparsely over it; modelled on Poly Haven's forest_ground_04.",
     "variables": {
-      "share": 0.0503,
+      "share": 0.1841,
       "big": {
         "node": "expr",
         "expr": "select(i - 1 + s, 0, h)",
@@ -9734,14 +9736,14 @@
           "i": {
             "node": "cells",
             "style": "id",
-            "scale": 0.07,
+            "scale": 0.0908,
             "seed": 901
           },
           "s": "$share",
           "h": {
             "node": "cells",
             "style": "stones",
-            "scale": 0.07,
+            "scale": 0.0908,
             "seed": 901
           }
         },
@@ -9757,20 +9759,20 @@
           "i": {
             "node": "cells",
             "style": "id",
-            "scale": 0.025,
+            "scale": 0.0245,
             "seed": 903
           },
           "s": {
             "node": "multiply",
             "inputs": [
               "$share",
-              2
+              4.5767
             ]
           },
           "h": {
             "node": "cells",
             "style": "stones",
-            "scale": 0.025,
+            "scale": 0.0245,
             "seed": 903
           }
         },
@@ -9784,20 +9786,20 @@
         "inputs": [
           {
             "node": "fractal",
-            "scale": 1.5,
+            "scale": 0.4873,
             "seed": 905,
-            "smallest": 0.01,
-            "roughness": 0.6
+            "smallest": 0.0115,
+            "roughness": 0.7222
           },
           {
             "node": "multiply",
             "inputs": [
-              0.5,
+              0.8115,
               {
                 "node": "fractal",
-                "scale": 0.15,
+                "scale": 0.2175,
                 "seed": 908,
-                "smallest": 0.005
+                "smallest": 0.0039
               }
             ]
           }
@@ -9806,28 +9808,28 @@
       "grit": {
         "node": "cells",
         "style": "id",
-        "scale": 0.006,
+        "scale": 0.0158,
         "seed": 906
       },
       "dirt": [
-        0.138,
-        0.0962,
-        0.0575
+        0.0817,
+        0.0555,
+        0.0255
       ],
       "dirt2": [
-        0.1834,
-        0.1328,
-        0.0788
+        0.1761,
+        0.1154,
+        0.0625
       ],
       "stone": [
-        0.2325,
-        0.2123,
-        0.1831
+        0.2691,
+        0.2207,
+        0.1551
       ],
       "stone2": [
-        0.1876,
-        0.168,
-        0.1441
+        0.2087,
+        0.1722,
+        0.1252
       ]
     },
     "material": {
@@ -9840,7 +9842,7 @@
             {
               "node": "multiply",
               "inputs": [
-                0.9,
+                0.5701,
                 "$small"
               ]
             }
@@ -9848,7 +9850,7 @@
         },
         "color_map": [
           [
-            0,
+            0.0639,
             {
               "pattern": {
                 "node": "add",
@@ -9857,7 +9859,7 @@
                   {
                     "node": "multiply",
                     "inputs": [
-                      0.4,
+                      0.7665,
                       "$grit"
                     ]
                   }
@@ -9865,32 +9867,32 @@
               },
               "color_map": [
                 [
-                  -0.7,
+                  0.0171,
                   "$dirt"
                 ],
                 [
-                  0.7,
+                  0.8087,
                   "$dirt2"
                 ]
               ]
             }
           ],
           [
-            0.3,
+            0.4122,
             {
               "pattern": {
                 "node": "cells",
                 "style": "id",
-                "scale": 0.025,
+                "scale": 0.0245,
                 "seed": 903
               },
               "color_map": [
                 [
-                  0,
+                  -0.2427,
                   "$stone2"
                 ],
                 [
-                  1,
+                  1.4307,
                   "$stone"
                 ]
               ]
@@ -9988,7 +9990,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.7009,
             "variables.dirt": [
@@ -10037,13 +10039,13 @@
         }
       }
     ],
-    "scale": 0.9371
+    "scale": 0.6568
   },
   "laterite": {
     "show": "landscape",
     "doc": "Laterite: the rust-red, iron-rich earth of the tropics, finely grained, with sparse pale and orange nodules; modelled on Poly Haven's red_laterite_soil_stones.",
     "variables": {
-      "share": 0.1545,
+      "share": 0.0533,
       "nodules": {
         "node": "expr",
         "expr": "select(i - 1 + s, 0, h)",
@@ -10051,14 +10053,14 @@
           "i": {
             "node": "cells",
             "style": "id",
-            "scale": 0.012,
+            "scale": 0.018,
             "seed": 911
           },
           "s": "$share",
           "h": {
             "node": "cells",
             "style": "stones",
-            "scale": 0.012,
+            "scale": 0.018,
             "seed": 911
           }
         },
@@ -10069,36 +10071,36 @@
       },
       "tone": {
         "node": "fractal",
-        "scale": 1,
+        "scale": 0.2571,
         "seed": 912,
-        "smallest": 0.01,
-        "roughness": 0.5
+        "smallest": 0.0093,
+        "roughness": 0.7493
       },
       "grain": {
         "node": "cells",
         "style": "id",
-        "scale": 0.003,
+        "scale": 0.0119,
         "seed": 913
       },
       "earth": [
-        0.1461,
-        0.049,
-        0.0277
+        0.0956,
+        0.0352,
+        0.0222
       ],
       "earth2": [
-        0.1786,
-        0.0677,
-        0.0403
+        0.1525,
+        0.0573,
+        0.0311
       ],
       "nodule": [
-        0.339,
-        0.1999,
-        0.1308
+        0.3223,
+        0.1693,
+        0.096
       ],
       "nodule2": [
-        0.2277,
-        0.0944,
-        0.0405
+        0.2243,
+        0.0905,
+        0.038
       ]
     },
     "material": {
@@ -10107,7 +10109,7 @@
         "pattern": "$nodules",
         "color_map": [
           [
-            0,
+            0.0488,
             {
               "pattern": {
                 "node": "add",
@@ -10116,7 +10118,7 @@
                   {
                     "node": "multiply",
                     "inputs": [
-                      0.5,
+                      0.9774,
                       "$grain"
                     ]
                   }
@@ -10124,32 +10126,32 @@
               },
               "color_map": [
                 [
-                  -0.7,
+                  0.0379,
                   "$earth"
                 ],
                 [
-                  0.7,
+                  0.7764,
                   "$earth2"
                 ]
               ]
             }
           ],
           [
-            0.1,
+            0.1112,
             {
               "pattern": {
                 "node": "cells",
                 "style": "id",
-                "scale": 0.012,
+                "scale": 0.018,
                 "seed": 911
               },
               "color_map": [
                 [
-                  0,
+                  0.0351,
                   "$nodule2"
                 ],
                 [
-                  1,
+                  1.2953,
                   "$nodule"
                 ]
               ]
@@ -10239,7 +10241,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.7703,
             "variables.earth": [
@@ -10281,7 +10283,7 @@
         }
       }
     ],
-    "scale": 0.8513
+    "scale": 0.6558
   },
   "foliated_rock": {
     "show": "landscape",
@@ -10294,51 +10296,51 @@
       ],
       "foliation": {
         "node": "phasor",
-        "wavelength": 0.06,
+        "wavelength": 0.015,
         "direction": "$dip",
-        "spread": 0.3,
+        "spread": 0.4498,
         "profile": "sine",
         "seed": 921
       },
       "break": {
         "node": "warp",
-        "amount": 0.05,
-        "scale": 0.2,
+        "amount": 0.153,
+        "scale": 0.089,
         "seed": 923,
         "octaves": 2,
         "input": {
           "node": "fractal",
-          "scale": 0.3,
+          "scale": 0.0766,
           "seed": 922,
-          "smallest": 0.01
+          "smallest": 0.0025
         }
       },
       "tone": {
         "node": "fractal",
-        "scale": 1,
+        "scale": 0.2511,
         "seed": 924,
-        "smallest": 0.02,
-        "roughness": 0.55
+        "smallest": 0.0319,
+        "roughness": 0.5474
       },
       "rock": [
-        0.1473,
-        0.1133,
-        0.0746
+        0.1464,
+        0.1131,
+        0.0748
       ],
       "rock2": [
-        0.1704,
-        0.1289,
-        0.0797
+        0.143,
+        0.1242,
+        0.0796
       ],
       "streak": [
-        0.0525,
-        0.0572,
-        0.0541
+        0.0665,
+        0.0578,
+        0.0378
       ],
       "rust": [
-        0.1879,
-        0.102,
-        0.0479
+        0.1347,
+        0.0872,
+        0.0454
       ]
     },
     "material": {
@@ -10350,14 +10352,14 @@
             {
               "node": "multiply",
               "inputs": [
-                0.6,
+                0.2449,
                 "$foliation"
               ]
             },
             {
               "node": "multiply",
               "inputs": [
-                0.7,
+                1.746,
                 "$break"
               ]
             }
@@ -10365,28 +10367,28 @@
         },
         "color_map": [
           [
-            -1.3,
+            -1.0809,
             "$streak"
           ],
           [
-            -0.45,
+            -0.062,
             "$streak"
           ],
           [
-            -0.2,
+            0.2377,
             {
               "pattern": "$tone",
               "color_map": [
                 [
-                  -0.6,
+                  -0.6626,
                   "$rock"
                 ],
                 [
-                  0.2,
+                  -0.2541,
                   "$rock2"
                 ],
                 [
-                  0.7,
+                  0.0013,
                   "$rust"
                 ]
               ]
@@ -10469,7 +10471,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.7004,
             "variables.rock": [
@@ -10513,7 +10515,7 @@
         }
       }
     ],
-    "scale": 1.1873
+    "scale": 0.8316
   },
   "shingle": {
     "show": "landscape",
@@ -10521,55 +10523,55 @@
     "variables": {
       "edges": {
         "node": "warp",
-        "amount": 0.003,
-        "scale": 0.01,
+        "amount": 0.0076,
+        "scale": 0.0059,
         "seed": 932,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "edges",
-          "scale": 0.018,
+          "scale": 0.033,
           "seed": 931
         }
       },
       "id": {
         "node": "warp",
-        "amount": 0.003,
-        "scale": 0.01,
+        "amount": 0.0076,
+        "scale": 0.0059,
         "seed": 932,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.018,
+          "scale": 0.033,
           "seed": 931
         }
       },
       "drift": {
         "node": "fractal",
-        "scale": 1.2,
+        "scale": 0.3086,
         "seed": 933,
-        "smallest": 0.02
+        "smallest": 0.0113
       },
       "light": [
-        0.3571,
-        0.3166,
-        0.2338
+        0.3662,
+        0.3167,
+        0.2282
       ],
       "mid": [
-        0.2423,
-        0.2167,
-        0.1633
+        0.2338,
+        0.2227,
+        0.1794
       ],
       "dark": [
-        0.0983,
-        0.0889,
-        0.0712
+        0.0367,
+        0.0315,
+        0.0176
       ],
       "sand": [
-        0.2616,
-        0.2252,
-        0.1551
+        0.1789,
+        0.1368,
+        0.0778
       ]
     },
     "material": {
@@ -10578,27 +10580,27 @@
         "pattern": "$edges",
         "color_map": [
           [
-            0,
+            0.0559,
             {
               "pattern": "$drift",
               "color_map": [
                 [
-                  -0.5,
+                  -0.3167,
                   "$dark"
                 ],
                 [
-                  0.5,
+                  0.2937,
                   "$sand"
                 ]
               ]
             }
           ],
           [
-            0.06,
+            0.0956,
             "$sand"
           ],
           [
-            0.12,
+            0.1352,
             {
               "pattern": {
                 "node": "add",
@@ -10606,14 +10608,14 @@
                   {
                     "node": "multiply",
                     "inputs": [
-                      0.5,
+                      1.1957,
                       "$id"
                     ]
                   },
                   {
                     "node": "multiply",
                     "inputs": [
-                      1.4,
+                      0.7792,
                       "$drift"
                     ]
                   }
@@ -10621,15 +10623,15 @@
               },
               "color_map": [
                 [
-                  -0.6,
+                  -0.7224,
                   "$dark"
                 ],
                 [
-                  0.25,
+                  0.2447,
                   "$mid"
                 ],
                 [
-                  1.0,
+                  1.098,
                   "$light"
                 ]
               ]
@@ -10711,7 +10713,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 1.0412,
             "variables.light": [
@@ -10756,7 +10758,7 @@
         }
       }
     ],
-    "scale": 0.7854
+    "scale": 0.8178
   },
   "veined_basalt": {
     "show": "landscape",
@@ -10766,16 +10768,16 @@
         "node": "abs",
         "input": {
           "node": "warp",
-          "amount": 0.03,
-          "scale": 0.15,
+          "amount": 0.016,
+          "scale": 0.1365,
           "seed": 1002,
           "octaves": 2,
           "input": {
             "node": "fractal",
-            "scale": 0.25,
+            "scale": 0.0699,
             "seed": 1001,
-            "smallest": 0.003,
-            "roughness": 0.55
+            "smallest": 0.0055,
+            "roughness": 0.6679
           }
         }
       },
@@ -10784,25 +10786,25 @@
         "inputs": [
           {
             "node": "smoothstep",
-            "from": 0.012,
+            "from": 0.1586,
             "to": 0.0,
             "input": {
               "node": "transform",
               "scale": [
-                40,
+                34.339,
                 1,
-                40
+                16.151
               ],
               "input": {
                 "node": "warp",
-                "amount": 0.005,
-                "scale": 0.5,
+                "amount": 0.0035,
+                "scale": 0.1803,
                 "seed": 1004,
                 "octaves": 2,
                 "input": {
                   "node": "cells",
                   "style": "edges",
-                  "scale": 0.25,
+                  "scale": 0.3706,
                   "seed": 1003
                 }
               }
@@ -10810,11 +10812,11 @@
           },
           {
             "node": "smoothstep",
-            "from": -0.3,
-            "to": 0.1,
+            "from": -0.1995,
+            "to": -0.1055,
             "input": {
               "node": "fractal",
-              "scale": 0.8,
+              "scale": 0.8175,
               "seed": 1005
             }
           }
@@ -10822,34 +10824,34 @@
       },
       "stain": {
         "node": "smoothstep",
-        "from": 0.1,
-        "to": 0.5,
+        "from": -0.0496,
+        "to": 0.2675,
         "input": {
           "node": "fractal",
-          "scale": 0.6,
+          "scale": 0.174,
           "seed": 1006,
-          "smallest": 0.01
+          "smallest": 0.0067
         }
       },
       "rock": [
-        0.0111,
-        0.0092,
-        0.008
+        0.0083,
+        0.0058,
+        0.0051
       ],
       "rock2": [
-        0.036,
-        0.0288,
-        0.0236
+        0.0273,
+        0.0231,
+        0.0207
       ],
       "vein": [
-        0.1515,
-        0.1549,
-        0.1194
+        0.0095,
+        0.0078,
+        0.0063
       ],
       "stain_colour": [
-        0.0789,
-        0.0495,
-        0.03
+        0.0666,
+        0.0457,
+        0.0264
       ]
     },
     "material": {
@@ -10861,7 +10863,7 @@
             "$fractures",
             {
               "node": "smoothstep",
-              "from": 0.012,
+              "from": 0.1624,
               "to": 0.0,
               "input": "$veins"
             }
@@ -10869,40 +10871,40 @@
         },
         "color_map": [
           [
-            0,
+            -0.7024,
             {
               "pattern": "$stain",
               "color_map": [
                 [
-                  0,
+                  -0.1986,
                   {
                     "pattern": {
                       "node": "fractal",
-                      "scale": 0.1,
+                      "scale": 0.0253,
                       "seed": 1007,
-                      "smallest": 0.002
+                      "smallest": 0.005
                     },
                     "color_map": [
                       [
-                        -0.6,
+                        -0.1704,
                         "$rock"
                       ],
                       [
-                        0.6,
+                        0.4366,
                         "$rock2"
                       ]
                     ]
                   }
                 ],
                 [
-                  1,
+                  1.7768,
                   "$stain_colour"
                 ]
               ]
             }
           ],
           [
-            1,
+            1.2258,
             "$vein"
           ]
         ]
@@ -10983,7 +10985,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.8182,
             "variables.rock": [
@@ -11037,7 +11039,7 @@
         }
       }
     ],
-    "scale": 0.9051
+    "scale": 0.7406
   },
   "weathered_grey_rock": {
     "show": "landscape",
@@ -11048,20 +11050,20 @@
         "inputs": [
           {
             "node": "fractal",
-            "scale": 1.2,
+            "scale": 0.3162,
             "seed": 1011,
-            "smallest": 0.02,
-            "roughness": 0.5
+            "smallest": 0.0056,
+            "roughness": 0.7356
           },
           {
             "node": "multiply",
             "inputs": [
-              0.4,
+              0.1861,
               {
                 "node": "fractal",
-                "scale": 0.15,
+                "scale": 0.465,
                 "seed": 1012,
-                "smallest": 0.005
+                "smallest": 0.0087
               }
             ]
           }
@@ -11070,7 +11072,7 @@
       "grain": {
         "node": "cells",
         "style": "id",
-        "scale": 0.003,
+        "scale": 0.0117,
         "seed": 1013
       },
       "pits": {
@@ -11078,41 +11080,41 @@
         "inputs": [
           {
             "node": "smoothstep",
-            "from": 0.12,
-            "to": 0.06,
+            "from": 0.4189,
+            "to": 0.3439,
             "input": {
               "node": "cells",
               "style": "f1",
-              "scale": 0.02,
+              "scale": 0.008,
               "seed": 1014
             }
           },
           {
             "node": "smoothstep",
             "from": 0.0,
-            "to": 0.3,
+            "to": 0.0446,
             "input": {
               "node": "fractal",
-              "scale": 0.3,
+              "scale": 1.0837,
               "seed": 1015
             }
           }
         ]
       },
       "rock": [
-        0.1629,
-        0.1276,
-        0.0999
+        0.1584,
+        0.124,
+        0.0903
       ],
       "rock2": [
-        0.1912,
-        0.153,
-        0.121
+        0.2312,
+        0.1909,
+        0.1469
       ],
       "pit": [
-        0.0737,
-        0.07,
-        0.0642
+        0.0974,
+        0.0845,
+        0.0666
       ]
     },
     "material": {
@@ -11121,7 +11123,7 @@
         "pattern": "$pits",
         "color_map": [
           [
-            0,
+            0.0431,
             {
               "pattern": {
                 "node": "add",
@@ -11130,7 +11132,7 @@
                   {
                     "node": "multiply",
                     "inputs": [
-                      0.35,
+                      0.8402,
                       "$grain"
                     ]
                   }
@@ -11138,18 +11140,18 @@
               },
               "color_map": [
                 [
-                  -0.7,
+                  0.0201,
                   "$rock"
                 ],
                 [
-                  0.7,
+                  0.8066,
                   "$rock2"
                 ]
               ]
             }
           ],
           [
-            1,
+            0.5531,
             "$pit"
           ]
         ]
@@ -11225,7 +11227,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.7902,
             "variables.rock": [
@@ -11264,7 +11266,7 @@
         }
       }
     ],
-    "scale": 0.951
+    "scale": 0.7515
   },
   "weathered_pink_granite": {
     "show": "landscape",
@@ -11272,45 +11274,45 @@
     "variables": {
       "blotch": {
         "node": "warp",
-        "amount": 0.02,
-        "scale": 0.06,
+        "amount": 0.0795,
+        "scale": 0.0332,
         "seed": 1022,
         "octaves": 2,
         "input": {
           "node": "fractal",
-          "scale": 0.12,
+          "scale": 0.0491,
           "seed": 1021,
-          "smallest": 0.004,
-          "roughness": 0.6
+          "smallest": 0.0151,
+          "roughness": 0.7511
         }
       },
       "crystals": {
         "node": "warp",
-        "amount": 0.003,
-        "scale": 0.01,
+        "amount": 0.0019,
+        "scale": 0.0241,
         "seed": 1024,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.008,
+          "scale": 0.0032,
           "seed": 1023
         }
       },
       "pink": [
-        0.3058,
-        0.2043,
-        0.1299
+        0.5019,
+        0.3355,
+        0.2153
       ],
       "grey": [
-        0.1887,
-        0.1623,
-        0.1131
+        0.1537,
+        0.1116,
+        0.0671
       ],
       "dark": [
-        0.0649,
-        0.0541,
-        0.0373
+        0.061,
+        0.0489,
+        0.0328
       ]
     },
     "material": {
@@ -11323,7 +11325,7 @@
             {
               "node": "multiply",
               "inputs": [
-                0.5,
+                0.482,
                 "$crystals"
               ]
             }
@@ -11331,19 +11333,19 @@
         },
         "color_map": [
           [
-            -0.45,
+            -0.6989,
             "$dark"
           ],
           [
-            -0.25,
+            -0.3061,
             "$grey"
           ],
           [
-            -0.05,
+            0.0867,
             "$grey"
           ],
           [
-            0.2,
+            0.5777,
             "$pink"
           ]
         ]
@@ -11401,7 +11403,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.8651,
             "variables.pink": [
@@ -11436,7 +11438,7 @@
         }
       }
     ],
-    "scale": 1.3523
+    "scale": 1.1699
   },
   "caliche_ground": {
     "show": "landscape",
@@ -11444,44 +11446,44 @@
     "variables": {
       "crust": {
         "node": "warp",
-        "amount": 0.05,
-        "scale": 0.2,
+        "amount": 0.0615,
+        "scale": 0.171,
         "seed": 1032,
         "octaves": 2,
         "input": {
           "node": "fractal",
-          "scale": 0.5,
+          "scale": 0.1261,
           "seed": 1031,
-          "smallest": 0.005,
-          "roughness": 0.65
+          "smallest": 0.0013,
+          "roughness": 0.8952
         }
       },
-      "amount": 0.2552,
+      "amount": 0.3139,
       "gravel": {
         "node": "cells",
         "style": "id",
-        "scale": 0.01,
+        "scale": 0.0043,
         "seed": 1033
       },
       "soil": [
-        0.232,
-        0.1346,
-        0.0753
+        0.1415,
+        0.0759,
+        0.0436
       ],
       "soil2": [
-        0.3024,
-        0.1811,
-        0.1084
+        0.2543,
+        0.1341,
+        0.0724
       ],
       "lime": [
-        0.7347,
-        0.5913,
-        0.4545
+        0.7718,
+        0.599,
+        0.4406
       ],
       "pebble": [
-        0.3768,
-        0.2691,
-        0.2086
+        0.3752,
+        0.2309,
+        0.1416
       ]
     },
     "material": {
@@ -11501,20 +11503,20 @@
         },
         "color_map": [
           [
-            0.0,
+            -0.0509,
             {
               "pattern": "$gravel",
               "color_map": [
                 [
-                  0,
+                  -0.2581,
                   "$soil"
                 ],
                 [
-                  0.7,
+                  0.4152,
                   "$soil2"
                 ],
                 [
-                  0.92,
+                  0.6268,
                   "$pebble"
                 ]
               ],
@@ -11522,7 +11524,7 @@
             }
           ],
           [
-            0.06,
+            0.0691,
             "$lime"
           ]
         ]
@@ -11619,7 +11621,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 1.2277,
             "variables.soil": [
@@ -11658,7 +11660,7 @@
         }
       }
     ],
-    "scale": 1.2807
+    "scale": 1.5723
   },
   "leaf_litter_gravel": {
     "show": "landscape",
@@ -12024,12 +12026,12 @@
     "show": "landscape",
     "doc": "A river bank of grey-beige silt and grit with small flat stones bedded in it, thickly in places; modelled on Poly Haven's river_small_rocks.",
     "variables": {
-      "share": 0.1512,
+      "share": 0.4824,
       "patches": {
         "node": "fractal",
-        "scale": 0.8,
+        "scale": 0.297,
         "seed": 1051,
-        "smallest": 0.02
+        "smallest": 0.0051
       },
       "big": {
         "node": "expr",
@@ -12038,7 +12040,7 @@
           "i": {
             "node": "cells",
             "style": "id",
-            "scale": 0.06,
+            "scale": 0.0807,
             "seed": 1052
           },
           "s": {
@@ -12056,7 +12058,7 @@
           "h": {
             "node": "cells",
             "style": "stones",
-            "scale": 0.06,
+            "scale": 0.0807,
             "seed": 1052
           }
         },
@@ -12072,14 +12074,14 @@
           "i": {
             "node": "cells",
             "style": "id",
-            "scale": 0.02,
+            "scale": 0.014,
             "seed": 1053
           },
           "s": "$share",
           "h": {
             "node": "cells",
             "style": "stones",
-            "scale": 0.02,
+            "scale": 0.014,
             "seed": 1053
           }
         },
@@ -12089,24 +12091,24 @@
         ]
       },
       "silt": [
-        0.1785,
-        0.1452,
-        0.111
+        0.0922,
+        0.0718,
+        0.0441
       ],
       "silt2": [
-        0.236,
-        0.1896,
-        0.1446
+        0.2734,
+        0.2035,
+        0.1358
       ],
       "stone": [
-        0.2244,
-        0.2247,
-        0.2065
+        0.2868,
+        0.256,
+        0.2061
       ],
       "stone2": [
-        0.1701,
-        0.1731,
-        0.1647
+        0.171,
+        0.1479,
+        0.1126
       ]
     },
     "material": {
@@ -12119,7 +12121,7 @@
             {
               "node": "multiply",
               "inputs": [
-                0.9,
+                1.6055,
                 "$small"
               ]
             }
@@ -12127,7 +12129,7 @@
         },
         "color_map": [
           [
-            0,
+            0.0153,
             {
               "pattern": {
                 "node": "add",
@@ -12136,11 +12138,11 @@
                   {
                     "node": "multiply",
                     "inputs": [
-                      0.4,
+                      0.9079,
                       {
                         "node": "cells",
                         "style": "id",
-                        "scale": 0.004,
+                        "scale": 0.0153,
                         "seed": 1054
                       }
                     ]
@@ -12149,32 +12151,32 @@
               },
               "color_map": [
                 [
-                  -0.6,
+                  -0.032,
                   "$silt"
                 ],
                 [
-                  0.7,
+                  0.9111,
                   "$silt2"
                 ]
               ]
             }
           ],
           [
-            0.12,
+            0.0757,
             {
               "pattern": {
                 "node": "cells",
                 "style": "id",
-                "scale": 0.06,
+                "scale": 0.0807,
                 "seed": 1052
               },
               "color_map": [
                 [
-                  0,
+                  0.4837,
                   "$stone2"
                 ],
                 [
-                  1,
+                  1.1161,
                   "$stone"
                 ]
               ]
@@ -12272,7 +12274,7 @@
           "samples": 1,
           "loss_kind": "floor+detail+solved",
           "date": "2026-11-25",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 1.1591,
             "variables.silt": [
@@ -12316,6 +12318,6 @@
         }
       }
     ],
-    "scale": 0.9677
+    "scale": 1.1217
   }
 }

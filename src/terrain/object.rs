@@ -1014,7 +1014,7 @@ fn displaced_patches(o: &Value, d: &Value, relief: &Relief, frame: &Frame, view:
     let outermost = finest * (1u64 << (n - 1)) as f64;
     let snap = |c: f64| (c / outermost).round() * outermost;
     let (cx, cz) = (snap(m.x), snap(m.z));
-    let begun = std::time::Instant::now();
+    let begun = web_time::Instant::now();
     let clipmap = Clipmap::new(relief, frame, view, p);
     // Diced for the camera as it sees them, in the frame (from the middle of its path, if it
     // moves).

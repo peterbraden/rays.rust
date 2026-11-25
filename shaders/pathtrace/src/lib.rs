@@ -1573,11 +1573,13 @@ fn segment(s: &Scene, record: u32, o: Vec3, d: Vec3, distance: f32) -> (Vec3, Ve
         Some((start, end)) if start < distance => (start, end.min(distance)),
         _ => return (Vec3::ONE, Vec3::ZERO),
     };
+    // Steps a quarter of the haze's scale height long, 4 to 32 (`Air::segment`).
+    let steps = ((end - start) / (0.25 * a.mie_height)).ceil().clamp(4.0, SKY_STEPS as f32) as u32;
     let mut depth = Vec3::ZERO;
     let (mut rayleigh, mut mie, mut multiple) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
     let mut k = 0;
-    while k < SKY_STEPS {
-        let (t, step) = span_sample(&a, o, d, start, end, SKY_STEPS, k);
+    while k < steps {
+        let (t, step) = span_sample(&a, o, d, start, end, steps, k);
         let p = o + d * t;
         let here = depths(&a, altitude(&a, p), step);
         depth += here * 0.5;
@@ -2595,10 +2597,11 @@ fn aerial_transmittance(s: &Scene, o: Vec3, d: Vec3, distance: f32) -> Vec3 {
         Some((start, end)) if start < distance => (start, end.min(distance)),
         _ => return Vec3::ONE,
     };
+    let steps = ((end - start) / (0.25 * a.mie_height)).ceil().clamp(4.0, SKY_STEPS as f32) as u32;
     let mut depth = Vec3::ZERO;
     let mut k = 0;
-    while k < SKY_STEPS {
-        let (t, step) = span_sample(&a, o, d, start, end, SKY_STEPS, k);
+    while k < steps {
+        let (t, step) = span_sample(&a, o, d, start, end, steps, k);
         depth += depths(&a, altitude(&a, o + d * t), step);
         k += 1;
     }
@@ -2636,6 +2639,8 @@ pub fn crepuscular_samples(s: &Scene, found: &PathState, rng: &mut u32) -> (Vec4
     let mu = d.dot(a.sun);
     let (rayleigh, mie) = (rayleigh_phase(mu), mie_phase(mu, a.g));
     let scale = a.brightness * SKY_CALIBRATION;
+    // As many steps as `segment` takes, which this light is taken from.
+    let steps = ((end - start) / (0.25 * a.mie_height)).ceil().clamp(4.0, SKY_STEPS as f32) as u32;
     // Each step's light (`Air::single_scattering_steps`), twice over: for the total, then to
     // find the steps the samples fall in.
     let mut total = 0.0;
@@ -2646,8 +2651,8 @@ pub fn crepuscular_samples(s: &Scene, found: &PathState, rng: &mut u32) -> (Vec4
     while pass < 2 {
         let mut depth = Vec3::ZERO;
         let mut k = 0;
-        while k < SKY_STEPS {
-            let (t, step) = span_sample(&a, o, d, start, end, SKY_STEPS, k);
+        while k < steps {
+            let (t, step) = span_sample(&a, o, d, start, end, steps, k);
             let p = o + d * t;
             let here = depths(&a, altitude(&a, p), step);
             depth += here * 0.5;

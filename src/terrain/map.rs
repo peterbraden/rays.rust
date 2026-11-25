@@ -28,6 +28,24 @@ pub const ALLUVIUM: f64 = 2.;
 pub const ALLUVIUM_COLOUR: [f64; 3] = [0.80, 0.74, 0.52];
 pub const LAVA_COLOUR: [f64; 3] = [0.16, 0.14, 0.14];
 pub const RIVER_COLOUR: [f64; 3] = [0.20, 0.40, 0.75];
+/// Till and moraines: glacial sediment, grey.
+pub const TILL_COLOUR: [f64; 3] = [0.72, 0.68, 0.76];
+
+/// Wind-blown sand: dune fields and sand sheets.
+pub const SAND_COLOUR: [f64; 3] = [0.92, 0.78, 0.50];
+
+/// Whether cell `i` is covered by wind-blown sand.
+pub fn is_sand(t: &Terrain, i: usize) -> bool {
+    t.sand.get(i).is_some_and(|&s| s > ALLUVIUM)
+}
+
+/// Whether cell `i`'s sediment is mostly glacial: till and moraines.
+pub fn is_till(t: &Terrain, i: usize) -> bool {
+    t.till.get(i).is_some_and(|&till| till > ALLUVIUM && till >= 0.5 * t.sediment[i])
+}
+/// Terminal lakes, salty, shallow and green-blue; and the flat dry floors of closed basins.
+pub const SALT_LAKE_COLOUR: [f64; 3] = [0.30, 0.62, 0.66];
+pub const PLAYA_COLOUR: [f64; 3] = [0.93, 0.91, 0.86];
 
 /// A patch's rivers and lakes as lines, at least `min_width` metres wide. None for a planet.
 pub fn water_lines(t: &Terrain, min_width: f64) -> Option<WaterLines> {
@@ -60,10 +78,11 @@ pub fn land_colour(h: f64) -> [f64; 3] {
     stops[stops.len() - 1].1
 }
 
-/// The colour of cell `i`, before shading.
-fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
-    if t.bed[i] < 0. {
-        return mix([0.15, 0.35, 0.55], [0.03, 0.08, 0.25], -t.bed[i] / 4000.);
+/// The colour of cell `i`, before shading; `sea` marks the sea, at `level` metres (the sea
+/// level of the terrain's time: `Terrain::outlets`, `sea_level`).
+fn cell_colour(t: &Terrain, i: usize, sea: &[bool], level: f64) -> [f64; 3] {
+    if sea[i] {
+        return mix([0.15, 0.35, 0.55], [0.03, 0.08, 0.25], (level - t.bed[i]) / 4000.);
     }
     if t.ice[i] >= ICE_FREE {
         return mix([0.80, 0.88, 0.95], [0.95, 0.97, 1.0], t.ice[i] / 300.);
@@ -71,6 +90,12 @@ fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
     // Patches draw rivers as lines (`water_lines`).
     if is_river(t, i) && matches!(t.domain.layout, Layout::Sphere { .. }) {
         return RIVER_COLOUR;
+    }
+    if is_sand(t, i) {
+        return mix(land_colour(t.bed[i]), SAND_COLOUR, 0.8);
+    }
+    if is_till(t, i) {
+        return mix(land_colour(t.bed[i]), TILL_COLOUR, 0.7);
     }
     if t.sediment[i] > ALLUVIUM {
         return mix(land_colour(t.bed[i]), ALLUVIUM_COLOUR, 0.6);
@@ -84,6 +109,63 @@ fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
 /// Write a shaded relief map of `t` to `path`, about `width` pixels wide (a patch is drawn at a
 /// whole number of pixels per cell).
 pub fn write_map(t: &Terrain, path: &str, width: usize) {
+    let (sea, level) = sea(t);
+    // Closed basins: their terminal lakes, and the playas of their flat floors of lake beds.
+    let basins = t.basins();
+    write_shaded(t, path, width, &|i| {
+        if basins.salt_lake(i) && t.ice[i] < ICE_FREE { return SALT_LAKE_COLOUR; }
+        if basins.playa(t, i) { return PLAYA_COLOUR; }
+        cell_colour(t, i, &sea, level)
+    });
+}
+
+/// Where the sea is (`Terrain::outlets`, but not a patch's edge on land), and its level.
+fn sea(t: &Terrain) -> (Vec<bool>, f64) {
+    let level = t.sea_level();
+    let outlets = t.outlets();
+    ((0..t.domain.len()).map(|i| outlets[i] && t.bed[i] < level).collect(), level)
+}
+
+/// Write a geological map of the terrain to `path`, as `write_map` but coloured by the rock
+/// exposed at each cell (`Terrain::rock`, in `geology::Rock::map_colour`), sea floor included,
+/// with ice in white.
+pub fn write_geology_map(t: &Terrain, path: &str, width: usize) {
+    write_shaded(t, path, width, &|i| {
+        if t.ice[i] >= ICE_FREE { return [0.92, 0.94, 0.96]; }
+        t.rock(i).map_colour()
+    });
+}
+
+/// Write a patch's surface (its ground and ice) to `path` as a 16-bit greyscale PNG, a pixel a
+/// cell, north up, from its lowest (black) to its highest (white), and return those heights,
+/// metres: for finding ground to look at. None for a whole planet.
+pub fn write_height_map(t: &Terrain, path: &str) -> Option<(f64, f64)> {
+    let Layout::Patch { n, .. } = t.domain.layout else { return None };
+    let surface = t.surface();
+    let (lo, hi) = surface.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &h| (a.min(h), b.max(h)));
+    let img = image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_fn(n as u32, n as u32, |x, y| {
+        let h = surface[(n - 1 - y as usize) * n + x as usize];
+        image::Luma([((h - lo) / (hi - lo).max(1e-9) * 65535.).round() as u16])
+    });
+    img.save(path).unwrap();
+    Some((lo, hi))
+}
+
+/// Write a map of the rain at the last step to `path`, as `write_map` but coloured by the rain
+/// (`Terrain::precipitation`): browns where it is dry, through greens, to blues where it is
+/// wettest (from 0 to 4000 mm a year, on a square-root scale).
+pub fn write_rain_map(t: &Terrain, path: &str, width: usize) {
+    const STOPS: [[f64; 3]; 5] = [[0.55, 0.38, 0.20], [0.85, 0.75, 0.45], [0.45, 0.70, 0.35], [0.20, 0.55, 0.70], [0.12, 0.20, 0.60]];
+    write_shaded(t, path, width, &|i| {
+        let x = (t.precipitation[i] / 4000.).clamp(0., 1.).sqrt() * (STOPS.len() - 1) as f64;
+        let k = (x.floor() as usize).min(STOPS.len() - 2);
+        let f = x - k as f64;
+        std::array::from_fn(|c| STOPS[k][c] * (1. - f) + STOPS[k + 1][c] * f)
+    });
+}
+
+fn write_shaded(t: &Terrain, path: &str, width: usize, colour: &dyn Fn(usize) -> [f64; 3]) {
+    let (water, level) = sea(t);
     let (w, h, cells, spacing): (usize, usize, Vec<usize>, f64) = match &t.domain.layout {
         Layout::Patch { n, spacing, .. } => {
             let cells = (0..n * n).map(|p| {
@@ -113,8 +195,8 @@ pub fn write_map(t: &Terrain, path: &str, width: usize) {
             let normal = Vector3::new(-2. * dx, 2. * dy, 1.).normalize();
             let light = Vector3::new(-1., 1., 1.4).normalize();
             let shade = (0.35 + 0.75 * normal.dot(&light)).clamp(0., 1.3);
-            let c = cell_colour(t, cells[y * w + x]);
-            let shade = if t.bed[cells[y * w + x]] < 0. { 1. } else { shade };
+            let c = colour(cells[y * w + x]);
+            let shade = if t.bed[cells[y * w + x]] < level && water[cells[y * w + x]] { 1. } else { shade };
             let px = |v: f64| ((v * shade).clamp(0., 1.) * 255.) as u8;
             img.put_pixel(x as u32, y as u32, image::Rgb([px(c[0]), px(c[1]), px(c[2])]));
         }

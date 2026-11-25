@@ -127,7 +127,10 @@ fn host_ray(ro: Vec3, rd: Vec3, origin: &Vector3<f64>) -> Ray {
 impl pathtrace::HostShapes for Kernels<'_> {
     fn occluded(&self, ro: Vec3, rd: Vec3, tmax: f32) -> bool {
         let r = host_ray(ro, rd, &self.buffers.origin);
-        self.buffers.host_shapes.iter().any(|&k| self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64))
+        // (From a vertex the kernels shaded: none of the host's surfaces.)
+        crate::shapes::leaving::with(None, || {
+            self.buffers.host_shapes.iter().any(|&k| self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64))
+        })
     }
 }
 
@@ -252,8 +255,13 @@ impl<'a> Kernels<'a> {
             // 1. Intersect: the kernels' surfaces, the host's shapes, then the media; a
             // path's own ray and those traced for it (`pathtrace::find_all`).
             let finder = WithHost::<M> { kernels: self, host_shapes, listed, media: std::marker::PhantomData };
-            for (_, p) in paths.iter_mut() {
-                *p = pathtrace::find_all(&scene, p, &finder);
+            // (A path whose ray leaves a vertex the host shaded names it, for the scene's shapes
+            // its ray meets: `kernels::host::leaving`, `shapes::leaving`. The rays traced for
+            // it start elsewhere, which the shapes see.)
+            // (Kept for the round: the host finds a hit on its shapes again when it shades it.)
+            let vertices: Vec<_> = paths.iter().map(|(_, p)| crate::kernels::host::leaving(p, &self.buffers.origin)).collect();
+            for ((_, p), vertex) in paths.iter_mut().zip(&vertices) {
+                *p = crate::shapes::leaving::with(*vertex, || pathtrace::find_all(&scene, p, &finder));
             }
             lap(&mut stats, Stage::Intersect, paths.len());
             // 2. Shade.
@@ -277,8 +285,8 @@ impl<'a> Kernels<'a> {
             lap(&mut stats, Stage::Sky, queries.len());
             // 4. The host's vertices.
             let mut waiting = 0;
-            for ((_, pixel, k), p) in paths.iter_mut().filter(|(_, p)| p.state.y & PATH_HOST != 0) {
-                *p = crate::kernels::host::shade(s, flat, &self.buffers.origin, p, *pixel, *k);
+            for (((_, pixel, k), p), vertex) in paths.iter_mut().zip(&vertices).filter(|((_, p), _)| p.state.y & PATH_HOST != 0) {
+                *p = crate::kernels::host::shade(s, flat, &self.buffers.origin, p, *pixel, *k, *vertex);
                 waiting += 1;
             }
             if waiting > 0 {

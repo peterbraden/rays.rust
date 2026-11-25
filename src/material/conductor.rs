@@ -60,21 +60,25 @@ pub struct Conductor {
     pub optics: Optics,
     /// Perceptual roughness along the tangent and across it (α = r²).
     pub roughness: (f64, f64),
+    /// A texture whose grey level scales `roughness` over the surface.
+    pub roughness_map: Option<crate::textures::ColorTexture>,
     /// The direction anisotropic roughness runs along, projected onto the surface.
     pub tangent: Vector3<f64>,
 }
 
 impl MaterialModel for Conductor {
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
-        (self.roughness.0 == self.roughness.1).then(|| crate::wavefront::flat::FlatMaterial::Conductor { optics: self.optics.clone(), roughness: self.roughness.0 })
+        (self.roughness.0 == self.roughness.1 && self.roughness_map.is_none()).then(|| crate::wavefront::flat::FlatMaterial::Conductor { optics: self.optics.clone(), roughness: self.roughness.0 })
     }
 
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let intersection = &intersection.facing(r);
         let (eta, k) = self.optics.current();
         let fresnel = Fresnel::Conductor { eta, k };
-        let ax = regularised(self.roughness.0 * self.roughness.0, s);
-        let ay = regularised(self.roughness.1 * self.roughness.1, s);
+        let scale = self.roughness_map.as_ref().map_or(1., |m| crate::color::luminance(&m.eval(intersection, s)).max(0.));
+        let (ru, rv) = (self.roughness.0 * scale, self.roughness.1 * scale);
+        let ax = regularised(ru * ru, s);
+        let ay = regularised(rv * rv, s);
         if ax.max(ay) >= MIN_ALPHA {
             let (ax, ay) = (ax.max(MIN_ALPHA), ay.max(MIN_ALPHA));
             let aniso = (ax != ay).then_some((ay, self.tangent));

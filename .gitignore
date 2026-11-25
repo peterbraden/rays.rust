@@ -30,3 +30,8 @@ Cargo.lock
 # Terrain evolved by landscape scenes
 .landscape-cache/
 .claude/worktrees/
+
+# The GPU shader, built from shaders/ by build.rs (scripts/build-shaders.sh)
+/src/gpu/pathtrace.spv
+/src/gpu/pathtrace.wgsl
+/src/gpu/pathtrace.spv.sources

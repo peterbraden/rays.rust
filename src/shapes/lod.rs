@@ -243,6 +243,13 @@ impl Card {
         self.data & TRIANGLE != 0
     }
 
+    /// The card's coordinates as bits: an order of cards that doesn't depend on where they are
+    /// stored.
+    fn bits(&self) -> [u32; 9] {
+        let [c, u, v] = [self.corner, self.u, self.v].map(|a| a.map(f32::to_bits));
+        [c[0], c[1], c[2], u[0], u[1], u[2], v[0], v[1], v[2]]
+    }
+
     pub fn normal(&self) -> Vector3<f64> {
         self.u().cross(&self.v()).normalize()
     }
@@ -257,8 +264,9 @@ impl Card {
     }
 
     /// Where on this card the point `p` lies, as its coordinates along `u` and `v`, if it lies
-    /// on it to within `tolerance`; never for a kept triangle.
-    fn holds(&self, p: &Vector3<f64>, tolerance: f64) -> Option<(f64, f64)> {
+    /// on it to within `tolerance`, and how far it is off the card's plane; never for a kept
+    /// triangle.
+    fn holds(&self, p: &Vector3<f64>, tolerance: f64) -> Option<(f64, f64, f64)> {
         if self.is_triangle() {
             return None;
         }
@@ -269,7 +277,8 @@ impl Card {
             return None;
         }
         let o = p - self.corner();
-        if (o.dot(&n) / area).abs() > tolerance {
+        let off = (o.dot(&n) / area).abs();
+        if off > tolerance {
             return None;
         }
         let (uu, vv, uv) = (u.norm_squared(), v.norm_squared(), u.dot(&v));
@@ -278,7 +287,7 @@ impl Card {
         let (a, b) = ((ou * vv - ov * uv) / det, (ov * uu - ou * uv) / det);
         // (The point's tolerance, along each edge.)
         let (ea, eb) = (tolerance / uu.sqrt(), tolerance / vv.sqrt());
-        ((-ea ..= 1. + ea).contains(&a) && (-eb ..= 1. + eb).contains(&b)).then_some((a, b))
+        ((-ea ..= 1. + ea).contains(&a) && (-eb ..= 1. + eb).contains(&b)).then_some((a, b, off))
     }
 
     /// Where the line of `r` crosses this card, if it does: as `hit`, but at any distance
@@ -335,20 +344,23 @@ impl CardSet {
     /// vertex it leaves lies on (`shapes::leaving`, set by whatever shaded that vertex, in this
     /// set's frame), and where on that card. Not from where the ray starts: integrators start
     /// rays off a surface by different amounts, from a fraction of a millimetre to centimetres.
+    /// Where several cards hold the vertex (as crossed cards do along the line they cross), the
+    /// one it lies nearest the plane of, then the lowest by its coordinates: not the first the
+    /// search meets, nor the first in the set, which depend on the shape of the tree.
     fn leaving(&self, r: &Ray) -> Option<(usize, f64, f64)> {
         let vertex = crate::shapes::leaving::current().filter(|v| v.of(r))?;
         // The cards about the vertex, by a short ray through it (a box test is all it is for).
         let probe = Ray { ro: vertex.point, rd: r.rd };
         let reach = (1e3 * vertex.tolerance).max(1e-6) / r.rd.norm();
-        let mut found = None;
+        let mut found: Option<(usize, f64, f64, f64)> = None;
         self.bvh.any_hit(&probe, -reach, reach, |i| {
-            let card = &self.cards[i];
-            match card.holds(&vertex.point, vertex.tolerance) {
-                Some((a, b)) => { found = Some((i, a, b)); true },
-                None => false,
+            if let Some((a, b, off)) = self.cards[i].holds(&vertex.point, vertex.tolerance)
+                && found.is_none_or(|(j, _, _, best)| off.total_cmp(&best).then_with(|| self.cards[i].bits().cmp(&self.cards[j].bits())).is_lt()) {
+                found = Some((i, a, b, off));
             }
+            false
         });
-        found
+        found.map(|(i, a, b, _)| (i, a, b))
     }
 
     /// The card `r` leaves, if it leaves one of a cluster whose leaves shadow it or that is
@@ -1671,6 +1683,71 @@ mod tests {
             }
         }
         assert!(tried > 40 && siblings > 0, "{tried} rays tried, {siblings} met other cards unnamed");
+    }
+
+    #[test]
+    fn test_the_card_left_does_not_depend_on_the_tree() {
+        // Crossed cards hold the points along the line they cross: a vertex there is on both,
+        // and which it is taken to leave decides whether the cluster's own leaves stop the ray
+        // (the hash of where on the card it left). The same cards mirrored, which the tree
+        // splits and searches in the opposite order, must give the mirror of the same card.
+        let mut rng = Pcg32::new(9, 9);
+        let mut unit = || loop {
+            let v = Vector3::new(rng.next_f64() * 2. - 1., rng.next_f64() * 2. - 1., rng.next_f64() * 2. - 1.);
+            if v.norm_squared() < 1. && v.norm() > 0.1 { return v; }
+        };
+        let all: Vec<Arc<Tagged<Triangle>>> = (0 .. 300).map(|k| {
+            let at = Vector3::new(0.5, 0.5, 0.5) + unit() * 0.5;
+            let n = unit().normalize();
+            let a = n.cross(&if n.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() }).normalize();
+            let b = n.cross(&a);
+            Arc::new(Tagged { item: Triangle::new(at, at + a * 0.1, at + b * 0.1), face: k })
+        }).collect();
+        let set = consolidate(&all, 10.);
+        assert!(set.crossed);
+        let mirror = |c: &Card| {
+            let m = |a: [f32; 3]| [-a[0], a[1], a[2]];
+            Card { corner: m(c.corner), u: m(c.u), v: m(c.v), data: c.data }
+        };
+        let mirrored: Vec<Card> = set.cards().iter().map(mirror).collect();
+        let (bvh, cards) = Bvh::build_with_leaves(mirrored, Card::bounds, CARDS_PER_LEAF);
+        let other = CardSet { bvh, cards, clusters: Clusters::default(), crossed: set.crossed, owned: set.owned };
+        let cards = set.cards();
+        let mut on_both = 0;
+        for i in 0 .. cards.len() {
+            for j in i + 1 .. cards.len() {
+                let (p, q) = (&cards[i], &cards[j]);
+                if p.is_triangle() || q.is_triangle() || p.data != q.data {
+                    continue;
+                }
+                // The line the two planes cross along.
+                let (n1, n2) = (p.normal(), q.normal());
+                let (d1, d2) = (n1.dot(&p.corner()), n2.dot(&q.corner()));
+                let l = n1.cross(&n2);
+                if l.norm() < 1e-3 {
+                    continue;
+                }
+                let on = (n2.cross(&l) * d1 + l.cross(&n1) * d2) / l.norm_squared();
+                for k in -50 ..= 50 {
+                    let point = on + l.normalize() * (k as f64 * 0.02);
+                    let tolerance = 1e-4;
+                    if p.holds(&point, tolerance).is_none() || q.holds(&point, tolerance).is_none() {
+                        continue;
+                    }
+                    on_both += 1;
+                    let vertex = crate::shapes::leaving::Leaving { point, tolerance, reach: 0.05 };
+                    let r = Ray { ro: point + Vector3::y() * 1e-3, rd: Vector3::y() };
+                    let flip = |x: Vector3<f64>| Vector3::new(-x.x, x.y, x.z);
+                    let image = crate::shapes::leaving::Leaving { point: flip(point), ..vertex };
+                    let left = crate::shapes::leaving::with(Some(vertex), || set.leaving(&r))
+                        .map(|(c, a, b)| (set.cards[c].bits(), a, b));
+                    let right = crate::shapes::leaving::with(Some(image), || other.leaving(&Ray { ro: flip(r.ro), rd: r.rd }))
+                        .map(|(c, a, b)| (mirror(&other.cards[c]).bits(), a, b));
+                    assert_eq!(left, right, "a vertex on two crossed cards left by different ones");
+                }
+            }
+        }
+        assert!(on_both > 20, "{on_both} vertices on two cards");
     }
 
     #[test]

@@ -3005,6 +3005,12 @@
       "doc": "A sea of Tessendorf waves on the planet's surface, physically lit (sun glitter, Fresnel sky reflection), displaced near detail_center and shaded by its slopes beyond. A material or medium given replaces the ocean's own.",
       "fields": [
         {"name": "wind", "kind": "vec2", "default": [7, 2], "doc": "Wind velocity [x, z], m/s."},
+        {
+          "name": "swell",
+          "kind": "object",
+          "default": null,
+          "doc": "Swell from a distant storm, breaking on the shore of a landscape before it with the wind's sea: {\"height\" (significant, m, default 1), \"period\" (s, default 10), \"direction\" ([x, z] it travels, default [-1, 0])}. In the surf only, so far."
+        },
         {"name": "time", "kind": "number", "default": 0, "doc": "Time of the wave animation, s."},
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Random realisation of the waves."},
         {

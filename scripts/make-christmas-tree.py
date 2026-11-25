@@ -356,7 +356,9 @@ scene = {
     "light_sampler": "bvh",
     "filter": "mitchell",
     "adaptive": {"threshold": 0.012, "min_samples": 32},
-    "output": {"exposure": 6.0, "tonemap": "filmic"},
+    # Bulbs are white-hot at any exposure that shows the tree; the camera's glare gives each a
+    # halo of its own colour, as in a photograph.
+    "output": {"exposure": 3.5, "tonemap": "filmic", "glare": True},
     "background": [0.006, 0.007, 0.012],
     "camera": camera,
     "materials": materials,

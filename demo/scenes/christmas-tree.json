@@ -10,7 +10,7 @@
   "light_sampler": "bvh",
   "filter": "mitchell",
   "adaptive": {"threshold": 0.012, "min_samples": 32},
-  "output": {"exposure": 6.0, "tonemap": "filmic"},
+  "output": {"exposure": 3.5, "tonemap": "filmic", "glare": true},
   "background": [0.006, 0.007, 0.012],
   "camera": {"location": [0.15, 1.15, -6.2], "lookat": [0, 1.85, 0], "up": [0, 1, 0], "angle": 0.7, "aperture": 0.06},
   "materials": {

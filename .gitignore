@@ -37,3 +37,4 @@ Cargo.lock
 /src/gpu/pathtrace.spv
 /src/gpu/pathtrace.wgsl
 /src/gpu/pathtrace.spv.sources
+__pycache__/

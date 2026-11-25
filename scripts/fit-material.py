@@ -150,6 +150,7 @@ def load_reference(path, resolution, crop=None):
 # width as fractions of the scan's width), one in each quadrant, so no one tile's lighting or
 # odd stone decides the fit.
 DETAIL = 0.25
+ROAM = 25  # how far a roaming fit's patches lie from the origin, in the scan's sizes
 DETAIL_TILES = [(0.125, 0.125, DETAIL), (0.625, 0.125, DETAIL), (0.125, 0.625, DETAIL), (0.625, 0.625, DETAIL)]
 
 
@@ -1055,7 +1056,7 @@ class ColourSolve:
         return out
 
 
-def scene(usage, library_path, size, resolution, samples, seed, view="ground", lighting="sun"):
+def scene(usage, library_path, size, resolution, samples, seed, view="ground", lighting="sun", offset=(0., 0.)):
     # A scan of a cliff was taken facing the cliff, its up the scene's up: seen as a wall (the
     # plane z = 0, from in front), so a preset's beds and streaks along y line up with it.
     # Lit by a sun behind the camera, of irradiance pi so a matte surface facing it shows its
@@ -1066,11 +1067,14 @@ def scene(usage, library_path, size, resolution, samples, seed, view="ground", l
     toward = [0, 0, -1] if view == "wall" else [0, 1, 0]
     light = {"background": [0, 0, 0], "sun": {"direction": toward, "intensity": math.pi, "angular_radius": 0.01}} \
         if lighting == "sun" else {"background": [1, 1, 1]}
+    # The camera looks at the surface `offset` (metres along it) from the origin: a fit that
+    # roams scores each generation on another patch, so it can't fit one patch's accidents.
+    ox, oy = offset
     if view == "wall":
-        camera = {"type": "orthographic", "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "height": size}
+        camera = {"type": "orthographic", "location": [ox, oy, -5], "lookat": [ox, oy, 0], "up": [0, 1, 0], "height": size}
         ground = {"type": "plane", "normal": [0, 0, -1], "distance": 0, "material": "M"}
     else:
-        camera = {"type": "orthographic", "location": [0, 5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "height": size}
+        camera = {"type": "orthographic", "location": [ox, 5, oy], "lookat": [ox, 0, oy], "up": [0, 0, 1], "height": size}
         ground = {"type": "plane", "y": 0, "material": "M"}
     return {
         "width": 2 * resolution, "height": 2 * resolution, "supersamples": samples, "max_depth": 2, "seed": seed,
@@ -1102,7 +1106,8 @@ def render(preset, usage, name, args, size, tmp, tag, linear=False):
     library_path = os.path.join(tmp, "library-%s.json" % tag)
     json.dump({name: preset}, open(library_path, "w"))
     path = os.path.join(tmp, "scene-%s.json" % tag)
-    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view, lighting), open(path, "w"))
+    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view, lighting,
+                    getattr(args, "offset", (0., 0.))), open(path, "w"))
     out = os.path.join(tmp, "render-%s.png" % tag)
     run = subprocess.run([args.rays, path, "--fresh", "-o", out], cwd=ROOT,
                          stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -1135,6 +1140,10 @@ def main():
                    help="search every number of the preset's graphs too (free_params), not only the spec's")
     a.add_argument("--no-solve", dest="solve", action="store_false",
                    help="search for the colours with the rest (as fits before ColourSolve did)")
+    a.add_argument("--fixed", dest="roam", action="store_false",
+                   help="score every candidate on the same patch (by default each generation is scored on another,"
+                        " and the fit chosen by its loss on patches it was never scored on)")
+    a.add_argument("--judges", type=int, default=3, help="fresh patches the final choice is scored on, when roaming")
     a.add_argument("--no-detail", dest="detail", action="store_false",
                    help="the whole scan only, without the detail view (half the renders)")
     args = a.parse_args()
@@ -1250,7 +1259,15 @@ def main():
                 log.append((it + 1, len(xs), best[0], best[0], round(time.time() - t0, 1)))
                 print("round %d: best %.5f at %.4f" % (it + 1, best[0], best[1][0]), file=sys.stderr)
                 lo, hi, step = max(best[1][0] - step, 0.), min(best[1][0] + step, 1.), step / 4
+        # Roaming: each generation's candidates share a patch, a new one each generation, up to
+        # ROAM sizes from the origin, so all of a generation are compared alike but none can fit
+        # one patch's accidents. A generation's best is then partly its patch's luck, so the fit is
+        # chosen afterwards from the generations' bests by their loss on patches no generation saw.
+        roam = np.random.default_rng(args.seed + 7919)
+        leaders = []  # (generation's best loss, x)
         for it in range(args.iterations if es else 0):
+            if args.roam:
+                args.offset = tuple(float(v) for v in roam.uniform(-ROAM * size, ROAM * size, 2))
             xs = es.ask()
             results = []
             for k, x in enumerate(xs):
@@ -1262,10 +1279,45 @@ def main():
                     results.append((1e6, None, None))
             es.tell(xs, [r[0] for r in results])
             k = int(np.argmin([r[0] for r in results]))
+            leaders.append((results[k][0], np.array(xs[k]), it))
             if results[k][0] < best[0]:
                 best = (results[k][0], np.array(xs[k]), results[k][1], results[k][2])
             log.append((it + 1, es.countevals, best[0], results[k][0], round(time.time() - t0, 1)))
             print("iteration %d: best %.5f (this generation %.5f)" % (it + 1, best[0], results[k][0]), file=sys.stderr)
+        judged = None
+        if args.roam and leaders:
+            # The judges: patches drawn apart from the generations'. Candidates: CMA-ES's mean and
+            # the best of the generations in the search's last half, a few of the lowest.
+            judges = [tuple(float(v) for v in np.random.default_rng(args.seed + 104729 + j).uniform(-ROAM * size, ROAM * size, 2))
+                      for j in range(args.judges)]
+            late = sorted([l for l in leaders if l[2] >= len(leaders) // 2], key=lambda l: l[0])[:3]
+            candidates = [("author's, colours solved", x0)] + [("generation %d's best" % (l[2] + 1), l[1]) for l in late] \
+                + [("the search's mean", np.array(es.result.xfavorite))]
+
+            def judge(x, label):
+                scores, last = [], None
+                for j, o in enumerate(judges):
+                    args.offset = o
+                    try:
+                        last = evaluate(x, "j%d" % j)
+                    except RenderFailed:
+                        return float("inf"), None
+                    scores.append(last[0])
+                print("judged on %d fresh patches: %.5f (%s)" % (len(judges), np.mean(scores), label), file=sys.stderr)
+                return float(np.mean(scores)), last
+
+            verdicts = [(judge(x, label), label, x) for label, x in candidates]
+            author = verdicts[0][0][0]
+            (score_, last), label, x = min(verdicts[1:], key=lambda v: v[0][0])
+            if score_ < author:
+                best = (score_, x, last[1], last[2])
+            else:
+                label, a_last = "the author's, colours solved", verdicts[0][0][1]
+                best = (author, x0, a_last[1], a_last[2])
+            judged = {"fitted": round(score_ if score_ < author else author, 6), "author_solved": round(author, 6),
+                      "patches": len(judges), "chosen": label}
+            print("chosen: %s" % label, file=sys.stderr)
+            args.offset = (0., 0.)
         _, fitted_usage = problem.make(best[1], usage)
         fitted = best[3]
         if solver is not None:
@@ -1274,7 +1326,8 @@ def main():
             imgs = rendered(fitted, fitted_usage, "fitted")
             best = (score(imgs), best[1], imgs, fitted)
             print("fitted, rendered: loss %.5f (composed %.5f)" % (best[0], composed), file=sys.stderr)
-        json.dump({"library": {name: fitted}, "material": fitted_usage, "loss": {"start": start_loss, "fitted": best[0]}},
+        json.dump({"library": {name: fitted}, "material": fitted_usage, "loss": {"start": start_loss, "fitted": best[0]},
+                   **({"judged": judged} if judged else {})},
                   open(os.path.join(args.output, "fitted.json"), "w"), indent=1)
         with open(os.path.join(args.output, "log.csv"), "w", newline="") as f:
             csv.writer(f).writerows(log)
@@ -1307,7 +1360,8 @@ def main():
                 "loss": {"start": round(start_loss, 6), "fitted": round(best[0], 6)},
                 "iterations": args.iterations, "resolution": args.resolution, "samples": args.samples,
                 "loss_kind": ("floor" if args.loss == "floor" else "structure" if args.structure else "colour") + ("+detail" if args.detail else "")
-                + ("+solved" if solver else ""),
+                + ("+solved" if solver else "") + ("+free" if args.free else "") + ("+roam" if judged else ""),
+                **({"judged": judged} if judged else {}),
                 "date": time.strftime("%Y-%m-%d"), "applied": False, "values": values}
             with open(library_path, "w") as f:
                 json.dump(library, f, indent=2)

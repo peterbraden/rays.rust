@@ -133,12 +133,18 @@ function previewDoc() {
 // depend on the mesh, so it is shared with the full render. `?landscape_resolution=` changes
 // it.
 const PREVIEW_LANDSCAPE_RESOLUTION = Number(new URLSearchParams(location.search).get('landscape_resolution')) || 64;
+// Nor is its ground displaced, or strewn with its own boulders, about the camera (a landscape
+// near the ground does both unless the scene says not to): nested grids of up to 512 by 512
+// to displace (40 to 80 s to build in the browser), finer than the raycaster sees anyway (it
+// takes displaced ground at its heightmap's cells). `?landscape_detail=1` keeps them.
+const PREVIEW_LANDSCAPE_DETAIL = new URLSearchParams(location.search).get('landscape_detail') === '1';
 function previewLandscape(o) {
     if (o?.type !== 'landscape' || o.scale !== undefined) { return o; }
     if (o.resolution !== undefined && typeof o.resolution !== 'number') { return o; }   // a variable
     const resolution = Math.min(o.resolution ?? 384, PREVIEW_LANDSCAPE_RESOLUTION);
     const globe = typeof o.globe === 'number' ? Math.min(o.globe, Math.max(16, Math.round(resolution / 2))) : Math.max(16, Math.round(resolution / 2));
-    return { ...o, resolution, globe };
+    const detail = PREVIEW_LANDSCAPE_DETAIL ? {} : { displacement: false, boulders: false };
+    return { ...o, resolution, globe, ...detail };
 }
 
 // A sky's view table is built for the preview a quarter of the size each way (`lut_size`, 256

@@ -1281,9 +1281,28 @@ impl Ground {
         let lace = if h > edge - LACE {
             self.noise.noise(p.x / 0.7, p.z / 0.7, 1.3) > -0.3
         } else {
-            self.noise.noise(p.x / 0.6, p.z / 0.6, h * 6.) > 0.45
+            // Behind the edge, as the backwash drains, the lace left in thin streaks down the
+            // beach, fewer the further below the edge (the longer ago the water passed).
+            let down = self.downhill(p);
+            let (along, across) = (p.x * -down.y + p.z * down.x, p.x * down.x + p.z * down.y);
+            let below = ((edge - h) / (edge + 0.05).max(1e-3)).clamp(0., 1.);
+            self.noise.noise(along / 0.12, across / 1.5, 5.3) > 0.45 + 0.35 * below
         };
         Some(RiverAt::Swash(if lace { Swash::Lace } else { Swash::Film }))
+    }
+
+    /// Which way is down the ground's large-scale slope at scene point `p` (scene x and z,
+    /// unit), from the finest simulation's heights twenty metres about it; along x where it is
+    /// flat or outside them.
+    fn downhill(&self, p: &Vector3<f64>) -> crate::na::Vector2<f64> {
+        let e = 20.;
+        let at = |dx: f64, dz: f64| {
+            let (d, _) = self.frame.on_planet(&(p + Vector3::new(dx, 0., dz)));
+            self.layer_at(&d).map(|l| l.simulated(&d))
+        };
+        let (Some(xp), Some(xm), Some(zp), Some(zm)) = (at(e, 0.), at(-e, 0.), at(0., e), at(0., -e)) else { return crate::na::Vector2::x() };
+        let g = -crate::na::Vector2::new(xp - xm, zp - zm);
+        if g.norm() > 1e-9 { g.normalize() } else { crate::na::Vector2::x() }
     }
 
     /// Whether scene point `p` is under a closed basin's terminal lake: brine, shallow over a

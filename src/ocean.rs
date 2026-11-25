@@ -1544,6 +1544,14 @@ impl Surf {
         Some((d, self.arriving(d, offshore?)))
     }
 
+    /// Where in its cycle train `k` is at `p` at this moment, as a phase: the crests' phase
+    /// is laid out from the shore (`arriving`), so without this a crest would stand at every
+    /// shoreline, its foam always fresh; each train is caught at its own moment, drifting
+    /// slowly along the shore (waves arrive along a coast at different times).
+    fn moment(&self, p: &Vector3<f64>, k: usize) -> f64 {
+        std::f64::consts::TAU * (0.37 + 0.29 * k as f64) + 1.5 * self.noise.noise(p.x / 80., p.z / 80., 11.3 + 3.1 * k as f64)
+    }
+
     /// A wave's height at `p` in train `k`, of root-mean-square `h` there, at `phase`: varying
     /// about the root-mean-square from wave to wave (wave groups) and along its crest, smoothly
     /// with the phase, so that the surface does too.
@@ -1555,7 +1563,7 @@ impl Surf {
     /// The white water at `p`, 0 to 1, and the fraction of waves breaking there. A wave, its
     /// height varying about the root-mean-square from wave to wave and along its crest, breaks
     /// where that height reaches 0.78 of the depth, and is white on its front and behind it
-    /// with the foam it leaves, fading as it ages. Over land, all white.
+    /// with the foam it leaves, fading as it ages. At the water's edge, none.
     pub fn white(&self, p: &Vector3<f64>) -> (f64, f64) {
         let (fresh, residual, breaking) = self.foam(p);
         (fresh.max(residual), breaking)
@@ -1566,13 +1574,16 @@ impl Surf {
     /// waves breaking.
     pub fn foam(&self, p: &Vector3<f64>) -> (f64, f64, f64) {
         let Some((d, arriving)) = self.state(p) else { return (0., 0., 0.) };
-        if d <= 0. { return (1., 1., 1.); }
+        // At the water's edge (where the grid, a metre apart, puts the ground at the sea's
+        // level or above but the sea shows): the swash's thin water, its lace the ground's.
+        if d <= 0. { return (0., 0., 1.); }
         // The fraction breaking, of the trains together (their energies add).
         let hrms = arriving.iter().map(|a| a.0 * a.0).sum::<f64>().sqrt();
         if hrms <= 0. { return (0., 0., 0.); }
         let breaking = breaking_fraction(hrms, d);
         if breaking <= 0. { return (0., 0., 0.); }
         let (fresh, residual) = arriving.iter().enumerate().filter(|a| a.1.0 > 0.).map(|(k, &(h, phase))| {
+            let phase = phase - self.moment(p, k);
             let height = self.wave_height(p, k, h, phase);
             // A broken wave's foam: the roller on its front, and behind it (seaward: the phase
             // grows out to sea) the foam it left as it passed, as old as the phase since its
@@ -1626,6 +1637,7 @@ impl Surf {
         let surf = 1. - crate::math::smoothstep(0.3 * crate::terrain::scenery::CLOSURE_DEPTH, crate::terrain::scenery::CLOSURE_DEPTH, d);
         if surf <= 0. { return Some((0., 0.)); }
         let eta = arriving.iter().enumerate().filter(|a| a.1.0 > 0.).map(|(k, &(h, phase))| {
+            let phase = phase - self.moment(p, k);
             let height = self.wave_height(p, k, h, phase);
             let steep = height / (BREAKING_INDEX * d);
             let broken = crate::math::smoothstep(0.95, 1.05, steep);

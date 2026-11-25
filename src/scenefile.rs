@@ -920,6 +920,10 @@ impl SceneFile {
             if let (Some(ocean), true) = (&ocean, obj["type"] == "iceberg" || obj["type"] == "ice_floes") {
                 if obj.get("ocean").is_none() { obj["ocean"] = ocean.clone(); }
             }
+            // A landscape's shores are washed by the scene's ocean's waves.
+            if let (Some(ocean), true) = (&ocean, obj["type"] == "landscape") {
+                if obj.get("ocean").is_none() { obj["ocean"] = ocean.clone(); }
+            }
             // (Nor what grows on, or reads, the landscape before it: forests, grass, ecosystems,
             // scatters and volumes over one.)
             let on_landscape = landscape.is_some() && matches!(obj["type"].as_str(), Some("forest" | "grass" | "ecosystem" | "scatter" | "volume"));

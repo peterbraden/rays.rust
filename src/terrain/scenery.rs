@@ -164,6 +164,9 @@ pub struct SceneryParams {
     pub globe: usize,
     /// The wind over the lakes (scene x and z, m/s), which raises their waves.
     pub wind: [f64; 2],
+    /// The waves washing the shores: significant height out at sea (m) and period (s), from
+    /// the scene's ocean (`ocean::shore_waves`).
+    pub sea: Option<(f64, f64)>,
     /// Shade bare rock, scree, sand and gravel with the library's natural materials
     /// (`material::library`), each rock its own; else with plain colours.
     pub ground_materials: bool,
@@ -175,6 +178,7 @@ impl Default for SceneryParams {
             resolution: 384, min_spacing: 0.5, roughness: 1., exaggeration: 1.,
             snowline: None, treeline: None, min_river_width: 0., hydraulics: Default::default(), globe: 192, ground_materials: true,
             wind: [4., 0.],
+            sea: None,
         }
     }
 }
@@ -351,6 +355,13 @@ impl Layer {
         }
     }
 
+    /// Whether `d` is by the sea: in a cell of sea floor or beside one.
+    fn by_the_sea(&self, d: &Vector3<f64>) -> bool {
+        let Some((x, z)) = self.tangent(d) else { return false };
+        let i = point_cell(&self.domain, [x, z]);
+        self.class[i] == SEA_FLOOR || self.domain.links(i).iter().any(|l| self.class[l.to] == SEA_FLOOR)
+    }
+
     /// The patch point of direction `d`, if it is on the patch's side of the planet.
     fn carve_point(&self, d: &Vector3<f64>) -> Option<crate::terrain::channel::Point> {
         self.tangent(d).map(|(x, z)| [x, z])
@@ -373,6 +384,11 @@ pub fn dean_a(d50: f64) -> f64 { 0.21 * d50.max(0.01).powf(0.48) }
 /// The beach's median grain, mm: a medium sand (a model choice, until the coast's sediment is
 /// known).
 pub const BEACH_SAND: f64 = 0.3;
+
+/// The slope of a sandy beach's face, where the swash runs: set by the sand more than the
+/// land (coarser, steeper: Bascom, 1951), about 1 in 12 for a medium sand (a model choice; the
+/// simulation's slopes, over hundreds of metres, don't see it).
+const FORESHORE: f64 = 0.08;
 
 /// The depth below which waves no longer reshape the sea floor, metres: a typical depth of
 /// closure for moderate coasts (6-10 m; a model choice for Hallermeier's, which needs the
@@ -421,6 +437,9 @@ pub enum RiverAt {
     /// A river's bed bare beside its water, in its channel below the bankfull level: the bars
     /// floods scour too often for plants to hold; with the median grain, metres.
     Bar(f64),
+    /// The sea's swash running up a shore: wet sand under a film of water, and whether foam's
+    /// lace is on it here.
+    Swash(bool),
 }
 
 /// Heights of the landscape, from its layers and the planet's own topography.
@@ -989,6 +1008,8 @@ pub struct Ground {
     pub clipmap: std::sync::OnceLock<Clipmap>,
     /// The library's materials for each kind of bare ground (`Bare::index`), if used.
     materials: Vec<Option<Box<dyn MaterialModel + Sync + Send>>>,
+    /// The waves washing the shores (`SceneryParams::sea`).
+    sea: Option<(f64, f64)>,
 }
 
 /// What lies bare on the ground at a point, under any snow or ice: plants and soil (the
@@ -1108,6 +1129,7 @@ impl Ground {
             snow: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("firn"), 1., seed)],
             ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
             clipmap: std::sync::OnceLock::new(),
+            sea: p.sea,
             materials: (0..Bare::COUNT).map(|k| {
                 let s = if k < 4 { [Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel][k] } else { Bare::Rock(Rock::from_index(k - 4)) };
                 let name = s.library().filter(|_| p.ground_materials)?;
@@ -1215,11 +1237,30 @@ impl Ground {
     /// What `p` is as far as water goes (`Layer::river_at`).
     pub fn river_at(&self, p: &Vector3<f64>) -> RiverAt {
         let (d, h) = self.frame.on_planet(p);
+        if let Some(shore) = self.shore(p, h).filter(|_| self.layer_at(&d).is_some_and(|l| l.by_the_sea(&d))) { return shore; }
         let surfaced = |half: f64| self.clipmap.get().is_some_and(|c| {
             let (x, z) = self.frame.tangent(&d);
             c.local(x, z).is_some_and(|s| s < half)
         });
         self.layer_at(&d).map_or(RiverAt::Land, |l| l.river_at(&d, h, surfaced))
+    }
+
+    /// The shore at `p` (`h` metres above sea level), where the sea's waves wash it: up to
+    /// the height they run up (`ocean::runup`, Stockdon's, on a beach face of `FORESHORE`) the swash,
+    /// a film of water over wet ground with lace of foam in bands along it, thinning towards
+    /// the top; above that, wet as far again as water wicks up the sand (`capillary_rise`).
+    /// None above, or without a sea.
+    fn shore(&self, p: &Vector3<f64>, h: f64) -> Option<RiverAt> {
+        let (h0, period) = self.sea?;
+
+        let wet = capillary_rise(BEACH_SAND / 1000.);
+        let reach = crate::ocean::runup(h0, period, FORESHORE);
+        if h < -0.05 || h > reach + wet { return None; }
+        if h > reach { return Some(RiverAt::Bed(BEACH_SAND / 1000.)); }
+        // The lace: bands along the shore, broken by noise, fewer up the swash.
+        let up = (h / reach.max(1e-3)).clamp(0., 1.);
+        let n = self.noise.noise(p.x / 1.2, p.z / 1.2, h * 4.);
+        Some(RiverAt::Swash(n > 0.15 + 0.7 * up))
     }
 
     /// Whether scene point `p` is under a closed basin's terminal lake: brine, shallow over a
@@ -1550,6 +1591,8 @@ pub struct LandscapeMedium {
     water: FlatWater,
     /// Rivers' beds, under water: sand, and gravel and coarser.
     beds: [Lambertian; 2],
+    /// Foam on the swash.
+    foam: Lambertian,
     /// Their bars, bare beside the water: sand, and gravel and coarser (the material
     /// library's).
     bars: [Box<dyn MaterialModel + Sync + Send>; 2],
@@ -1573,6 +1616,7 @@ impl LandscapeMedium {
             brine: PhysicalOcean { water: Color::new(0.03, 0.07, 0.065), roughness: 0.003, center: Some(centre), foam: None, absorption: None, surf: None },
             ground,
             beds: [Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(SAND_ALBEDO)) }, Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(GRAVEL_ALBEDO)) }],
+            foam: Lambertian { albedo: crate::textures::ColorTexture::Constant(Color::new(0.6, 0.6, 0.6)) },
             bars: ["beach_sand", "river_gravel"].map(|name| crate::scenefile::SceneFile::parse_material_definition(&serde_json::json!({"type": "library", "name": name}), name, &serde_json::Map::new())),
         }
     }
@@ -1603,6 +1647,8 @@ impl Medium for LandscapeMedium {
             RiverAt::Water => &self.water,
             RiverAt::Bed(grain) => &self.beds[(grain > 0.002) as usize],
             RiverAt::Bar(grain) => &*self.bars[(grain > 0.002) as usize],
+            RiverAt::Swash(true) => &self.foam,
+            RiverAt::Swash(false) => &self.beds[0],
             RiverAt::Land if self.ground.salt_lake(&pt) => &self.brine,
             RiverAt::Land => &*self.land,
         }

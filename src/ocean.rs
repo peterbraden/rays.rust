@@ -1262,6 +1262,35 @@ pub struct PhysicalOcean {
     pub surf: Option<Surf>,
 }
 
+/// How high waves run up a beach, metres above the still water: the height exceeded by 2% of
+/// them, by Stockdon et al.'s fit to ten field experiments, R₂ = 1.1 (0.35 β (H₀ L₀)^½ +
+/// [H₀ L₀ (0.563 β² + 0.004)]^½ / 2), the setup and the swash, for deep-water significant
+/// height `h0` (m), `period` (s; L₀ = g T² / 2π) and the beach's slope `slope` (H. F. Stockdon,
+/// R. A. Holman, P. A. Howd and A. H. Sallenger, "Empirical parameterization of setup, swash,
+/// and runup", Coastal Engineering 53, 2006).
+pub fn runup(h0: f64, period: f64, slope: f64) -> f64 {
+    if h0 <= 0. { return 0.; }
+    let l0 = 9.81 * period * period / std::f64::consts::TAU;
+    let hl = h0 * l0;
+    1.1 * (0.35 * slope * hl.sqrt() + (hl * (0.563 * slope * slope + 0.004)).sqrt() / 2.)
+}
+
+/// The waves an ocean's scene object brings to its shores: their significant height out at sea
+/// (the wind's sea and any swell together, their energies added), and the period of the more
+/// energetic. None for a calm sea.
+pub fn shore_waves(opts: &Value) -> Option<(f64, f64)> {
+    let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.));
+    let fetch = SceneFile::parse_number(&opts["fetch"], f64::INFINITY);
+    let sea = opts["wave_height"].as_f64().unwrap_or_else(|| significant_wave_height(wind.norm(), opts["fetch"].as_f64()));
+    let sea_period = (std::f64::consts::TAU * jonswap_peak(wind.norm(), fetch.min(1e12)) / 9.81).sqrt();
+    let swell = &opts["swell"];
+    let (swell_height, swell_period) = if swell.is_object() {
+        (SceneFile::parse_number(&swell["height"], 1.).max(0.), SceneFile::parse_number(&swell["period"], 10.).max(1.))
+    } else { (0., 0.) };
+    let h0 = (sea * sea + swell_height * swell_height).sqrt();
+    (h0 > 0.).then_some((h0, if swell_height > sea { swell_period } else { sea_period }))
+}
+
 /// McCowan's breaking index: a wave breaks when its height reaches this fraction of the depth
 /// (J. McCowan, "On the highest wave of permanent type", Phil. Mag. 38, 1894; the value used by
 /// Battjes and Janssen for their maximum height, H_m = γ d).
@@ -2180,6 +2209,20 @@ mod curved_tests {
         let outer = |s: &Surf| (0..2000).map(|i| 0.1 * i as f64).filter(|&x| s.white(&Vector3::new(x, 0., 0.)).1 > 0.1).fold(0., f64::max);
         let (short, long) = (beach(vec![train(0.84, 5.3, Vector2::new(-1., 0.))]), beach(vec![train(0.84, 12., Vector2::new(-1., 0.))]));
         assert!(outer(&long) > 1.2 * outer(&short), "{} vs {}", outer(&long), outer(&short));
+    }
+
+    #[test]
+    fn test_waves_run_up_the_beach() {
+        // Stockdon et al.'s run-up by hand: a metre of 10 s swell (L₀ = 156 m) on a 1:20 beach,
+        // 1.1 (0.35 × 0.05 × 12.49 + √(156 × 0.005408) / 2) = 0.745 m.
+        assert!((runup(1., 10., 0.05) - 0.745).abs() < 0.005, "{}", runup(1., 10., 0.05));
+        // Higher on steeper beaches and for longer waves; none from a calm sea.
+        assert!(runup(1., 10., 0.1) > runup(1., 10., 0.05));
+        assert!(runup(1., 14., 0.05) > runup(1., 10., 0.05));
+        assert_eq!(runup(0., 10., 0.05), 0.);
+        // An ocean's waves at its shore: the swell's period when it carries more.
+        let (h, t) = shore_waves(&serde_json::json!({"wind": [7, 2], "swell": {"height": 1.5, "period": 11}})).unwrap();
+        assert!(h > 1.5 && h < 2.2 && t == 11., "{} {}", h, t);
     }
 
     #[test]

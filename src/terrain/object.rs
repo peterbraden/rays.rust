@@ -863,6 +863,7 @@ fn scenery_params(o: &Value) -> SceneryParams {
     p.min_river_width = number(o, "min_river_width", p.min_river_width);
     p.ground_materials = o["ground_materials"].as_bool().unwrap_or(p.ground_materials);
     p.hydraulics.flow = number(o, "river_flow", p.hydraulics.flow).max(0.);
+    p.sea = o.get("ocean").and_then(crate::ocean::shore_waves);
     if let Some(w) = o["wind"].as_array() {
         p.wind = [w.first().and_then(|v| v.as_f64()).unwrap_or(0.), w.get(1).and_then(|v| v.as_f64()).unwrap_or(0.)];
     }

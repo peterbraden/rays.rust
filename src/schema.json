@@ -7043,7 +7043,9 @@
             "eucalyptus",
             "kapok",
             "tree-fern",
-            "thornbush"
+            "thornbush",
+            "dipterocarp",
+            "rain-tree"
           ]
         },
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Chooses this individual tree."},
@@ -7423,7 +7425,9 @@
             "eucalyptus",
             "kapok",
             "tree-fern",
-            "thornbush"
+            "thornbush",
+            "dipterocarp",
+            "rain-tree"
               ]
             },
             {"name": "weight", "kind": "number", "default": 1, "doc": "Relative abundance."},

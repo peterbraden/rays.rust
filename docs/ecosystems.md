@@ -84,7 +84,7 @@ different valleys of one climate grow different woods (`terrain::flora::COMMUNIT
 | cold desert | sagebrush desert; Joshua tree woodland; pinyon desert |
 | hot desert | saguaro desert (saguaro, ocotillo, cacti, creosote); creosote flats; agave slopes |
 | savanna | acacia savanna (acacia, thornbush); baobab savanna; eucalypt woodland; palm savanna |
-| rainforest | lowland rainforest (kapok emergents over tupelo, palm, tree fern); cloud forest (tree fern); palm forest |
+| rainforest | lowland rainforest (dipterocarp and kapok emergents over rain trees, tupelo, palm, tree fern); cloud forest (tree fern, montane oak); palm forest |
 
 Plants of wet ground grow in the communities that have them only where water gathers
 (`wetness`): willows and grey alders by temperate and boreal rivers, mesquite in desert washes.
@@ -118,8 +118,9 @@ An ecosystem on a landscape hands it the crowns of the trees it placed (`terrain
 the landscape draws forest floor under them (`scenery::Ground::cover`): humus and litter, red-
 brown needles under conifers and browner leaves under broadleaves, moss where it isn't dry,
 shaded with the soil material's `forest_floor`; only cliffs stay bare. Materials and placement
-rules after the ecosystem read the same as a field, `canopy` (0 to 1). The ground's relief
-doesn't: its displaced cells' bounds are found before the trees are planted.
+rules after the ecosystem read the same as a field, `canopy` (0 to 1). So does the ground's own
+relief, its rock's ledges and scree's stones softened to a fifth under the trees: scaled towards
+zero, which its displaced cells' bounds (found before the trees are planted) all allow for.
 
 Beyond the trees planted about the camera (past `far`), the landscape draws woods of its own from the same
 communities (`flora::Regions::woods`: how much of the ground their trees' crowns cover, and how

@@ -29,8 +29,8 @@
 //! plants, so that each grows in the room those before it leave (`procedural::ecosystem`).
 //!
 //! The library lacks some of the world's characteristic plants, so some stand in for others:
-//! the black tupelo for the rainforest's canopy trees, the stone pine (and olive) for the
-//! Mediterranean's pines. Its planted trees (Lombardy poplar, Italian cypress) aren't wild
+//! the black tupelo among the rainforest's canopy trees (with its dipterocarps and rain trees),
+//! the stone pine (and olive) for the Mediterranean's pines. Its planted trees (Lombardy poplar, Italian cypress) aren't wild
 //! anywhere, nor the cedar of Lebanon, whose mountains no biome here singles out.
 
 use crate::terrain::climate::Biome;
@@ -105,6 +105,8 @@ pub const PLANTS: &[Plant] = &[
     plant("baobab", Tree, 25., 20., [0.42, 0.37, 0.32], BROADLEAF),
     plant("palm", Tree, 8., 30., [0.3, 0.26, 0.2], [0.07, 0.13, 0.04]),
     plant("kapok", Tree, 20., 30., [0.45, 0.42, 0.36], DARK_LEAF),
+    plant("dipterocarp", Tree, 14., 35., [0.5, 0.47, 0.42], DARK_LEAF),
+    plant("rain-tree", Tree, 16., 30., [0.3, 0.26, 0.21], BROADLEAF),
     plant("joshua-tree", Tree, 9., 25., [0.25, 0.2, 0.15], [0.11, 0.15, 0.07]),
     plant("utah-juniper", Tree, 8., 35., [0.3, 0.27, 0.23], [0.12, 0.14, 0.1]),
     plant("saguaro", Tree, 10., 30., CACTUS, SPINES),
@@ -216,15 +218,15 @@ pub const COMMUNITIES: &[Community] = &[
         &["savanna"], 300., "drought"),
     community("eucalypt woodland", Savanna, &[("eucalyptus", 0.3), ("thornbush", 0.1), ("acacia", 0.03)],
         &["savanna", "tussock"], 250., "drought"),
-    community("palm savanna", Savanna, &[("palm", 0.15), ("thornbush", 0.1)],
+    community("palm savanna", Savanna, &[("palm", 0.15), ("rain-tree", 0.03), ("thornbush", 0.1)],
         &["savanna"], 300., "summer"),
     // Rainforest.
     // Rainforest: closed canopies, crowded, in layers: emergents, canopy, tree ferns, shrubs.
-    crowded(community("lowland rainforest", Rainforest, &[("kapok", 0.15), ("black-tupelo", 0.8), ("palm", 0.3), ("tree-fern", 0.5), ("shrub", 0.6)],
+    crowded(community("lowland rainforest", Rainforest, &[("dipterocarp", 0.3), ("kapok", 0.1), ("rain-tree", 0.5), ("black-tupelo", 0.3), ("palm", 0.2), ("tree-fern", 0.5), ("shrub", 0.6)],
         &["bracken", "litter"], 150., "lush"), 0.6),
-    crowded(community("cloud forest", Rainforest, &[("tree-fern", 0.8), ("black-tupelo", 0.5), ("shrub", 0.5)],
+    crowded(community("cloud forest", Rainforest, &[("tree-fern", 0.8), ("english-oak", 0.3), ("black-tupelo", 0.2), ("rain-tree", 0.1), ("shrub", 0.5)],
         &["bracken", "sedge"], 200., "lush"), 0.6),
-    crowded(community("palm forest", Rainforest, &[("palm", 0.9), ("tree-fern", 0.4), ("black-tupelo", 0.3), ("shrub", 0.4)],
+    crowded(community("palm forest", Rainforest, &[("palm", 0.9), ("rain-tree", 0.2), ("tree-fern", 0.4), ("black-tupelo", 0.1), ("shrub", 0.4)],
         &["bracken", "litter"], 150., "lush"), 0.6),
 ];
 

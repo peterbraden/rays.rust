@@ -281,7 +281,12 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
         s += 0.03 * fbm(FractalStyle::Perlin, 0.5, 0.01, 0.6);
         h += loose * s;
     }
-    amplitude * ((1. - ice) * h.clamp(-REACH, REACH) + ice * glacier)
+    // Under trees (`terrain::canopy`) soil and litter bury the rock's relief and the scree's
+    // stones, to a fifth, but on cliffs. Scaled towards zero, never more than without the trees,
+    // and every displaced cell's bounds include zero (`DisplacedTerrain::tighten`), so the
+    // bounds found before the trees were planted still hold.
+    let soften = 1. - 0.8 * f.field(Field::Canopy, &c.p).unwrap_or(0.).clamp(0., 1.) * (1. - steep(55., 70.));
+    amplitude * ((1. - ice) * soften * h.clamp(-REACH, REACH) + ice * glacier)
 }
 
 /// How deep in a joint `c` is, 0 to 1, and the height of the block it is on, 0 to 1 (meeting

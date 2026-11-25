@@ -812,7 +812,7 @@ pub fn params(species_name: &str, overrides: &Value) -> TreeParams {
     p
 }
 
-pub const SPECIES: [&str; 44] = [
+pub const SPECIES: [&str; 46] = [
     "quaking-aspen", "black-tupelo", "california-black-oak", "weeping-willow",
     "lombardy-poplar", "balsam-fir", "palm", "shrub", "hazel", "hawthorn", "juniper",
     "scots-pine", "stone-pine", "norway-spruce", "italian-cypress", "cedar-of-lebanon",
@@ -820,7 +820,7 @@ pub const SPECIES: [&str; 44] = [
     "saguaro", "barrel-cactus", "prickly-pear", "agave", "ocotillo",
     "silver-birch", "european-beech", "english-oak", "sugar-maple", "european-larch", "grey-alder",
     "mountain-pine", "dwarf-birch", "pinyon-pine", "ponderosa-pine", "olive", "mesquite",
-    "acacia", "baobab", "eucalyptus", "kapok", "tree-fern", "thornbush",
+    "acacia", "baobab", "eucalyptus", "kapok", "tree-fern", "thornbush", "dipterocarp", "rain-tree",
 ];
 
 /// A succulent's parameters (see `crate::procedural::succulent` for what each field means to
@@ -1384,14 +1384,14 @@ pub fn species(name: &str) -> Option<TreeParams> {
         // Kapok: the rainforest's emergent, a tall, straight, buttressed trunk with a wide,
         // flat crown of level limbs high above the canopy.
         "kapok" => TreeParams {
-            shape: 3, base_size: 0.7, scale: 40., scale_v: 6., levels: 3,
+            shape: 3, base_size: 0.7, scale: 40., scale_v: 6., levels: 4,
             ratio: 0.018, ratio_power: 1.3, lobes: 5, lobe_depth: 0.3, flare: 2.,
-            leaves: 25., leaf_scale: 0.45, leaf_scale_x: 0.8, attraction_up: 0.5,
+            leaves: 30., leaf_scale: 0.45, leaf_scale_x: 0.8, attraction_up: 0.5,
             stems: vec![
                 level(0., 0., 0., 0., 0., 1., 0., 1., 10, 0., 0., 15.),
                 level(80., 10., 137.5, 30., 20., 0.8, 0.1, 1., 6, -30., 0., 40.),
                 level(45., 10., 137.5, 30., 25., 0.4, 0.1, 1., 4, 0., 0., 40.),
-                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+                level(45., 10., 137.5, 30., 10., 0.4, 0.1, 1., 2, 0., 0., 30.),
             ],
             ..d
         },
@@ -1420,6 +1420,34 @@ pub fn species(name: &str) -> Option<TreeParams> {
                 level(60., 10., 140., 20., 25., 0.5, 0.1, 1., 4, -10., 0., 40.),
                 level(45., 10., 140., 20., 12., 0.5, 0.1, 1., 2, 0., 0., 30.),
                 level(45., 10., 140., 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Dipterocarp: the rainforest's tall emergent, a straight, buttressed bole bare for most
+        // of its height, under a broad crown of rounded, cauliflower-like clumps.
+        "dipterocarp" => TreeParams {
+            shape: 2, base_size: 0.6, scale: 42., scale_v: 6., levels: 4,
+            ratio: 0.017, ratio_power: 1.3, lobes: 4, lobe_depth: 0.25, flare: 1.8,
+            leaves: 30., leaf_scale: 0.45, leaf_scale_x: 0.7, attraction_up: 0.8, wander: 0.03,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 10, 0., 0., 10.),
+                split(level(45., 15., 137.5, 40., 12., 0.55, 0.1, 1., 6, -10., 0., 40.), 0.2, 25., 10.),
+                level(40., 15., 137.5, 30., 30., 0.45, 0.1, 1., 4, 0., 0., 50.),
+                level(45., 10., 137.5, 30., 10., 0.4, 0.1, 1., 2, 0., 0., 30.),
+            ],
+            ..d
+        },
+        // Rain tree: a short, stout trunk dividing into wide, arching limbs under a broad,
+        // flat-topped umbrella of a crown, wider than it is tall.
+        "rain-tree" => TreeParams {
+            shape: 2, base_size: 0.25, scale: 22., scale_v: 4., levels: 4,
+            ratio: 0.028, ratio_power: 1.4, lobes: 4, lobe_depth: 0.1, flare: 1.,
+            base_splits: 2, leaves: 30., leaf_scale: 0.27, leaf_scale_x: 0.7, attraction_up: 1.5, wander: 0.05,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 40.), 0.25, 35., 10.),
+                split(level(60., 15., 137.5, 40., 14., 0.9, 0.1, 1., 8, 40., 0., 40.), 0.25, 25., 10.),
+                level(60., 15., 137.5, 30., 35., 0.4, 0.1, 1., 4, -20., 0., 40.),
+                level(45., 10., 137.5, 30., 10., 0.4, 0.1, 1., 2, 0., 0., 30.),
             ],
             ..d
         },

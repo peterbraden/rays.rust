@@ -12,9 +12,9 @@
 //! flora's communities (`flora::Regions::woods`), as crowns in a canopy material; the slot
 //! notes how far the planted trees reach (`planted`), so the two meet without a seam.
 //!
-//! The ground's relief (`terrain::detail`) doesn't read it: the displaced cells' bounds are
-//! found when the landscape is built, before any trees are planted, and taking the rock's
-//! relief away under them would move the surface outside those bounds.
+//! The ground's relief (`terrain::detail`) reads it too, its rock's ledges and its scree's
+//! stones softened under the trees: scaled towards zero, which the displaced cells' bounds,
+//! found before the trees were planted, allow for (they all include zero).
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};

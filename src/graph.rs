@@ -153,7 +153,8 @@ pub enum Field {
     Bedrock,
     /// How much of the ground the crowns of the trees an ecosystem planted on the landscape
     /// cover, 0 to 1 (`terrain::canopy`): for materials and placement rules after the
-    /// ecosystem, not for displacement, whose bounds are found before any trees are planted.
+    /// ecosystem. A displacement reading it must only scale towards zero (as the landscape's
+    /// own detail does), its bounds being found before any trees are planted.
     Canopy,
 }
 

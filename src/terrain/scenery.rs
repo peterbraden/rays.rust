@@ -979,9 +979,10 @@ const MEADOW: [f64; 3] = [0.11, 0.11, 0.06];
 const LEAF_LITTER: [f64; 3] = [0.16, 0.11, 0.06];
 const NEEDLE_LITTER: [f64; 3] = [0.14, 0.08, 0.045];
 const MOSS: [f64; 3] = [0.05, 0.08, 0.025];
-/// Woods from afar, broadleaved and conifers: their canopy materials' mean albedos.
-const BROADLEAF_CANOPY: [f64; 3] = [0.04, 0.065, 0.025];
-const CONIFER_CANOPY: [f64; 3] = [0.025, 0.04, 0.02];
+/// Woods from afar, broadleaved and conifers: their canopy materials' mean albedos, as the
+/// instanced trees nearer look from far off (their leaves lit, their gaps shadowed).
+const BROADLEAF_CANOPY: [f64; 3] = [0.056, 0.09, 0.035];
+const CONIFER_CANOPY: [f64; 3] = [0.035, 0.056, 0.028];
 
 /// A canopy seen from afar (`Bare::Woods`): crowns `spacing` metres apart, each a dome of
 /// leaves (the `cells` node's `stones`: random heights, rounded, gaps between), lit on the side
@@ -1021,8 +1022,8 @@ impl Ground {
                 // Forest floor is the soil material's (`material::soil`); the rest the library's.
                 let (definition, name) = match s {
                     Bare::Floor => (serde_json::json!({"type": "soil", "preset": "forest_floor", "seed": salt}), "forest_floor"),
-                    Bare::Woods => (canopy_material(8., [0.012, 0.02, 0.008], [0.03, 0.05, 0.02], [0.075, 0.12, 0.04], salt), "woods"),
-                    Bare::Conifers => (canopy_material(5., [0.008, 0.012, 0.007], [0.02, 0.032, 0.016], [0.045, 0.07, 0.035], salt), "conifers"),
+                    Bare::Woods => (canopy_material(8., [0.017, 0.028, 0.011], [0.042, 0.07, 0.028], [0.105, 0.17, 0.056], salt), "woods"),
+                    Bare::Conifers => (canopy_material(5., [0.011, 0.017, 0.01], [0.028, 0.045, 0.022], [0.063, 0.1, 0.05], salt), "conifers"),
                     s => { let name = s.library()?; (serde_json::json!({"type": "library", "name": name, "seed": salt}), name) },
                 };
                 Some(crate::scenefile::SceneFile::parse_material_definition(&definition, name, &serde_json::Map::new()))

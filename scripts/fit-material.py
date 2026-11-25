@@ -439,22 +439,191 @@ class ColourLoss:
         return sum(self.WEIGHTS[k] * v for k, v in self.parts_of(a, b).items())
 
 
+def components(classes):
+    """Connected regions (4-neighbours) of equal class: each pixel's label is the least index
+    in its region, by propagating minima to equal neighbours and jumping along labels."""
+    h, w = classes.shape
+    labels = np.arange(h * w).reshape(h, w)
+    while True:
+        old = labels
+        new = labels.copy()
+        for axis, shift in ((0, 1), (0, -1), (1, 1), (1, -1)):
+            nb = np.roll(labels, shift, axis=axis)
+            same = np.roll(classes, shift, axis=axis) == classes
+            # Not across the image's edge.
+            if axis == 0:
+                same[0 if shift == 1 else -1, :] = False
+            else:
+                same[:, 0 if shift == 1 else -1] = False
+            new = np.where(same & (nb < new), nb, new)
+        flat = new.ravel()
+        for _ in range(4):
+            flat = flat[flat]
+        labels = flat.reshape(h, w)
+        if np.array_equal(labels, old):
+            return labels
+
+
+class PaletteLoss:
+    """The scan as a palette of colours, and how each is laid out: what a histogram misses.
+
+    The reference's colours are clustered (k-means in Oklab, each axis in units of its just
+    noticeable difference, `JND`, after a 3 x 3 average so a pixel's noise doesn't make
+    speckle), and each pixel of both images is given its nearest entry. Then:
+
+    - `share`: how much each entry covers (total variation, 0 to 1).
+    - `instances`: each entry's connected patches and their sizes: for each entry, the
+      distribution of its area over patch sizes (in octaves of area), compared by the
+      Wasserstein distance in octaves and weighed by the entry's share. Lichen in patches
+      four times too big costs 2 octaves of area (two of size) wherever there is lichen; the
+      colour histograms didn't see it at all.
+    - `adjacency`: which entries lie next to which, at 1, 3 and 9 pixels: the co-occurrence
+      of the pair (total variation between the two images' matrices). The colours in the
+      wrong places, the wrong grain, stones without their dark rims.
+
+    A candidate of the wrong colours falls mostly into one or two entries, and its shares say
+    so; one whose stones are the right colours but the wrong size, its instances."""
+
+    WEIGHTS = {"share": 4., "instances": 1., "adjacency": 2.}
+    OFFSETS = (1, 3, 9)
+    BINS = np.arange(0., 15.)  # log2 of a patch's area in pixels
+
+    def __init__(self, k=6, parts=("share", "instances", "adjacency"), seed=1):
+        self.k, self.parts, self.seed = k, parts, seed
+        self.cache = {}
+
+    @staticmethod
+    def smooth(img):
+        p = np.pad(img, ((1, 1), (1, 1), (0, 0)), mode="edge")
+        h, w = img.shape[:2]
+        return sum(p[dy:dy + h, dx:dx + w] for dy in range(3) for dx in range(3)) / 9.
+
+    def features(self, img):
+        return oklab(self.smooth(img)) / JND
+
+    def palette(self, ref):
+        key = hash(ref.tobytes())
+        if key not in self.cache:
+            x = self.features(ref).reshape(-1, 3)
+            rng = np.random.default_rng(self.seed)
+            # k-means++ seeding, then Lloyd's iterations.
+            centres = [x[rng.integers(len(x))]]
+            for _ in range(self.k - 1):
+                d = np.min(((x[:, None] - np.array(centres)[None]) ** 2).sum(-1), axis=1)
+                centres.append(x[rng.choice(len(x), p=d / d.sum())])
+            c = np.array(centres)
+            for _ in range(25):
+                lab = np.argmin(((x[:, None] - c[None]) ** 2).sum(-1), axis=1)
+                c = np.array([x[lab == j].mean(0) if np.any(lab == j) else c[j] for j in range(self.k)])
+            self.cache[key] = c
+        return self.cache[key]
+
+    def classes(self, img, centres):
+        x = self.features(img)
+        return np.argmin(((x[:, :, None] - centres[None, None]) ** 2).sum(-1), axis=2)
+
+    def sizes(self, classes):
+        """For each entry, its area's distribution over patch sizes (rows sum to its share)."""
+        labels = components(classes).ravel()
+        area = np.bincount(labels, minlength=labels.size)[labels]
+        bins = np.clip(np.log2(area).astype(int), 0, len(self.BINS) - 1)
+        out = np.zeros((self.k, len(self.BINS)))
+        np.add.at(out, (classes.ravel(), bins), 1.)
+        return out / labels.size
+
+    def cooccurrence(self, classes, d):
+        k = self.k
+        out = np.zeros((k, k))
+        for a, b in ((classes[:-d], classes[d:]), (classes[:, :-d], classes[:, d:])):
+            np.add.at(out, (a.ravel(), b.ravel()), 1.)
+        out = out + out.T
+        return out / out.sum()
+
+    def parts_of(self, a, b):
+        centres = self.palette(a)
+        ca, cb = self.classes(a, centres), self.classes(b, centres)
+        out = {}
+        if "share" in self.parts:
+            sa, sb = np.bincount(ca.ravel(), minlength=self.k) / ca.size, np.bincount(cb.ravel(), minlength=self.k) / cb.size
+            out["share"] = 0.5 * float(np.abs(sa - sb).sum())
+        if "instances" in self.parts:
+            ha, hb = self.sizes(ca), self.sizes(cb)
+            sa, sb = ha.sum(1), hb.sum(1)
+            w1 = 0.
+            for j in range(self.k):
+                if sa[j] > 0 and sb[j] > 0:
+                    w1 += 0.5 * (sa[j] + sb[j]) * np.abs(np.cumsum(ha[j] / sa[j] - hb[j] / sb[j])).sum()
+            out["instances"] = float(w1)
+        if "adjacency" in self.parts:
+            out["adjacency"] = float(np.mean([0.5 * np.abs(self.cooccurrence(ca, d) - self.cooccurrence(cb, d)).sum()
+                                              for d in self.OFFSETS]))
+        return {k: self.WEIGHTS[k] * v for k, v in out.items()}
+
+    def __call__(self, a, b):
+        return sum(self.parts_of(a, b).values())
+
+
 class FitLoss:
     """What a fit minimises: colour (`ColourLoss`) and structure (`StructureLoss`), and
     optionally the older `PatchLoss` (`patch`), each weighed to be about 1 between two
     different scans (the median over the scans the presets name, a quadrant each at 128
     pixels), so each counts about as much as the others."""
 
-    WEIGHTS = {"colour": 1., "structure": 0.5, "patch": 3.6}
+    WEIGHTS = {"colour": 1., "structure": 0.5, "patch": 3.6, "palette": 1.}
 
     def __init__(self, parts=("colour", "structure")):
-        self.losses = {k: {"colour": ColourLoss, "structure": StructureLoss, "patch": PatchLoss}[k]() for k in parts}
+        self.losses = {k: {"colour": ColourLoss, "structure": StructureLoss, "patch": PatchLoss, "palette": PaletteLoss}[k]()
+                       for k in parts}
 
     def parts_of(self, a, b):
         return {k: self.WEIGHTS[k] * loss(a, b) for k, loss in self.losses.items()}
 
     def __call__(self, a, b):
         return sum(self.parts_of(a, b).values())
+
+
+class FloorLoss:
+    """Every part of every loss (`ColourLoss`, `StructureLoss`, `PaletteLoss`) as a multiple of
+    the scan's own: what it is between the scan's detail tiles, which are the same material
+    and differ only as the material does from place to place. So 1 is a candidate as like the
+    scan as the scan is like itself, whatever the part: no part's units or weight decide how
+    much it counts, and a scan whose colour varies a lot across it (granite_outcrop's tiles
+    differ by many times what a candidate's mean colour needs to be within) doesn't let a fit
+    off for the parts where it varies little.
+
+    The ratios are combined by their root mean square, so the worst part leads: a fit of the
+    right colours in the wrong patches (granite_outcrop's lichen in patches four times too
+    big, three and a half times the scan's own) isn't averaged into looking good by the
+    parts it gets right. Each floor has a guard, a quarter of the median floor over the
+    library's scans, so a part a scan happens to agree with itself on almost perfectly
+    doesn't make noise look enormous."""
+
+    FAMILIES = {"colour": ColourLoss, "structure": StructureLoss, "palette": PaletteLoss}
+    # The median between two quadrants of the same scan over the library's scans, in each
+    # family's `parts_of` units.
+    TYPICAL = {"colour.mean": 0.0531, "colour.spread": 0.0118, "colour.binding": 0.0107,
+               "structure.bank": 0.000626, "structure.spectrum": 0.021,
+               "palette.share": 0.3975, "palette.instances": 0.6878, "palette.adjacency": 0.2594}
+    GUARD = 0.25
+
+    def __init__(self, tiles, power=2.):
+        self.losses = {k: c() for k, c in self.FAMILIES.items()}
+        self.power = power
+        pairs = [self.raw(tiles[j], tiles[i]) for i in range(len(tiles)) for j in range(len(tiles)) if i != j]
+        self.floor = {k: float(np.mean([p[k] for p in pairs])) + self.GUARD * self.TYPICAL[k] for k in pairs[0]}
+
+    def raw(self, a, b):
+        out = {}
+        for family, loss in self.losses.items():
+            out.update({family + "." + k: v for k, v in loss.parts_of(a, b).items()})
+        return out
+
+    def parts_of(self, a, b):
+        return {k: v / self.floor[k] for k, v in self.raw(a, b).items()}
+
+    def __call__(self, a, b):
+        r = np.array(list(self.parts_of(a, b).values()))
+        return float(np.mean(r ** self.power) ** (1. / self.power))
 
 
 def get(obj, path):
@@ -768,6 +937,8 @@ def main():
     a.add_argument("--sigma", type=float, default=0.2, help="CMA-ES's initial step, in the unit cube")
     a.add_argument("--rays", default=os.path.join(ROOT, "target/release/rays"))
     a.add_argument("-o", "--output", default="fit")
+    a.add_argument("--loss", choices=["floor", "fit"], default="floor",
+                   help="floor: each part as a multiple of the scan's own (FloorLoss); fit: FitLoss's weighted sum")
     a.add_argument("--no-structure", dest="structure", action="store_false",
                    help="the colour loss alone (PatchLoss), as fits before the structure term were")
     a.add_argument("--no-solve", dest="solve", action="store_false",
@@ -806,7 +977,9 @@ def main():
     reference = load_reference(os.path.join(base, spec["reference"]), args.resolution)
     details = [load_reference(os.path.join(base, spec["reference"]), args.resolution, t) for t in DETAIL_TILES] \
         if args.detail else []
-    loss = FitLoss() if args.structure else PatchLoss()
+    if args.loss == "floor" and not details:
+        sys.exit("--loss floor measures against the scan's detail tiles: drop --no-detail")
+    loss = FloorLoss(details) if args.loss == "floor" else FitLoss() if args.structure else PatchLoss()
     solver = ColourSolve(spec, preset) if args.solve else None
     if solver is not None and not solver.paths:
         solver = None
@@ -823,6 +996,8 @@ def main():
             if details:
                 # The detail view: as much again, its loss the mean over the scan's tiles.
                 total += float(np.mean([loss(t, imgs[1]) for t in details]))
+                if args.loss == "floor":
+                    total *= 0.5  # so 1 is as like the scan as it is like itself
             return total
 
         def rendered(p, u, tag):
@@ -916,7 +1091,7 @@ def main():
             library[name]["references"][index]["fit"] = {
                 "loss": {"start": round(start_loss, 6), "fitted": round(best[0], 6)},
                 "iterations": args.iterations, "resolution": args.resolution, "samples": args.samples,
-                "loss_kind": ("structure" if args.structure else "colour") + ("+detail" if args.detail else "")
+                "loss_kind": ("floor" if args.loss == "floor" else "structure" if args.structure else "colour") + ("+detail" if args.detail else "")
                 + ("+solved" if solver else ""),
                 "date": time.strftime("%Y-%m-%d"), "applied": False, "values": values}
             with open(library_path, "w") as f:

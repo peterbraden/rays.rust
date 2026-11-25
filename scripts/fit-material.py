@@ -1075,6 +1075,10 @@ def strip_relief(o):
     return o
 
 
+class RenderFailed(Exception):
+    """The renderer refused a candidate (a panic, say, at an extreme of its parameters)."""
+
+
 def render(preset, usage, name, args, size, tmp, tag, linear=False):
     lighting = getattr(args, "lighting", "sun")
     if lighting == "sun":
@@ -1084,8 +1088,12 @@ def render(preset, usage, name, args, size, tmp, tag, linear=False):
     path = os.path.join(tmp, "scene-%s.json" % tag)
     json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view, lighting), open(path, "w"))
     out = os.path.join(tmp, "render-%s.png" % tag)
-    subprocess.run([args.rays, path, "--fresh", "-o", out], check=True, cwd=ROOT,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    run = subprocess.run([args.rays, path, "--fresh", "-o", out], cwd=ROOT,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if run.returncode != 0:
+        lines = run.stderr.strip().splitlines()
+        at = next((i for i, l in enumerate(lines) if "panicked" in l), max(len(lines) - 1, 0))
+        raise RenderFailed("%s: %s" % (tag, " ".join(lines[at:at + 2]) or "exit %d" % run.returncode))
     img = srgb_to_linear(np.asarray(Image.open(out).convert("RGB"), dtype=np.float64) / 255.)
     # Rendered at twice the size and averaged down in linear light, as the reference was.
     img = 0.25 * (img[0::2, 0::2] + img[1::2, 0::2] + img[0::2, 1::2] + img[1::2, 1::2])
@@ -1228,7 +1236,14 @@ def main():
                 lo, hi, step = max(best[1][0] - step, 0.), min(best[1][0] + step, 1.), step / 4
         for it in range(args.iterations if es else 0):
             xs = es.ask()
-            results = [evaluate(np.array(x), "c%d" % k) for k, x in enumerate(xs)]
+            results = []
+            for k, x in enumerate(xs):
+                try:
+                    results.append(evaluate(np.array(x), "c%d" % k))
+                except RenderFailed as e:
+                    # A candidate the renderer can't take is scored as far off, and the search goes on.
+                    print("render failed, scored as far off: %s" % e, file=sys.stderr)
+                    results.append((1e6, None, None))
             es.tell(xs, [r[0] for r in results])
             k = int(np.argmin([r[0] for r in results]))
             if results[k][0] < best[0]:

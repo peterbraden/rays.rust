@@ -955,7 +955,7 @@ impl SceneFile {
                         populations.extend(obj["populations"].as_array().cloned().unwrap_or_default());
                         let mut obj = obj.clone();
                         obj["populations"] = Value::from(populations);
-                        if obj.get("clear").is_none() { obj["clear"] = Value::from(6.); }
+                        if obj.get("clear").is_none() { obj["clear"] = Value::from(12.); }
                         let mut with = materials.clone();
                         with.extend(extra);
                         // Placed on the ground diced coarsely (an eighth of a cell), keeping no tiles.
@@ -1611,7 +1611,7 @@ impl SceneFile {
     /// from under the camera on each side (300 for forests, 150 for scatters, 25 for grass),
     /// thinning out to nothing over its last `fade` (a fraction, 0.4 for grass, 0 else). Grass
     /// grows on the surface itself (`"heightmap": "surface"`), sampled every `cell` metres.
-    /// Nothing grows within `clear` metres of the camera (0; 6 with a `"flora"`).
+    /// Nothing grows within `clear` metres of the camera (0; 12 with a `"flora"`).
     pub fn parse_ecosystem(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>,
                            geometries: &GeometryLibrary, landscape: Option<&SceneObject>) -> Vec<Arc<SceneObject>> {
         use crate::procedural::ecosystem::{Claim, Occupancy};

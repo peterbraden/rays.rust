@@ -68,34 +68,41 @@ list: `"flora": true` (`terrain::flora`).
 
 The climate gives every point a biome (tundra, taiga, temperate forest, grassland, steppe,
 cold and hot desert, savanna, rainforest, ice), its edges wandering with the weather from year
-to year, and lower with height as the air cools. A table says what grows in each, from the
-species the library has:
+to year, and lower with height as the air cools. Each biome has several plant communities,
+and which grows where is decided region by region: each community has a smooth noise of its
+own, about 4 km across, and holds the ground where its noise leads its biome's others, fading
+into the next over a narrow ecotone. So every community has a fair share of its biome, and
+different valleys of one climate grow different woods (`terrain::flora::COMMUNITIES`):
 
-| biome | trees | shrubs | ground |
-|---|---|---|---|
-| tundra | | juniper, shrub (dwarf, 0.6 m) | tussock, fescue, heather |
-| taiga | Norway spruce, balsam fir, Scots pine, aspen | juniper | fescue, heather, bracken, litter |
-| temperate forest | oak, black tupelo, aspen, Scots pine, spruce; willow by water | hazel, hawthorn, shrub | meadow, bent, bracken, litter |
-| grassland | a few oaks, aspens and pines; willow by water | hawthorn | meadow grasses and flowers |
-| steppe | Utah juniper; willow by water | sagebrush, rabbitbrush, juniper, prickly pear | fescue, tussock, wild oat |
-| cold desert | Utah juniper, Joshua tree | sagebrush, rabbitbrush | sparse tussock |
-| hot desert | saguaro, Joshua tree | creosote bush, ocotillo, barrel cactus, prickly pear, agave | |
-| savanna | stone pine (for acacia), palm | shrub | savanna grass |
-| rainforest | palm, black tupelo | shrub | bracken, litter |
+| biome | communities (their main plants; ground plants) |
+|---|---|
+| tundra | dwarf-shrub heath (dwarf birch, juniper; heather, cottongrass); alpine meadow (tussock, fescue, buttercup, daisy); krummholz (mountain pine, juniper) |
+| taiga | spruce-fir forest (Norway spruce, balsam fir, birch); pine heath (Scots pine, birch, juniper; heather); larch and birch (larch, silver birch, dwarf birch; fireweed, sedge) |
+| temperate forest | beech wood (beech, oak, hazel); oak and hazel (oak, birch, aspen, hazel, hawthorn; meadow, buttercup); maple and tupelo (sugar maple, tupelo, black oak); montane mixed forest (spruce, beech, larch, pine) |
+| grassland | flower meadow (hawthorn; meadow grasses, daisy, oxeye, buttercup, clover); parkland (scattered oak, aspen, birch, hawthorn); tall-grass prairie |
+| steppe | sagebrush steppe; pinyon-juniper woodland; ponderosa parkland; Mediterranean scrub (olive, stone pine, prickly pear; wild oat, poppy) |
+| cold desert | sagebrush desert; Joshua tree woodland; pinyon desert |
+| hot desert | saguaro desert (saguaro, ocotillo, cacti, creosote); creosote flats; agave slopes |
+| savanna | acacia savanna (acacia, thornbush); baobab savanna; eucalypt woodland; palm savanna |
+| rainforest | lowland rainforest (kapok emergents over tupelo, palm, tree fern); cloud forest (tree fern); palm forest |
 
-Each plant has an abundance in each biome it belongs to, and is a population of its own, so
-where one biome gives way to the next its plants give way to the next's. Its rule is its
-abundance in the biome at each point, on ground no steeper than it holds, off ice, dunes and
-playas, a fifth as thick on bare rock; trees below the treeline, shrubs below the snow; willows only where water gathers
-(`wetness`). Trees come first, then shrubs, then each biome's ground plants, so each grows in
-the room those before it leave. Only the biomes found about the camera (12 x 12 points over
-300 m) choose plants, and the load prints them:
+Plants of wet ground grow in the communities that have them only where water gathers
+(`wetness`): willows and grey alders by temperate and boreal rivers, mesquite in desert washes.
+The tundra's shrubs are stunted (to 0.6 m on the heath, 1.5 m as krummholz).
+
+Each plant is a population of its own, its rule the sum over the communities about the camera
+that it grows in of their weight times its abundance there; on ground no steeper than it holds,
+off ice, dunes and playas, a fifth as thick on bare rock; trees below the treeline, shrubs below
+the snow. Trees come first, then shrubs, then each community's ground plants, so each grows in
+the room those before it leave. Only the communities found about the camera (their weights at
+12 x 12 points over 300 m) choose plants, and the load prints them:
 
 ```
-Flora: tundra 100% about the camera; 3 populations: juniper, shrub, 3 ground
+Flora: oak and hazel (temperate_forest) 71%, beech wood (temperate_forest) 29% about the camera; 13 populations: ...
 ```
 
 `"flora"` can also be `{"strata": ["trees", "shrubs", "ground"], "reach": 300, "samples": 12}`,
 to grow only some layers, or survey further. Populations the ecosystem lists itself (rocks,
-say) are placed after the flora's. Nothing grows within `"clear"` metres of the camera (6 with
-a flora, 0 otherwise), so it doesn't stand inside a tree.
+say) are placed after the flora's. Nothing grows within `"clear"` metres of the camera (12 with
+a flora, 0 otherwise), so it doesn't stand inside a tree. The flora's trees grow `reach` metres
+out (shrubs half as far), thinning out over the last third of it.

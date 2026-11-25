@@ -939,9 +939,9 @@ pub fn boulders(o: &Value, landscape: &SceneObject) -> Option<(Value, Value)> {
 /// The populations and materials of an ecosystem's `"flora"` on the landscape `landscape`
 /// (`terrain::flora`): `true`, or `{"strata": ["trees", "shrubs", "ground"], "reach": 300,
 /// "samples": 12}`. The biomes it finds at `samples` x `samples` points over `reach` metres
-/// about the camera (`o`'s `"camera"`) choose the plants; each plant is a population of its
-/// own, its rule its abundance in each biome. None without a flora, or where the landscape has
-/// no climate (no biomes).
+/// about the camera (`o`'s `"camera"`) choose the plants, and trees grow as far out (shrubs half); each plant is a population of its
+/// own, its rule its abundance in the communities found there (each biome's, region by region).
+/// None without a flora, or where the landscape has no climate (no biomes) or nothing grows.
 pub fn flora(o: &Value, landscape: &SceneObject) -> Option<(Vec<Value>, serde_json::Map<String, Value>)> {
     let spec = match o.get("flora") {
         None | Some(Value::Bool(false)) => return None,
@@ -955,21 +955,27 @@ pub fn flora(o: &Value, landscape: &SceneObject) -> Option<(Vec<Value>, serde_js
     let n = SceneFile::parse_int(&spec["samples"], 12).max(2);
     let camera = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.));
     let fields = landscape.medium.fields()?;
+    // Each community's weight at each point (`flora::weight`), for the biome there.
+    let graphs: Vec<(&'static crate::terrain::flora::Community, crate::graph::Graph)> = crate::terrain::flora::COMMUNITIES.iter()
+        .map(|c| (c, crate::graph::Graph::parse(&crate::terrain::flora::weight(c)).expect("a community's weight"))).collect();
     let mut samples = vec![];
     for j in 0..n {
         for i in 0..n {
             let (x, z) = (camera.x + (i as f64 / (n - 1) as f64 - 0.5) * 2. * reach, camera.z + (j as f64 / (n - 1) as f64 - 0.5) * 2. * reach);
             let down = Ray { ro: Vector3::new(x, camera.y + 1e4, z), rd: -Vector3::y() };
             if let Some(hit) = landscape.geometry.intersects(&down) && let Some(b) = fields.biome(&hit.point) {
-                samples.push(b);
+                let c = crate::graph::Context::new(hit.point, hit.normal, 0.).with_fields(Some(fields));
+                samples.push(graphs.iter().filter(|(x, _)| x.biome == b).map(|(x, g)| (*x, g.eval(&c))).collect::<Vec<_>>());
             }
         }
     }
+    if samples.is_empty() { return None; }
     let present = crate::terrain::flora::shares(&samples);
-    if present.is_empty() { return None; }
-    let (populations, materials) = crate::terrain::flora::populations(&present, &strata, SceneFile::parse_int(&o["seed"], 0) as u64);
+    if present.is_empty() { return Some((vec![], serde_json::Map::new())); }
+    let communities: Vec<&'static crate::terrain::flora::Community> = present.iter().map(|(c, _)| *c).collect();
+    let (populations, materials) = crate::terrain::flora::populations(&communities, &strata, SceneFile::parse_int(&o["seed"], 0) as u64, reach);
     say(format!("Flora: {} about the camera; {} populations: {}",
-        present.iter().map(|(b, s)| format!("{} {:.0}%", b.name(), 100. * s)).collect::<Vec<_>>().join(", "),
+        present.iter().map(|(c, s)| format!("{} ({}) {:.0}%", c.name, c.biome.name(), 100. * s)).collect::<Vec<_>>().join(", "),
         populations.len(),
         populations.iter().map(|p| p["forest"]["species"][0]["species"].as_str().map(String::from)
             .unwrap_or_else(|| format!("{} ground", p["grass"]["species"].as_array().map_or(0, |a| a.len())))).collect::<Vec<_>>().join(", ")));

@@ -422,7 +422,7 @@ pub struct Conditions {
 }
 
 /// The names of the species presets (`species_preset`).
-pub const SPECIES_PRESETS: [&str; 20] = ["lawn", "meadow", "fescue", "tall", "tussock", "savanna", "reed", "rough", "timothy", "wild_oat", "bent", "daisy", "oxeye", "dandelion", "buttercup", "clover", "red_clover", "heather", "bracken", "litter"];
+pub const SPECIES_PRESETS: [&str; 24] = ["lawn", "meadow", "fescue", "tall", "tussock", "savanna", "reed", "rough", "timothy", "wild_oat", "bent", "daisy", "oxeye", "dandelion", "buttercup", "clover", "red_clover", "heather", "bracken", "litter", "sedge", "cottongrass", "poppy", "fireweed"];
 
 /// The names of the conditions presets (`conditions_preset`).
 pub const CONDITIONS_PRESETS: [&str; 10] = ["summer", "lush", "drought", "autumn", "after_rain", "frost", "windy", "manicured", "trampled", "wild"];
@@ -595,6 +595,52 @@ fn species_preset(name: &str) -> Value {
             "lean": 20, "twist": 0, "segments": 6, "clump_radius": 0.3, "normal_alignment": 0.2,
             "base_color": [0.08, 0.13, 0.04], "tip_color": [0.1, 0.18, 0.05], "dry_color": [0.42, 0.2, 0.07],
             "translucency": 0.4, "sheen": 0.2
+        }),
+        // Sedge (Carex): stiff, keeled, dark blades in dense tufts, on wet ground.
+        "sedge" => json!({
+            "height": 0.5, "height_variation": 0.3, "width": 0.006, "tip": 3, "stiffness": 0.7,
+            "lean": 25, "twist": 40, "segments": 5, "clump_size": 18, "clump_radius": 0.04, "clump_spread": 0.6,
+            "base_color": [0.04, 0.1, 0.04], "tip_color": [0.12, 0.2, 0.08], "sheen": 0.4
+        }),
+        // Cottongrass (Eriophorum): thin sedge leaves, and on taller stems the white cotton
+        // tufts that whiten tundra bogs in summer.
+        "cottongrass" => json!({
+            "height": 0.3, "height_variation": 0.3, "width": 0.002, "tip": 2, "stiffness": 0.5,
+            "lean": 20, "twist": 60, "segments": 4, "clump_size": 10, "clump_radius": 0.04, "clump_spread": 0.6,
+            "base_color": [0.08, 0.13, 0.05], "tip_color": [0.25, 0.25, 0.12], "dryness": 0.2,
+            "seed_head": {
+                "style": "spike", "fraction": 0.35, "stem_height": 1.4, "stem_width": 0.0015, "length": 0.03,
+                "width": 0.03, "spikelets": 70, "spikelet_length": 0.014, "spikelet_width": 0.0025,
+                "color": [0.88, 0.88, 0.86], "tip_color": [0.95, 0.95, 0.93], "dry_color": [0.82, 0.8, 0.75]
+            }
+        }),
+        // Corn poppy (Papaver rhoeas): four crumpled scarlet petals in a cup with a dark eye,
+        // on hairy stems, in dry grassland.
+        "poppy" => json!({
+            "kind": "flower", "height": 0.45, "height_variation": 0.3, "width": 0.002, "stiffness": 0.55,
+            "lean": 20, "twist": 0, "segments": 6, "clump_radius": 0.05,
+            "base_color": [0.08, 0.16, 0.05], "tip_color": [0.12, 0.2, 0.07], "translucency": 0.3, "sheen": 0.2,
+            "flower": {
+                "count": 1.2, "petals": 4, "petal_length": 0.03, "petal_width": 0.03, "petal_shape": 0.5,
+                "cup": 35, "curl": 0.05, "centre_radius": 0.005, "dome": 0.6,
+                "petal_color": [0.62, 0.03, 0.02], "petal_tip_color": [0.75, 0.05, 0.03],
+                "centre_color": [0.04, 0.04, 0.04], "sheen": 0.3
+            },
+            "leaves": { "count": 6, "length": 0.08, "width": 0.02, "shape": 0.6, "angle": 25 }
+        }),
+        // Fireweed (Chamaenerion angustifolium): tall stems of magenta flowers, the first plant
+        // back in the taiga's clearings and burns.
+        "fireweed" => json!({
+            "kind": "flower", "height": 1.0, "height_variation": 0.3, "width": 0.004, "stiffness": 0.75,
+            "lean": 10, "twist": 0, "segments": 7, "clump_radius": 0.12,
+            "base_color": [0.08, 0.15, 0.05], "tip_color": [0.25, 0.12, 0.15], "translucency": 0.3, "sheen": 0.2,
+            "flower": {
+                "count": 5, "petals": 4, "petal_length": 0.015, "petal_width": 0.012, "petal_shape": 0.5,
+                "cup": 15, "curl": 0.05, "centre_radius": 0.002, "dome": 0.3,
+                "petal_color": [0.55, 0.08, 0.35], "petal_tip_color": [0.65, 0.15, 0.45],
+                "centre_color": [0.6, 0.5, 0.55], "sheen": 0.2
+            },
+            "leaves": { "count": 14, "length": 0.1, "width": 0.015, "shape": 0.6, "angle": 40 }
         }),
         // Dead blades lying on the ground: not for fields' species lists, but grown under them
         // by their conditions' `litter`.

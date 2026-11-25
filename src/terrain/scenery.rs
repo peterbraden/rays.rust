@@ -329,6 +329,28 @@ impl Layer {
     }
 }
 
+/// A number from -1 to 1 for scene point `p`, as if random, but the same for the same point.
+fn point_dither(p: &Vector3<f64>) -> f64 {
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    for v in [p.x, p.y, p.z] {
+        x = (x ^ v.to_bits()).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        x ^= x >> 31;
+    }
+    x = (x ^ (x >> 29)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 32;
+    (x >> 11) as f64 / (1u64 << 53) as f64 * 2. - 1.
+}
+
+/// How far biomes' climates are blurred where they meet (`Ground::wandering_climate`): by
+/// up to this many degrees of temperature, and this share of the rain (as a logarithm), at
+/// the most; of which patchy noise makes this much, and each sample's dither this much.
+/// Rain falls over tens of kilometres, so its biomes' ecotones are kilometres wide; with
+/// height the air cools 6.5 degrees a kilometre, so those up a slope are a few hundred metres.
+const ECOTONE_DEGREES: f64 = 1.5;
+const ECOTONE_RAIN: f64 = 0.25;
+const ECOTONE_PATCHES: f64 = 0.6;
+const ECOTONE_DITHER: f64 = 0.4;
+
 /// Heights of the landscape, from its layers and the planet's own topography.
 /// The large-scale surface's slope at a point: its gradient (uphill, metres per metre, in the
 /// planet's frame, along the surface) and the steepness, its length up to 1.5.
@@ -1158,13 +1180,23 @@ impl Ground {
     /// The climate at `d`, `h` metres up, its edges wandering with the weather from year to
     /// year (noise in temperature and rain), as the ground cover and `biome` nodes see it. None
     /// without a climate.
-    fn wandering_climate(&self, d: &Vector3<f64>, h: f64) -> Option<crate::terrain::climate::Local> {
+    ///
+    /// And blurred, so that biomes meet in ecotones a few kilometres wide rather than along a
+    /// line: by patchy noise a few hundred metres across, so near the line each biome holds
+    /// ground in tongues and islands within the other, and by `dither` (-1 to 1), which the
+    /// ground cover draws afresh for each sample, so that over a pixel's samples it blends the
+    /// biomes in the proportions found there. (Placement and graphs read it dithered by a hash
+    /// of the point, `point_dither`: the same for a tree's candidate each time, and as varied
+    /// from one point to the next.)
+    fn wandering_climate(&self, d: &Vector3<f64>, h: f64, dither: f64) -> Option<crate::terrain::climate::Local> {
         let q = d * self.frame.radius;
         let n = |s: f64, o: f64| self.noise.fbm(q.x / s + o * 17., q.y / s, q.z / s, 4, 0.5, 2.);
         let mut local = self.climate.as_ref()?.local(d, h);
-        local.mean += 3. * (n(40000., 0.15) - 0.5);
-        local.summer += 3. * (n(40000., 0.15) - 0.5);
-        local.precipitation *= (1.2 * (n(25000., 0.45) - 0.5)).exp();
+        let blur = ECOTONE_PATCHES * 2. * (n(500., 0.29) - 0.5) + ECOTONE_DITHER * dither;
+        local.mean += 3. * (n(40000., 0.15) - 0.5) + ECOTONE_DEGREES * blur;
+        local.summer += 3. * (n(40000., 0.15) - 0.5) + ECOTONE_DEGREES * blur;
+        local.winter += ECOTONE_DEGREES * blur;
+        local.precipitation *= (1.2 * (n(25000., 0.45) - 0.5) + ECOTONE_RAIN * blur).exp();
         Some(local)
     }
 
@@ -1248,7 +1280,7 @@ impl Ground {
         let below = (1. - smoothstep(tree - 150., tree + 50., h)) * smoothstep(0.7, 0.8, flat);
         let (mut ground, dry, tropical, wooded, trees, needles) = match &self.climate {
             Some(_) => {
-                let local = self.wandering_climate(&d, h).expect("a climate");
+                let local = self.wandering_climate(&d, h, 2. * rand() - 1.).expect("a climate");
                 let biome = Biome::of(&local);
                 // The open ground: grass in clearings of the forests, the biome's own else.
                 let mut g = colour(match biome {
@@ -1304,7 +1336,14 @@ impl Ground {
         // Playas: the flat floors of closed basins, white with salt where the water last
         // evaporated, cracked into polygons a few metres across, darker and browner where the
         // clay is damp or dust has blown over it.
-        let playa = self.playa(p);
+        // The simulation's playas and sand are fields at its cells' corners, so their edges
+        // would be round blobs a cell across: read them at a point warped by noise (ragged
+        // shores and tongues of sand) and jittered within a cell for each sample, so that
+        // they fade into the ground around over a cell.
+        let cell = self.layer_at(&d).map_or(100., |l| l.spacing);
+        let warp = |o: f64| cell * (1.6 * (n(2. * cell, o) - 0.5) + 0.25 * (n(0.4 * cell, o + 0.37) - 0.5) + (rand() - 0.5));
+        let edge = p + Vector3::new(warp(0.61), 0., warp(0.83));
+        let playa = self.playa(&edge);
         if playa > 0. {
             // (A playa is level by nature: only its shores and the sides of its own cracks are
             // steep, and the crust covers those.)
@@ -1322,7 +1361,7 @@ impl Ground {
         // Wind-blown sand, over all but steep rock (slip faces stand at about 33°), its colour
         // varying between dune fields: redder where it is older and its grains are coated in
         // iron oxide.
-        let sand = crate::graph::Fields::field(self, crate::graph::Field::Sand, p).unwrap_or(0.);
+        let sand = crate::graph::Fields::field(self, crate::graph::Field::Sand, &edge).unwrap_or(0.);
         if sand > 0.5 {
             let extent = smoothstep(0.5, 2.5, sand + 2. * (n(300., 0.85) - 0.5)) * smoothstep(0.75, 0.85, flat);
             let dune = mix(colour(DUNE_SAND), colour(RED_SAND), smoothstep(0.3, 0.7, n(8000., 0.55)));
@@ -1412,7 +1451,7 @@ impl crate::graph::Fields for Ground {
     /// surfaces are; the climate's, and the snowline and treeline as the ground cover has them.
     fn biome(&self, p: &Vector3<f64>) -> Option<Biome> {
         let (d, h) = self.frame.on_planet(p);
-        self.wandering_climate(&d, h).map(|l| Biome::of(&l))
+        self.wandering_climate(&d, h, point_dither(p)).map(|l| Biome::of(&l))
     }
 
     fn canopy(&self) -> Option<&crate::terrain::canopy::Slot> { Some(&self.canopy) }

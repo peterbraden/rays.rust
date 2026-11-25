@@ -408,7 +408,8 @@ fn species_entry(p: &Plant, weight: f64, height: Option<f64>, materials: &mut Ma
 ///   `woods`): out to `reach` metres from the camera by dart throwing, thinning out over the
 ///   last third of it, and from there out to `far` metres on a grid (`ForestLayout::grid`), its
 ///   trees fading in as the near ones thin out, and thinning out in turn over the last third;
-/// - each community's shrubs, out to half the reach (stunted where it stunts them);
+/// - each community's shrubs likewise, out to half the reach and then half as far on a grid
+///   (stunted where it stunts them);
 /// - each plant of wet ground (willows, alders, mesquite), only where water gathers;
 /// - each community's ground plants, 30 m out.
 pub fn populations(present: &[&'static Community], strata: &[&str], seed: u64, reach: f64, far: f64, (cx, cz): (f64, f64))
@@ -439,18 +440,16 @@ pub fn populations(present: &[&'static Community], strata: &[&str], seed: u64, r
                 "species": species,
                 "where": {"node": "multiply", "inputs": rule},
             }});
-            match stratum {
-                Tree => {
-                    out.push(forest(reach, 0.3, false, rule.clone()));
-                    if far > reach {
-                        // Beyond the near trees, fading in as they thin out.
-                        let mut beyond = rule;
-                        beyond.push(json!({"node": "smoothstep", "from": 0.7 * reach, "to": reach,
-                            "input": {"node": "rings", "center": [cx, 0, cz], "axis": [0, 1, 0], "scale": 1}}));
-                        out.push(forest(far, 0.3, true, beyond));
-                    }
-                },
-                Shrub => out.push(forest(0.5 * reach, 0.3, false, rule)),
+            // Trees by darts out to `reach` and on a grid out to `far`; shrubs, which are
+            // smaller and many more, half as far each way.
+            let (near, far) = match stratum { Tree => (reach, far), Shrub => (0.5 * reach, 0.5 * far) };
+            out.push(forest(near, 0.3, false, rule.clone()));
+            if far > near {
+                // Beyond the near ones, fading in as they thin out.
+                let mut beyond = rule;
+                beyond.push(json!({"node": "smoothstep", "from": 0.7 * near, "to": near,
+                    "input": {"node": "rings", "center": [cx, 0, cz], "axis": [0, 1, 0], "scale": 1}}));
+                out.push(forest(far, 0.3, true, beyond));
             }
         }
         // Plants of wet ground, each its own population, summed over the communities it is in.
@@ -612,10 +611,14 @@ mod tests {
         let all: Vec<String> = forests.iter().flat_map(|f| species(f)).collect();
         assert!(forests.iter().any(|f| species(f) == vec!["grey-alder"]));
         assert!(!all.contains(&"european-larch".to_string()) && !all.contains(&"saguaro".to_string()));
-        // Each community's shrubs its own: the heath's junipers dwarfs, the forests' not.
+        // Each community's shrubs its own, near and far: the heath's junipers dwarfs, the
+        // forests' not.
         let junipers: Vec<&Value> = forests.iter().flat_map(|f| f["species"].as_array().unwrap().iter()).filter(|e| e["species"] == "juniper").collect();
-        assert_eq!(junipers.len(), 3);
-        assert_eq!(junipers.iter().filter(|e| e["params"]["scale"] == json!(0.6)).count(), 1);
+        assert_eq!(junipers.len(), 6);
+        assert_eq!(junipers.iter().filter(|e| e["params"]["scale"] == json!(0.6)).count(), 2);
+        let shrubs: Vec<&&Value> = forests.iter().filter(|f| species(f).contains(&"juniper".to_string())).collect();
+        assert_eq!(shrubs.iter().filter(|f| f["placement"] == "grid").count(), shrubs.len() / 2);
+        assert!(shrubs.iter().filter(|f| f["placement"] == "grid").all(|f| f["reach"] == json!(1500.)));
         for p in &pops {
             let spec = p.get("forest").or(p.get("grass")).unwrap();
             Graph::parse(&spec["where"]).unwrap();

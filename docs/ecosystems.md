@@ -68,7 +68,12 @@ list: `"flora": true` (`terrain::flora`).
 
 The climate gives every point a biome (tundra, taiga, temperate forest, grassland, steppe,
 cold and hot desert, savanna, rainforest, ice), its edges wandering with the weather from year
-to year, and lower with height as the air cools. Each biome has several plant communities,
+to year, and lower with height as the air cools. Biomes meet in ecotones, not along lines: the
+climate that decides them is blurred by patchy noise a few hundred metres across and by a
+dither (`scenery::Ground::wandering_climate`), so near the line each biome holds ground in
+tongues and islands within the other, and each tree's candidate draws its own. Rain changes over
+tens of kilometres, so ecotones between wetter and drier biomes are kilometres wide; up a slope
+the air cools faster, so there they are a few hundred metres. Each biome has several plant communities,
 and which grows where is decided region by region: each community has a smooth noise of its
 own, about 4 km across, and holds the ground where its noise leads its biome's others, fading
 into the next over a narrow ecotone. So every community has a fair share of its biome, and
@@ -94,7 +99,8 @@ Each community's trees are one forest, its species weighted by their abundance t
 mix as the community says and stand as thickly as its woods; its rule is the community's weight,
 on ground no steeper than its trees hold, off ice, dunes and playas, sparser where thin soil on a
 steep slope shows rock, and below the treeline. Each community's shrubs are another (below the
-snow), and plants of wet ground one each. Trees come first, then shrubs, then each community's
+snow; by darts out to half the trees' reach and on a grid out to half their `far`), and plants
+of wet ground one each. Trees come first, then shrubs, then each community's
 ground plants, so each grows in the room those before it leave.
 
 Trees stand out to the horizon as instances: by dart throwing out to `reach` (300 m) from the

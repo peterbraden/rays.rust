@@ -310,6 +310,20 @@ impl Layer {
 
     fn class_at(&self, d: &Vector3<f64>) -> u8 { self.class[self.domain.cell_at(d)] }
 
+    /// The layers of a world's `patches` (finest first) and its `globe`, each patch taking the
+    /// closed basins of the one around it (`SimFields::take_basins`), coarsest first, so a
+    /// playa or salt lake carries on across the patches' edges.
+    pub fn of_world(patches: Vec<Terrain>, globe: Option<Terrain>, min_river_width: f64) -> Vec<Layer> {
+        let n = patches.len();
+        let mut layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, min_river_width)).collect();
+        for k in (0..n.saturating_sub(1)).rev() {
+            let (fine, coarse) = layers.split_at_mut(k + 1);
+            let (fine, around) = (&mut fine[k], &coarse[0]);
+            fine.fields.take_basins(&fine.domain, &around.fields, &around.domain);
+        }
+        layers
+    }
+
     fn wet(&self, d: &Vector3<f64>) -> bool {
         let (Some(water), Some((x, z))) = (&self.water, self.tangent(d)) else { return false };
         water.wet(point_cell(&self.domain, [x, z]), [x, z])

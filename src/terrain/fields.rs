@@ -113,6 +113,17 @@ impl SimFields {
         }
     }
 
+    /// Take the closed basins of `around`, the fields of the coarser patch around this one on
+    /// `domain`: its playas and terminal lakes wherever they are more than this one's own. A
+    /// patch's edges are outlets, so a basin that crosses one drains out of the finer patch,
+    /// and would end at its edge.
+    pub fn take_basins(&mut self, domain: &Domain, around: &SimFields, around_domain: &Domain) {
+        for (k, c) in domain.corners.iter().enumerate() {
+            self.playa[k] = self.playa[k].max(sample(around_domain, &around.playa, c));
+            self.salt_lake[k] = self.salt_lake[k].max(sample(around_domain, &around.salt_lake, c));
+        }
+    }
+
     /// How deep a closed basin's terminal lake stands at direction `d`, metres (0 where there
     /// is none): a salt lake where it is more than `simulation::SALT_LAKE_DEPTH`.
     pub fn salt_lake(&self, domain: &Domain, d: &Vector3<f64>) -> f64 {

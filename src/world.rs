@@ -803,6 +803,7 @@ fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&
         b.patch(d, &format!("patch {} m", l.spacing), &l, (false, true), &centre, &frame, &mut outer, &mut built)?;
         let n = built.len();
         let (around, close) = built.split_at_mut(n - 1);
+        take_shape(&mut close[0], &around[n - 2], CLOSE_FINER);
         take_glaciers(&mut close[0], &around[n - 2]);
     }
     let mut patches = built;
@@ -824,6 +825,52 @@ fn close_level(d: &Description, frame: &Frame, finest: Option<&Terrain>) -> Opti
     (height < CLOSE_HEIGHT).then_some(Level { cells: l.cells, spacing: l.spacing / CLOSE_FINER })
 }
 
+/// Give the close level the shape of the patch around it at that patch's scale, keeping its
+/// own finer relief: its surface raised or lowered by the difference between the two,
+/// smoothed over `finer` of its cells (one cell of the patch around it). Run five times finer,
+/// its rivers cut their valleys tens of metres deeper than the coarser patch's, which would
+/// leave its edges standing as walls against the ground around it.
+fn take_shape(close: &mut Terrain, around: &Terrain, finer: f64) {
+    let crate::terrain::domain::Layout::Patch { n, .. } = close.domain.layout else { return };
+    let surface = scenery::corner_values(around, &around.surface());
+    let mut diff: Vec<f64> = (0..close.domain.len())
+        .map(|i| scenery::sample(&around.domain, &surface, &close.domain.dirs[i]) - close.bed[i] - close.ice[i])
+        .collect();
+    // Two box filters a cell of the patch around wide: a tent, smooth enough not to show.
+    let r = (finer / 2.).round().max(1.) as isize;
+    let raw = diff.clone();
+    for _ in 0..2 {
+        diff = box_filter(&diff, n, r);
+    }
+    // At its edges it is the patch around exactly, so the two meet without a step, its own
+    // relief growing in over the next two cells of that patch.
+    let fade = 2. * finer;
+    for (i, (b, (d, raw))) in close.bed.iter_mut().zip(diff.iter().zip(&raw)).enumerate() {
+        let (x, z) = (i % n, i / n);
+        let edge = x.min(z).min(n - 1 - x).min(n - 1 - z) as f64;
+        let w = crate::procedural::nubis_clouds::smoothstep(0., fade, edge);
+        *b += raw + w * (d - raw);
+    }
+}
+
+/// A box filter of radius `r` cells over an `n` x `n` grid (cell (i, j) at j * n + i), along
+/// each axis in turn, clamped at the edges.
+fn box_filter(v: &[f64], n: usize, r: isize) -> Vec<f64> {
+    let pass = |v: &[f64], at: &dyn Fn(usize, usize) -> usize| {
+        let mut out = vec![0.; v.len()];
+        for line in 0..n {
+            for k in 0..n {
+                let (lo, hi) = ((k as isize - r).max(0) as usize, ((k as isize + r) as usize).min(n - 1));
+                let sum: f64 = (lo..=hi).map(|m| v[at(line, m)]).sum();
+                out[at(line, k)] = sum / (hi - lo + 1) as f64;
+            }
+        }
+        out
+    };
+    let rows = pass(v, &|j, i| j * n + i);
+    pass(&rows, &|i, j| j * n + i)
+}
+
 /// Give `close`, a close level evolved without glaciers, those of `around`, the patch around it:
 /// where `around` has ice, its ice, and its bed and sediment beneath, fading into `close`'s own
 /// over the ice's first 30 m of thickness; and its till wherever it has more (moraines left by
@@ -842,7 +889,13 @@ fn take_glaciers(close: &mut Terrain, around: &Terrain) {
             close.sediment[i] += w * (at(&sediment).max(0.) - close.sediment[i]);
             close.ice[i] = h;
         }
-        close.till[i] = close.till[i].max(at(&till).min(close.sediment[i]));
+        // (Till is sediment: where the ice left more than the close level's own rivers did,
+        // the ground there is till to that depth.)
+        let t = at(&till).max(0.);
+        if t > close.till[i] {
+            close.till[i] = t;
+            close.sediment[i] = close.sediment[i].max(t);
+        }
     }
 }
 
@@ -907,6 +960,30 @@ mod tests {
             assert_eq!(x.sediment, y.sediment);
             assert_eq!(x.drainage, y.drainage);
         }
+    }
+
+    #[test]
+    fn test_a_close_level_takes_the_shape_of_the_patch_around_it() {
+        // The finest level, and a close level five times finer about the camera.
+        let mut d = tiny(5);
+        d.close = Some(Focus::Camera { location: Vector3::new(0., 300., 0.), lookat: Vector3::new(0., 0., -1000.), above_ground: true });
+        let w = quietly(&d, None);
+        let (close, around) = (&w.patches[0], &w.patches[1]);
+        assert_eq!(w.patches.len(), 3);
+        assert_eq!(close.domain.area[0].sqrt().round(), 200.);
+        let corners = scenery::corner_values(around, &around.surface());
+        // At the scale of the patch around it, the close level is that patch's ground: no
+        // higher or lower on the whole, nor along its edges, where it meets that patch.
+        let surface = close.surface();
+        let outer: Vec<f64> = close.domain.dirs.iter().map(|d| scenery::sample(&around.domain, &corners, d)).collect();
+        let offset = |keep: &dyn Fn(usize) -> bool| {
+            let cells: Vec<usize> = (0..surface.len()).filter(|&i| keep(i)).collect();
+            cells.iter().map(|&i| surface[i] - outer[i]).sum::<f64>() / cells.len() as f64
+        };
+        let (whole, edges) = (offset(&|_| true), offset(&|i| close.domain.boundary[i]));
+        assert!(whole.abs() < 3. && edges.abs() < 0.01, "{} {}", whole, edges);
+        // A constant is its own average.
+        assert!(box_filter(&vec![2.; 25], 5, 2).iter().all(|&v| (v - 2.).abs() < 1e-12));
     }
 
     #[test]

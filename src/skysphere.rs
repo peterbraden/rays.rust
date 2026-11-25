@@ -708,15 +708,35 @@ impl<'a> Air<'a> {
     /// towards `origin` on the way, on the same scale as the sky's radiance. This is the sky's
     /// own integral (`scattering`), stopped at `distance`, so that far enough away an object
     /// fades into the sky behind it. The air is lit by the sun as if nothing shadowed it.
+    ///
+    /// The integral is taken in steps a quarter of the haze's scale height long, from 4 to the
+    /// sky's 32: over the kilometre or two to an object in a landscape the air hardly changes,
+    /// and these segments are found for every camera ray that meets something, so 32 steps
+    /// were a tenth of a forest's render for no difference (`test_short_segments_take_fewer_steps`).
     pub fn segment(&self, origin: &Vector3<f64>, d: &Vector3<f64>, distance: f64) -> (Vector3<f64>, Vector3<f64>) {
+        self.segment_in(origin, d, distance, None)
+    }
+
+    /// `segment`, in `steps` steps if given.
+    /// How many steps a view ray's stretch from `start` to `end` is integrated in: a quarter of
+    /// the haze's scale height each, 4 to `DEFAULT_NUM_SAMPLES`. Aerial perspective
+    /// (`segment`) and the light shadow takes from it (`single_scattering_steps`) share it, so
+    /// what crepuscular rays take away is what was put in (the shader's `segment` and
+    /// `crepuscular_samples` likewise).
+    fn steps(&self, start: f64, end: f64) -> usize {
+        ((end - start) / (0.25 * self.sky.mie_thickness)).ceil().clamp(4., DEFAULT_NUM_SAMPLES as f64) as usize
+    }
+
+    fn segment_in(&self, origin: &Vector3<f64>, d: &Vector3<f64>, distance: f64, steps: Option<usize>) -> (Vector3<f64>, Vector3<f64>) {
         let r = Ray { ro: *origin, rd: *d };
         let (start, end) = match self.sky.view_ray_span(&r) {
             Some((start, end)) if start < distance => (start, end.min(distance)),
             _ => return (Vector3::repeat(1.), Vector3::zeros()),
         };
+        let steps = steps.unwrap_or_else(|| self.steps(start, end));
         let mut depth = Depths::default();
         let (mut rayleigh, mut mie, mut multiple) = (Vector3::zeros(), Vector3::zeros(), Vector3::zeros());
-        for (t, step) in self.sky.span_samples(&r, start, end, DEFAULT_NUM_SAMPLES) {
+        for (t, step) in self.sky.span_samples(&r, start, end, steps) {
             let p = origin + d * t;
             let height = (p - self.sky.earth.center).norm() - self.sky.earth.radius;
             let here = self.sky.depths(height, step);
@@ -748,7 +768,7 @@ impl<'a> Air<'a> {
         let (rayleigh, mie) = (SkyMaterial::rayleigh_phase(mu), SkyMaterial::mie_phase(mu, self.sky.mie_anisotropy));
         let scale = self.sky.brightness * SKY_CALIBRATION;
         let mut depth = Depths::default();
-        self.sky.span_samples(&r, start, end, DEFAULT_NUM_SAMPLES).into_iter().map(|(t, step)| {
+        self.sky.span_samples(&r, start, end, self.steps(start, end)).into_iter().map(|(t, step)| {
             let p = origin + d * t;
             let here = self.sky.depths((p - self.sky.earth.center).norm() - self.sky.earth.radius, step);
             depth = depth + here * 0.5;
@@ -1898,6 +1918,27 @@ mod tests {
             assert!(t.max() < 1.);
             for c in 0..3 {
                 assert!((inscattered[c] / radiance[c] - 1.).abs() < 0.03, "{}: {} vs {}", d, inscattered, radiance);
+            }
+        }
+    }
+
+    #[test]
+    fn test_short_segments_take_fewer_steps() {
+        // Aerial perspective over the distances of a landscape, in fewer steps: the same as in
+        // the sky's 32 to within a fraction of a percent, looking along the ground, up and down.
+        let sky = sky_at("[0.3, 0.4, 1]");
+        let air = sky.air();
+        for o in [Vector3::new(0., 2., 0.), Vector3::new(0., 420., 0.)] {
+            for d in [Vector3::new(1., 0., 0.2), Vector3::new(0., -0.3, 1.), Vector3::new(0.2, 0.25, -1.)] {
+                let d = d.normalize();
+                for distance in [300., 1000., 3000., 8000., 25000.] {
+                    let (t, i) = air.segment_in(&o, &d, distance, None);
+                    let (t32, i32) = air.segment_in(&o, &d, distance, Some(DEFAULT_NUM_SAMPLES));
+                    for c in 0..3 {
+                        assert!((t[c] - t32[c]).abs() < 1e-3, "transmittance {} vs {} at {} m along {}", t, t32, distance, d);
+                        assert!((i[c] - i32[c]).abs() <= 5e-3 * i32[c].max(1e-6), "inscattered {} vs {} at {} m along {}", i, i32, distance, d);
+                    }
+                }
             }
         }
     }

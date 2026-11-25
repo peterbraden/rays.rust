@@ -177,9 +177,10 @@ uploaded primitives, BVH and materials, with the wavefront integrator's shading;
 come from the CPU each pass (so every camera works), and the sky and its aerial perspective are
 baked into tables. Against the path tracer's 512-sample images, at 512 samples: `demo.json`
 exposure 0.998 and mean FLIP 0.0017, `instances` 1.001 and 0.016. Without a GPU, Mesa's lavapipe
-(software Vulkan) runs it, at about the CPU renderers' speed. The compiled shader is committed
-(`src/gpu/pathtrace.spv`), so the renderer builds on stable Rust; after editing the shader, run
-`scripts/build-shaders.sh`, which uses the nightly toolchain rust-gpu pins (`shaders/rust-toolchain.toml`).
+(software Vulkan) runs it, at about the CPU renderers' speed. The renderer builds on stable Rust; with
+`--features gpu` its `build.rs` compiles the shader first (`scripts/build-shaders.sh`, into
+`src/gpu/pathtrace.spv` and `.wgsl`, not committed) with the nightly toolchain rust-gpu pins
+(`shaders/rust-toolchain.toml`), which needs rustup. The first build takes a few minutes.
 The shader crate also builds for the CPU, where the tests run its code against the renderer's.
 
 ### In a browser

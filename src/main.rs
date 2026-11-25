@@ -187,6 +187,9 @@ fn main() {
         return;
     }
     let args = Args::parse();
+    if args.time_map.is_some() {
+        rays::time_map::enable();
+    }
 
     println!("{}",
         style("# 1. - Parsing scene, building models").bold().cyan()

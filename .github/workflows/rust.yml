@@ -66,8 +66,13 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - uses: Swatinem/rust-cache@v2
-    - name: Check the committed shader matches its sources
-      run: scripts/shader-sources.sh --check
+      with:
+        workspaces: |
+          . -> target
+          shaders -> target
+    - name: Build the GPU shader
+      # Not committed: built from shaders/ on the nightly they pin (build.rs would too, unseen).
+      run: (cd shaders && rustup toolchain install) && scripts/build-shaders.sh
     - name: Install lavapipe
       run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
     - name: Install Clippy
@@ -109,6 +114,13 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: |
+          . -> target
+          shaders -> target
+    - name: Build the GPU shader
+      # Not committed: built from shaders/ on the nightly they pin (build.rs would too, unseen).
+      run: (cd shaders && rustup toolchain install) && scripts/build-shaders.sh
     - name: Check the library builds for wasm32
       run: rustup target add wasm32-unknown-unknown && cargo check --lib --no-default-features --features gpu --target wasm32-unknown-unknown
     - name: Install wasm-bindgen

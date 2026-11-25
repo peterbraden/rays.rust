@@ -15,6 +15,20 @@ use crate::output::LinearImage;
 /// to it, so one pathological pixel doesn't leave the rest of the map black.
 const PERCENTILE: f64 = 0.995;
 
+/// Whether pixels are being timed: only when a profile is asked for (`--time-map`), as reading
+/// a thread's CPU clock is a system call, which twice a pixel cost several percent of a render.
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Time each pixel from now on, for a profile.
+pub fn enable() {
+    ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether pixels are being timed.
+pub fn enabled() -> bool {
+    ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The CPU time the calling thread has used, in seconds: differences of it time a pixel.
 /// (The command line's: `libc` comes with the `cli` feature, and a browser has no such clock.)
 #[cfg(all(unix, feature = "cli"))]

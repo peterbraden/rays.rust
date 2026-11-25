@@ -169,35 +169,58 @@ function assetPaths(value, found = new Set()) {
 // yet made are built.
 let worldNote = '';
 async function worldFiles(json) {
-    let manifests = [], tables = [];
+    let tables = [];
     try {
-        manifests = encoder.worldManifests(json);
         tables = encoder.cachedFiles(json);
     } catch (e) {
-        // The workers' build will say what is wrong with the scene; this instance is spent.
-        encoder = null;
-        instantiate().then(r => { encoder = r; });
-        return [];
+        return spent([]);
     }
     // Tables are fetched with the rest; one not there yet is left out.
     const files = (await Promise.all(tables.map(p => fetchAsset(p).then(() => p, () => null)))).filter(Boolean);
+    // A world can be named only once another is read (a camera `above_ground`, put above the
+    // ground of a first world: see `SceneFile::world_manifests`), so ask again with each
+    // round's files given to the renderer here, until nothing new is named.
+    const seen = new Set();
     const missing = [];
-    for (const path of manifests) {
-        let manifest;
+    for (let round = 0; round < 4; round++) {
+        let manifests;
         try {
-            manifest = JSON.parse(new TextDecoder().decode(await fetchAsset(path)));
+            manifests = encoder.worldManifests(json).filter(m => !seen.has(m));
         } catch (e) {
-            missing.push(path);
-            continue;
+            return spent(files);
         }
-        const dir = path.slice(0, path.lastIndexOf('/') + 1);
-        for (const stage of manifest.stages ?? []) {
-            if (stage.file) { files.push(dir + stage.file); }
+        if (!manifests.length) { break; }
+        for (const path of manifests) {
+            seen.add(path);
+            let bytes, manifest;
+            try {
+                bytes = await fetchAsset(path);
+                manifest = JSON.parse(new TextDecoder().decode(bytes));
+            } catch (e) {
+                missing.push(path);
+                continue;
+            }
+            encoder.addAsset(path, bytes);
+            const dir = path.slice(0, path.lastIndexOf('/') + 1);
+            for (const stage of manifest.stages ?? []) {
+                if (!stage.file) { continue; }
+                const file = dir + stage.file;
+                files.push(file);
+                try { encoder.addAsset(file, await fetchAsset(file)); } catch (e) { /* the build says what is missing */ }
+            }
         }
     }
     worldNote = missing.length
         ? `simulating the landscape's world here (slow): render the scene once with the command line to keep it in ${missing.map(p => p.slice(0, p.lastIndexOf('/'))).join(', ')}`
         : '';
+    return files;
+}
+
+// The renderer on this thread panicked (on a scene the workers' build will say what is wrong
+// with): start another, and carry on with what was found.
+function spent(files) {
+    encoder = null;
+    instantiate().then(r => { encoder = r; });
     return files;
 }
 

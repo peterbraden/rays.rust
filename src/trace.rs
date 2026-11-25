@@ -115,6 +115,10 @@ fn continuation_weight(attenuate: &Color, depth: u64, s: &Scene) -> Option<f64> 
 /// entering from leaving by the normal's side, and a grazing ray mustn't change that.
 pub(crate) fn shading<'a>(r: &Ray, medium: &(dyn Medium + Sync + Send), intersection: &Intersection<'a>, s: &Scene) -> Intersection<'a> {
     let n = medium.normal_at_hit(intersection, s);
+    let n = match medium.material_at(intersection.point).shading_normal(&Intersection { normal: n, ..*intersection }, s) {
+        Some(m) => m,
+        None => n,
+    };
     if n == intersection.normal || (n.dot(&r.rd) > 0.) != (intersection.normal.dot(&r.rd) > 0.) {
         return *intersection;
     }
@@ -181,8 +185,15 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
     let bias = scene.render.shadow_bias.max(intersection.spawn_offset());
     biased_intersection.point = intersection.point + (intersection.facing_normal(r) * bias);
 
+    // The rays leaving this vertex leave its surface (`shapes::leaving`): its point, as exact
+    // as the hit's error, and as far off as this bias and a material's own offsets put them.
+    let vertex = crate::shapes::leaving::Leaving {
+        point: intersection.point,
+        tolerance: intersection.spawn_offset(),
+        reach: 10. * bias + 1e-6 * (1. + intersection.point.amax()),
+    };
     let mut cast = 1;
-    let (c, o) = trace_sample(r, &biased_intersection, depth, scene, prior);
+    let (c, o) = crate::shapes::leaving::with(Some(vertex), || trace_sample(r, &biased_intersection, depth, scene, prior));
     cast += c;
     (cast, o) 
 }

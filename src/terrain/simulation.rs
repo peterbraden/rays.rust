@@ -6,28 +6,67 @@
 //! steps, each applying, in turn (operator splitting, as in Braun et al. 1999's ICE-CASCADE and
 //! FastScape):
 //!
-//! 1. tectonic uplift (`planet`);
+//! 1. tectonic uplift (`planet`), and, in a mountain belt, the rock carried sideways towards
+//!    the foreland with its folds (`carry`);
 //! 2. volcanic eruptions: cones and lava flows (`volcano`);
 //! 3. glaciers: mass balance, ice flow and glacial erosion, in sub-steps (`glacier`), the
 //!    eroded rock leaving in meltwater as sediment for the rivers (Hallet, Hunter and Bogen,
 //!    "Rates of erosion and sediment evacuation by glaciers", Global and Planetary Change 12,
 //!    1996, estimate glacial erosion rates from that sediment);
-//! 4. flow routing over the ice and rock surface, then river erosion and deposition on
+//! 4. rivers cutting back the outer banks of their bends (`fluvial::lateral_erosion`), and
+//!    flow routing over the ice and rock surface, gathering the rain the terrain makes
+//!    (`orographic`: discharge, not area, drives the rivers; glaciers' snow follows it too), then river erosion and deposition on
 //!    ice-free ground (`flow`, `fluvial`);
 //! 5. deltas: what rivers bring to the sea spreads over the sea floor (`marine`);
-//! 6. hillslope diffusion (`fluvial`);
-//! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`).
+//! 6. limestone dissolving (`dissolve`; its rain also sinks, to rise at springs, in routing),
+//!    landslides where slopes are steeper than their rock holds (`fluvial::landslide`), and
+//!    hillslope diffusion (`fluvial`), faster on weak rock and sediment, and with the rain;
+//! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`), cutting back the
+//!    valley walls they press against (`cut_walls`);
+//! 8. the crust's isostatic response to what erosion, deposition and ice have changed of its
+//!    load (`isostasy`): it rises as rock is taken off and sinks under ice.
 //!
 //! ## Geology
 //!
-//! The ground is layered. At the bottom is bedrock, whose erodibility varies with position and
-//! depth (`Planet::erodibility`: folded strata of hard and soft rock). On it lies volcanic rock
-//! (`lava`), and on top sediment (`sediment`): alluvium, lake fill, colluvium from hillslopes.
-//! Ground gained by deposition or creep is sediment; ground lost is taken from the sediment,
-//! then the lava, then the bedrock, so erosion cuts through the layers in order. Rivers and
-//! glaciers erode whatever is exposed with its own erodibility: sediment 3 times average
-//! bedrock, lava 0.3 times (both model choices; fresh basalt is strong, unconsolidated sediment
-//! weak). Uplift moves all layers together.
+//! The ground is layered. At the bottom is bedrock (`geology`): a folded sedimentary cover of
+//! hard and soft beds over crystalline basement, with granite plutons, each cell's structure
+//! fixed at time zero (`structure`). On it lies volcanic rock (`lava`), and on top sediment
+//! (`sediment`): alluvium, lake fill, colluvium from hillslopes. Ground gained by deposition or
+//! creep is sediment; ground lost is taken from the sediment, then the lava, then the bedrock,
+//! so erosion cuts through the layers in order. Uplift moves all layers together, and carries
+//! the bedrock up through its column (`exhumed`), so erosion that keeps pace with it cuts into
+//! ever deeper rock.
+//!
+//! Rivers and glaciers erode whatever is exposed, each with its own erodibility for each rock
+//! (`erodibility`, `glacial_erodibility`; `geology::Rock::erodibility`): glaciers quarry
+//! jointed rock such as basalt and quartzite that rivers can hardly cut, and leave massive
+//! granite standing. Sediment is 3 times as erodible as average bedrock to both; lava 0.3 times
+//! to rivers but 1.5 times to glaciers (model choices: fresh basalt is strong, but columnar
+//! joints are easily quarried). Hillslopes creep in proportion to the rivers' erodibility too
+//! (weak rock weathers faster into soil that creeps), so slopes on shale relax while hard beds
+//! hold cliffs. In the mountain belts the folds' anticlines are uplifted faster
+//! than their synclines (`GeologyParams::fold_growth`). Slopes steeper than their rock holds
+//! fail in landslides (`slide`), but not under ice, which buttresses them; and at time zero the
+//! noise topography is first relaxed to what its rock holds.
+//!
+//! ## Closed basins
+//!
+//! Routing fills every depression to its spill point, as if each lake overflowed. In a dry
+//! climate many don't: what evaporates from the lake outweighs what flows in, and the basin is
+//! endorheic, its water and sediment never leaving (the Great Basin, the Dead Sea, Lake Eyre,
+//! the Aral and Caspian Seas; a fifth of the land drains nowhere). With a climate each lake
+//! keeps a water balance (`balance`). What flows in is the runoff of its catchment, the rain
+//! less what the land evaporates by Budyko's curve, R = P - E (1 - exp(-P / E)) ("Climate and
+//! Life", 1974; nearly all of the rain where it is wet and cold, a few per cent in hot
+//! deserts). What it loses is open-water evaporation less the rain on it, over its area when
+//! full. Evaporation follows temperature: 0.5 m/yr at 0 °C and 6 cm/yr more for each degree,
+//! so about 1.1 m/yr at 10 °C (the Great Salt Lake loses about 1.2) and 2 m/yr in a hot desert
+//! (2-3 m of pan evaporation; `evaporation` scales it). A lake that would lose more than comes
+//! in never spills: its catchment no longer feeds the river below, and its water stands where
+//! its evaporation balances the inflow, a terminal lake, often a shallow one in a wide flat
+//! basin, or none, a playa (`Terrain::basins`). Lakes that spill pass on what they don't
+//! evaporate. The basins' sediment stays in them (as in every lake, `fluvial`), building flat
+//! floors. Without a climate every lake spills.
 
 //! Everything is a deterministic function of the parameters (including the seed) and t, and
 //! the state at t2 is the state at t1 advanced by t2 - t1. So an animation renders successive
@@ -53,15 +92,17 @@
 //! The sea and, for a patch, its edge are base level: their cells are held fixed and drain
 //! water and ice. Sea level is 0 and constant (no eustatic change with the ice ages, yet).
 
-use crate::terrain::domain::Domain;
+use crate::terrain::domain::{Domain, Layout};
 use crate::terrain::flow::{route, Flow};
-use crate::terrain::fluvial::{diffuse, erode_and_deposit, FluvialParams};
+use crate::terrain::fluvial::{diffuse_varying, erode_and_deposit, landslide, lateral_erosion, FluvialParams};
 use crate::terrain::glacier::{erode, flow_ice, GlacierParams};
 use crate::terrain::planet::{Planet, PlanetParams};
 use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
 use crate::terrain::marine::{self, MarineParams};
 use crate::terrain::channel::{ChannelParams, Rivers};
 use crate::terrain::fluvial::LAKE;
+use crate::terrain::geology::{fractured, Process, Rock, Structure};
+use rayon::prelude::*;
 use std::f64::consts::TAU;
 
 #[derive(Clone, Debug)]
@@ -79,10 +120,30 @@ pub struct TerrainParams {
     /// The climate, from latitude (`climate`): it sets the glaciers' snowline cell by cell. None
     /// for the glaciers' own snowline by latitude.
     pub climate: Option<crate::terrain::climate::ClimateParams>,
+    /// The crust's isostatic response to erosion, deposition and ice (`isostasy`); None for
+    /// none.
+    pub isostasy: Option<crate::terrain::isostasy::IsostasyParams>,
+    /// Rain made by the terrain (`orographic`), which the rivers gather and the glaciers'
+    /// snow follows; None for rain everywhere the climate's (or uniform without a climate).
+    pub orographic: Option<crate::terrain::orographic::OrographicParams>,
+    /// Sand blown by the wind where it is too dry for plants (`aeolian`); None for none.
+    pub aeolian: Option<crate::terrain::aeolian::AeolianParams>,
+    /// How far sea level falls at the glacial cycle's maximum, metres: the water locked in the
+    /// ice sheets (about 120 m at the Last Glacial Maximum: Lambeck et al., PNAS 111, 2014).
+    /// Sea level follows the glacial cycle (`GlacierParams::period`), at 0 at time zero, an
+    /// interglacial like today (`Terrain::sea_level`).
+    pub eustasy: f64,
+    /// Open-water evaporation, relative to what the climate's temperature gives (see
+    /// "Closed basins" above); 0 for none, so every lake spills. Needs a climate.
+    pub evaporation: f64,
     /// Erodibility of sediment, relative to average bedrock.
     pub sediment_erodibility: f64,
     /// Erodibility of volcanic rock, relative to average bedrock.
     pub lava_erodibility: f64,
+    /// Erodibility of sediment by glaciers, relative to average bedrock.
+    pub sediment_glacial_erodibility: f64,
+    /// Erodibility of volcanic rock by glaciers, relative to average bedrock.
+    pub lava_glacial_erodibility: f64,
     /// Length of a landscape evolution step, years.
     pub step: f64,
 }
@@ -97,12 +158,45 @@ impl Default for TerrainParams {
             marine: Some(MarineParams::default()),
             channels: Some(ChannelParams::default()),
             climate: None,
+            orographic: Some(crate::terrain::orographic::OrographicParams::default()),
+            aeolian: Some(crate::terrain::aeolian::AeolianParams::default()),
+            isostasy: Some(crate::terrain::isostasy::IsostasyParams::default()),
+            eustasy: 120.,
+            evaporation: 1.,
             sediment_erodibility: 3.,
             lava_erodibility: 0.3,
+            sediment_glacial_erodibility: 3.,
+            lava_glacial_erodibility: 1.5,
             step: 100.,
         }
     }
 }
+
+/// Passes of landsliding per step: enough to bring slopes oversteepened in a step back to what
+/// their rock holds, as failure is all but instant on a landscape's timescales.
+const LANDSLIDE_PASSES: usize = 30;
+/// Rounds of cutting the noise topography down to what its rock holds at time zero.
+const INITIAL_LANDSLIDE_ROUNDS: usize = 5;
+/// The cell spacing the rocks' critical slopes are for, metres...
+const LANDSLIDE_SPACING: f64 = 300.;
+/// ... and how they steepen on finer grids: a model choice for the mild scale dependence of
+/// slopes measured over different distances.
+const LANDSLIDE_SCALING: f64 = 0.2;
+/// Slopes may exceed their limit by this, metres over a link, before they fail.
+const LANDSLIDE_TOLERANCE: f64 = 0.1;
+
+/// Sediment thicker than this (metres) is alluvium, over which channels keep their courses
+/// until they avulse...
+const ALLUVIAL: f64 = 2.;
+/// ... where they drain more than this, square metres (rain-weighted)...
+const AVULSION_AREA: f64 = 1e7;
+/// ... and are this wide per square root of their drainage, as `channel`'s rivers
+/// (`ChannelParams::width_coefficient`), and a twentieth of that deep.
+const CHANNEL_WIDTH: f64 = 0.003;
+
+/// Bodies of sea of fewer cells than this, cut off from the rest and from a patch's edge, are
+/// lakes (`Terrain::outlets`).
+const SEA_POCKET: usize = 64;
 
 /// Ice thinner than this (metres) counts as ice-free ground.
 pub const ICE_FREE: f64 = 1.;
@@ -118,6 +212,15 @@ pub struct Terrain {
     pub bed: Vec<f64>,
     /// Thickness of sediment at the top of the ground, metres.
     pub sediment: Vec<f64>,
+    /// How much of the sediment is glacial, metres: till and moraines (`glacier`'s "Debris"),
+    /// no more than the sediment.
+    pub till: Vec<f64>,
+    /// How much of the sediment the wind laid down, metres: sand sheets and dune fields
+    /// (`aeolian`), no more than the sediment.
+    pub sand: Vec<f64>,
+    /// The sediment after the wind's last pass, metres: what has been laid since is fresh,
+    /// its sand loose (`aeolian`).
+    pub settled: Vec<f64>,
     /// Thickness of volcanic rock beneath the sediment, metres.
     pub lava: Vec<f64>,
     /// Sediment flux leaving each cell in rivers at the last step, m³/yr.
@@ -126,6 +229,33 @@ pub struct Terrain {
     pub ice: Vec<f64>,
     /// Tectonic uplift rate, metres per year.
     pub uplift: Vec<f64>,
+    /// The bedrock's structure under each cell (`geology`).
+    pub structure: Vec<Structure>,
+    /// How far uplift has carried each cell's rock up since time zero, metres (tectonic uplift
+    /// and isostatic rebound).
+    pub exhumed: Vec<f64>,
+    /// How far the crust's isostatic response has moved each cell since time zero, metres.
+    pub rebound: Vec<f64>,
+    /// The belt's own uplift at each cell, metres per year, before the folds' growth (which
+    /// moves with the rock, as the belt's doesn't).
+    belt_uplift: Vec<f64>,
+    /// How fast the rock moves sideways, towards the foreland, (east, north) m/yr: zero but on a
+    /// patch in a mountain belt.
+    pub velocity: (f64, f64),
+    /// How far the rock has moved since time zero, (east, north) metres...
+    pub displacement: (f64, f64),
+    /// ... and by how many whole cells the ground has been moved with it, (east, north).
+    pub shifted: (i64, i64),
+    /// Detail of the folds down to this wavelength, metres.
+    finest: f64,
+    /// Each channel's receiver at the last step (`u32::MAX` where there is none), which
+    /// alluvial channels keep until they avulse (`persist`).
+    channel: Vec<u32>,
+    /// Rock meandering channels cut from their valley walls at the last step, joining each
+    /// river cell's sediment at the next, m³/yr.
+    banks: Vec<f64>,
+    /// The ground at time zero, from which the load on the crust is reckoned.
+    ground0: Vec<f64>,
     /// Cells that were sea at time zero. Ground eroded below sea level later is a lake bed
     /// (eg. a glacially overdeepened basin), not sea.
     pub sea: Vec<bool>,
@@ -150,6 +280,15 @@ pub struct Terrain {
     pub rivers: Rivers,
     /// Each cell's equilibrium line altitude in today's climate, if there is a climate model.
     pub ela: Option<Vec<f64>>,
+    /// The climate's rain at each cell, mm/yr (`OrographicParams::reference` without one).
+    pub base_precipitation: Vec<f64>,
+    /// The rain at each cell at the last step, with what the terrain makes, mm/yr.
+    pub precipitation: Vec<f64>,
+    /// The prevailing wind over the domain, (eastward, northward).
+    pub wind: (f64, f64),
+    /// The climate's annual mean temperature at sea level at each cell, °C, if there is a
+    /// climate model.
+    pub temperature: Option<Vec<f64>>,
 }
 
 impl Terrain {
@@ -158,31 +297,117 @@ impl Terrain {
         let planet = Planet::new(params.planet.clone());
         // Detail down to about two cells.
         let finest = 2. * domain.min_spacing();
-        let bed: Vec<f64> = domain.dirs.iter().map(|d| planet.elevation(d, finest)).collect();
-        let uplift = domain.dirs.iter().map(|d| planet.uplift(d)).collect();
+        let bed: Vec<f64> = domain.dirs.par_iter().map(|d| planet.elevation(d, finest)).collect();
+        let structure: Vec<Structure> = domain.dirs.par_iter().map(|d| planet.structure(d, finest)).collect();
+        // Folds still growing: anticlines rise faster than synclines.
+        let growth = params.planet.geology.fold_growth;
+        let belt_uplift: Vec<f64> = domain.dirs.iter().map(|d| planet.uplift(d)).collect();
+        // Fault blocks keep slipping: their crests rise and their basins sink.
+        let rift = params.planet.rift_rate;
+        let uplift = belt_uplift.iter().zip(&structure).zip(&domain.dirs)
+            .map(|((u, s), d)| u * (1. + growth * s.crest).max(0.) + if rift != 0. { rift * planet.fault_blocks(d, finest).offset } else { 0. }).collect();
+        // Thrust sheets carry the rock towards the foreland, at the belt's strength.
+        let velocity = match &domain.layout {
+            Layout::Patch { up, east, north, .. } => {
+                let o = planet.orogeny(up);
+                let rate = params.planet.geology.shortening_rate;
+                if o <= 1e-3 || rate == 0. { (0., 0.) } else {
+                    let f = planet.trend().foreland(up);
+                    let size = f.norm();
+                    if size < 1e-9 { (0., 0.) } else {
+                        let speed = rate * o.min(1.) * size.tanh();
+                        (speed * f.dot(east) / size, speed * f.dot(north) / size)
+                    }
+                }
+            }
+            Layout::Sphere { .. } => (0., 0.),
+        };
         let latitude = domain.dirs.iter().map(|d| d.y.clamp(-1., 1.).asin()).collect();
         let n = domain.len();
         let sea = bed.iter().map(|&b| b < 0.).collect();
         let vents = match &params.volcano { Some(v) => vents(&planet, &domain, v), None => vec![] };
-        let ela = params.climate.as_ref().map(|c| {
-            let climate = crate::terrain::climate::climate(c, &planet);
-            domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect()
-        });
+        let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
+        let ela = climate.as_ref().map(|climate| domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect());
+        let reference = params.orographic.as_ref().map_or(crate::terrain::orographic::OrographicParams::default().reference, |o| o.reference);
+        let temperature = climate.as_ref().map(|c| domain.dirs.iter().map(|d| c.local(d, 0.).mean).collect());
+        let base_precipitation: Vec<f64> = match &climate {
+            Some(c) => domain.dirs.iter().map(|d| c.local(d, 0.).precipitation).collect(),
+            None => vec![reference; n],
+        };
+        // The prevailing wind at the domain's middle latitude.
+        let centre: crate::na::Vector3<f64> = domain.dirs.iter().sum::<crate::na::Vector3<f64>>().normalize();
+        let wind = crate::terrain::climate::wind(&params.climate.clone().unwrap_or_default(), centre.y.clamp(-1., 1.).asin());
         let mut t = Terrain {
-            domain, params, planet, time: 0., ela, bed, uplift, latitude, sea, vents, rivers: Rivers::default(),
-            sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
+            precipitation: base_precipitation.clone(), base_precipitation, wind, temperature,
+            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], channel: vec![], latitude, sea, vents, rivers: Rivers::default(),
+            sediment: vec![0.; n], till: vec![0.; n], sand: vec![0.; n], settled: vec![], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
+        // The noise topography may stand steeper than its rock can: it is cut down to what the
+        // rock holds, as if worn back before time zero (as landslides, its debris buried half a
+        // mountain patch). Cutting exposes other rock, so the limits are found again a few times.
+        let outlets = t.outlets();
+        let strength = t.params.planet.geology.slope_strength;
+        if strength > 0. {
+            let scale = t.slope_scale();
+            for _ in 0..INITIAL_LANDSLIDE_ROUNDS {
+                let critical: Vec<f64> = (0..t.domain.len()).map(|i| strength * t.critical_slope_at(i, scale)).collect();
+                let before = t.bed.clone();
+                crate::terrain::fluvial::cap_slopes(&t.domain, &mut t.bed, &outlets, &critical);
+                if t.bed == before { break; }
+            }
+        }
+        t.ground0 = t.bed.clone();
+        t.rain();
         let flow = t.route();
         t.drainage = flow.area;
         t.receiver = flow.receiver;
         t
     }
 
+    /// Sea level at the present time, metres: 0 at time zero, falling by `eustasy` towards
+    /// the glacial cycle's maximum, as the snowline does (`GlacierParams::period`).
+    pub fn sea_level(&self) -> f64 {
+        let period = self.params.glacier.as_ref().map_or(GlacierParams::default().period, |g| g.period);
+        -self.params.eustasy * 0.5 * (1. - (TAU * self.time / period).cos())
+    }
+
     /// Cells that are base level: the sea, and a patch's edge. (A volcano that rises out of
-    /// the sea becomes land.)
+    /// the sea becomes land.) The sea is the ground below sea level that reaches a patch's
+    /// edge, or a body of it holding some of the sea of time zero and at least `SEA_POCKET`
+    /// cells: so as sea level rises again after a glacial, the sea floods the valleys rivers
+    /// cut across the exposed shelf. A pocket cut off from the rest (left behind by a delta,
+    /// say) of fewer cells is a lake, not the sea: rivers fill it and spill on (as base level
+    /// its sediment piled up hundreds of metres in it); and so is ground below sea level
+    /// inland, an overdeepened glacial basin say, that the sea can't reach.
     pub fn outlets(&self) -> Vec<bool> {
-        (0..self.domain.len()).map(|i| self.domain.boundary[i] || (self.sea[i] && self.bed[i] < 0.)).collect()
+        let n = self.domain.len();
+        let level = self.sea_level();
+        let wet: Vec<bool> = (0..n).map(|i| self.bed[i] < level).collect();
+        let mut outlet: Vec<bool> = (0..n).map(|i| self.domain.boundary[i]).collect();
+        let sphere = matches!(self.domain.layout, Layout::Sphere { .. });
+        let mut seen = vec![false; n];
+        for start in 0..n {
+            if !wet[start] || seen[start] { continue; }
+            let mut body = vec![start];
+            seen[start] = true;
+            let mut k = 0;
+            let (mut open, mut sea) = (false, false);
+            while k < body.len() {
+                let c = body[k];
+                k += 1;
+                open |= self.domain.boundary[c];
+                sea |= self.sea[c];
+                for l in self.domain.edges(c) {
+                    if wet[l.to] && !seen[l.to] { seen[l.to] = true; body.push(l.to); }
+                    open |= self.domain.boundary[l.to];
+                }
+            }
+            if open || (sea && (body.len() >= SEA_POCKET || sphere)) {
+                for c in body { outlet[c] = true; }
+            }
+        }
+        outlet
     }
 
     /// Elevation of the top of the bedrock, beneath sediment and lava, metres.
@@ -190,14 +415,38 @@ impl Terrain {
         self.bed[i] - self.sediment[i] - self.lava[i]
     }
 
-    /// Erodibility of the material exposed at each cell, relative to average bedrock.
-    pub fn erodibility(&self) -> Vec<f64> {
-        (0..self.domain.len()).map(|i| {
-            if self.sediment[i] > 0.5 { self.params.sediment_erodibility }
-            else if self.lava[i] > 0.5 { self.params.lava_erodibility }
-            else { self.planet.erodibility(&self.domain.dirs[i], self.bedrock(i)) }
+    /// The rock at elevation `z` under cell `i`, beneath any sediment and lava.
+    pub fn bedrock_at(&self, i: usize, z: f64) -> Rock {
+        let s = &self.structure[i];
+        self.planet.column.rock(s, s.coordinate(z, self.exhumed[i]))
+    }
+
+    /// What is exposed at cell `i`: sediment, lava, or the bedrock.
+    pub fn rock(&self, i: usize) -> Rock {
+        if self.sediment[i] > 0.5 { Rock::Sediment }
+        else if self.lava[i] > 0.5 { Rock::Basalt }
+        else { self.bedrock_at(i, self.bedrock(i)) }
+    }
+
+    /// Erodibility of what is exposed at each cell by `process`, relative to average bedrock.
+    pub fn erodibility_by(&self, process: Process) -> Vec<f64> {
+        let p = &self.params;
+        let contrast = p.planet.geology.contrast;
+        (0..self.domain.len()).into_par_iter().map(|i| match (self.rock(i), process) {
+            (Rock::Sediment, Process::Rivers) => p.sediment_erodibility,
+            (Rock::Sediment, Process::Glaciers) => p.sediment_glacial_erodibility,
+            (Rock::Basalt, Process::Rivers) => p.lava_erodibility,
+            (Rock::Basalt, Process::Glaciers) => p.lava_glacial_erodibility,
+            // Bedrock, more erodible where folding and faulting fractured it.
+            (r, process) => r.erodibility(process, contrast) * fractured(self.structure[i].fracture, process, p.planet.geology.fracturing),
         }).collect()
     }
+
+    /// Erodibility of what is exposed at each cell by rivers, relative to average bedrock.
+    pub fn erodibility(&self) -> Vec<f64> { self.erodibility_by(Process::Rivers) }
+
+    /// ... and by glaciers.
+    pub fn glacial_erodibility(&self) -> Vec<f64> { self.erodibility_by(Process::Glaciers) }
 
     /// Update the layers for the change of ground from `before`: ground gained is sediment;
     /// ground lost is taken from the sediment, then the lava, then the bedrock.
@@ -214,14 +463,272 @@ impl Terrain {
                 *lava -= loss.min(*lava);
             }
         }
+        // Erosion takes the till with the rest of the sediment.
+        for (t, s) in self.till.iter_mut().zip(&self.sediment) { *t = t.min(*s); }
+        for (t, s) in self.sand.iter_mut().zip(&self.sediment) { *t = t.min(*s); }
     }
 
     pub fn surface(&self) -> Vec<f64> {
         self.bed.iter().zip(&self.ice).map(|(b, h)| b + h).collect()
     }
 
+    /// Each cell's rain relative to the rain the rivers' erodibility is for: what it adds to
+    /// the discharge downstream.
+    fn rain_factor(&self) -> Vec<f64> {
+        match &self.params.orographic {
+            Some(o) => self.precipitation.iter().map(|p| p / o.reference).collect(),
+            None => vec![1.; self.domain.len()],
+        }
+    }
+
+    /// Work out the rain over the present surface (`orographic`).
+    fn rain(&mut self) {
+        self.precipitation = match &self.params.orographic {
+            Some(o) => crate::terrain::orographic::rain(&self.domain, &self.surface(), &self.outlets(), &self.base_precipitation, self.wind, o),
+            None => self.base_precipitation.clone(),
+        };
+    }
+
     fn route(&self) -> Flow {
-        route(&self.domain, &self.surface(), &self.outlets(), &vec![1.; self.domain.len()])
+        let rain = self.rain_factor();
+        let mut flow = route(&self.domain, &self.surface(), &self.outlets(), &rain);
+        let persisted = self.persist(&mut flow);
+        if self.one_exit(&mut flow) || persisted { crate::terrain::flow::accumulate(&self.domain, &mut flow, &rain); }
+        let g = &self.params.planet.geology;
+        if g.infiltration > 0. && g.karst_rate >= 0. {
+            // Rain on exposed limestone sinks, follows the drainage underground, and comes up
+            // at the first cell downstream that isn't limestone: the rivers' discharge is only
+            // what runs over the surface.
+            let karst: Vec<bool> = (0..self.domain.len()).map(|i| self.ice[i] < ICE_FREE && self.rock(i) == Rock::Limestone).collect();
+            if karst.iter().any(|&k| k) {
+                let sinks = g.infiltration.clamp(0., 1.);
+                let mut surface = vec![0.; self.domain.len()];
+                let mut under = vec![0.; self.domain.len()];
+                for &i in flow.stack.iter().rev() {
+                    let water = rain[i] * self.domain.area[i];
+                    let r = flow.receiver[i];
+                    // (At an outlet, what is underground comes up too: it leaves the patch.)
+                    if karst[i] && r != i {
+                        surface[i] += water * (1. - sinks);
+                        under[i] += water * sinks;
+                    } else {
+                        surface[i] += water + under[i];
+                        under[i] = 0.;
+                    }
+                    if r != i {
+                        surface[r] += surface[i];
+                        under[r] += under[i];
+                    }
+                }
+                flow.area = surface;
+            }
+        }
+        self.balance(&mut flow);
+        flow
+    }
+
+    /// Lake cells: where the filled surface stands over the surface, but not the sea.
+    fn lake_cells(&self, flow: &Flow) -> Vec<bool> {
+        let surface = self.surface();
+        let outlets = self.outlets();
+        (0..self.domain.len()).map(|i| !outlets[i] && flow.filled[i] - surface[i] > LAKE).collect()
+    }
+
+    /// Send all of each lake's water out at one cell. Where a lake could spill over several
+    /// cells of its rim at the same height, the routing sends each part of it out at the
+    /// nearest, as though they were separate lakes; instead the whole lake drains through its
+    /// cells towards the lowest of them on the filled surface (its spill point). Returns
+    /// whether any receiver changed.
+    fn one_exit(&self, flow: &mut Flow) -> bool {
+        let n = self.domain.len();
+        let lake = self.lake_cells(flow);
+        let mut component = vec![usize::MAX; n];
+        let mut changed = false;
+        for start in 0..n {
+            if !lake[start] || component[start] != usize::MAX { continue; }
+            // The lake: connected lake cells.
+            let mut cells = vec![start];
+            component[start] = start;
+            let mut k = 0;
+            while k < cells.len() {
+                let c = cells[k];
+                k += 1;
+                for l in self.domain.links(c) {
+                    if lake[l.to] && component[l.to] == usize::MAX { component[l.to] = start; cells.push(l.to); }
+                }
+            }
+            let mut exits: Vec<usize> = cells.iter().map(|&c| flow.receiver[c]).filter(|&r| !lake[r]).collect();
+            exits.sort_unstable();
+            exits.dedup();
+            if exits.len() < 2 { continue; }
+            let exit = *exits.iter().min_by(|&&a, &&b| flow.filled[a].total_cmp(&flow.filled[b]).then(a.cmp(&b))).unwrap();
+            // Out from the exit through the lake, each cell draining to the one it was reached from.
+            let mut reached = vec![false; cells.len()];
+            let index: std::collections::HashMap<usize, usize> = cells.iter().enumerate().map(|(k, &c)| (c, k)).collect();
+            let mut front = std::collections::VecDeque::new();
+            for l in self.domain.links(exit) {
+                if let Some(&k) = index.get(&l.to) {
+                    reached[k] = true;
+                    flow.receiver[l.to] = exit;
+                    flow.receiver_dist[l.to] = l.dist;
+                    front.push_back(l.to);
+                }
+            }
+            while let Some(c) = front.pop_front() {
+                for l in self.domain.links(c) {
+                    if let Some(&k) = index.get(&l.to) {
+                        if reached[k] { continue; }
+                        reached[k] = true;
+                        flow.receiver[l.to] = c;
+                        flow.receiver_dist[l.to] = l.dist;
+                        front.push_back(l.to);
+                    }
+                }
+            }
+            changed = true;
+        }
+        if changed { crate::terrain::flow::restack(flow); }
+        changed
+    }
+
+    /// Open-water evaporation at each cell, m/yr: 0.5 m/yr at 0 °C, 6 cm/yr more for each
+    /// degree warmer, at the cell's height (`evaporation` times that; none without a climate).
+    fn evaporation(&self) -> Vec<f64> {
+        let Some(t) = &self.temperature else { return vec![0.; self.domain.len()] };
+        let surface = self.surface();
+        let f = self.params.evaporation.max(0.);
+        (0..self.domain.len()).map(|i| {
+            let here = t[i] - crate::terrain::climate::LAPSE_RATE * surface[i].max(0.);
+            f * (0.5 + 0.06 * here.max(0.))
+        }).collect()
+    }
+
+    /// Each lake's water balance (the module docs' "Closed basins"): which lakes never fill to
+    /// their spill point, and how deep their water stands.
+    pub fn basins(&self) -> Basins {
+        let mut flow = self.route();
+        self.balance(&mut flow)
+    }
+
+    /// Weigh each lake's inflow against its evaporation. A lake is the cells where the
+    /// routing's filled surface stands above the surface, grouped by the cell it spills into,
+    /// as `fluvial` groups them. Below each lake `flow.area` is scaled by the share of the
+    /// water reaching it that flows on: none below a closed basin.
+    fn balance(&self, flow: &mut Flow) -> Basins {
+        let n = self.domain.len();
+        let mut basins = Basins { closed: vec![false; n], water: vec![0.; n], count: 0 };
+        if self.temperature.is_none() || self.params.evaporation <= 0. { return basins; }
+        let surface = self.surface();
+        let evaporation = self.evaporation();
+        let lake = self.lake_cells(flow);
+        // Lakes by the cell they spill into.
+        let mut exit = vec![usize::MAX; n];
+        let mut lakes: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+        for &i in &flow.stack {
+            if !lake[i] { continue; }
+            let r = flow.receiver[i];
+            exit[i] = if r != i && lake[r] { exit[r] } else { r };
+            lakes.entry(exit[i]).or_default().push(i);
+        }
+        if lakes.is_empty() { return basins; }
+        // Runoff from land by Budyko's curve, R = P - E (1 - exp(-P / E)): nearly all of the
+        // rain where it is wet and cold, almost none where it is hot and dry. On a lake, the
+        // rain less what it evaporates. m³/yr.
+        let net: Vec<f64> = (0..n).map(|i| {
+            let p = self.precipitation[i].max(0.) / 1000.;
+            let e = evaporation[i];
+            let r = if lake[i] { p - e } else if e <= 0. { p } else { p - e * (1. - (-p / e).exp()) };
+            r * self.domain.area[i]
+        }).collect();
+        // Each cell's own contribution to the drainage as routed (karst springs included).
+        let mut area = flow.area.clone();
+        for i in 0..n {
+            let r = flow.receiver[i];
+            if r != i { area[r] -= flow.area[i]; }
+        }
+        let mut water = net.clone();
+        // What each lake passes to the cell it spills into: water and drainage.
+        let mut pending: std::collections::BTreeMap<usize, (f64, f64)> = Default::default();
+        for &i in flow.stack.iter().rev() {
+            if let Some((w, a)) = pending.remove(&i) {
+                // The water reaching the lake, net of what it evaporates over its area when
+                // full: if that is nothing, it never spills.
+                let cells = &lakes[&i];
+                let inflow: f64 = w - cells.iter().map(|&c| net[c]).sum::<f64>();
+                if w <= 0. {
+                    basins.count += 1;
+                    // Its water stands where what evaporates balances what comes in.
+                    let mut sorted = cells.clone();
+                    sorted.sort_by(|&a, &b| surface[a].total_cmp(&surface[b]).then(a.cmp(&b)));
+                    let mut level = surface[sorted[0]];
+                    let mut loss = 0.;
+                    for (k, &c) in sorted.iter().enumerate() {
+                        if loss >= inflow { break; }
+                        loss -= net[c];
+                        level = sorted.get(k + 1).map_or(flow.filled[c], |&d| surface[d]);
+                    }
+                    for &c in cells {
+                        basins.closed[c] = true;
+                        basins.water[c] = (level - surface[c]).max(0.);
+                    }
+                } else {
+                    water[i] += w;
+                    area[i] += a * (w / inflow.max(w)).min(1.);
+                }
+            }
+            let r = flow.receiver[i];
+            if r == i { continue; }
+            if lake[i] && !lake[r] {
+                let entry = pending.entry(r).or_insert((0., 0.));
+                entry.0 += water[i];
+                entry.1 += area[i];
+            } else {
+                water[r] += water[i];
+                area[r] += area[i];
+            }
+        }
+        flow.area = area;
+        basins
+    }
+
+    /// Keep alluvial channels on their courses (see `fluvial`'s "Avulsion"): a cell with a
+    /// channel on sediment keeps last step's receiver (`channel`) while that is still lower on
+    /// the filled surface, unless the routing's own steepest way is `avulsion` times steeper and
+    /// the cell stands a channel's depth above it. Returns whether any receiver changed.
+    fn persist(&self, flow: &mut Flow) -> bool {
+        let ratio = self.params.fluvial.avulsion;
+        if ratio <= 0. || self.channel.len() != self.domain.len() { return false; }
+        let mut changed = false;
+        for i in 0..self.domain.len() {
+            let kept = self.channel[i] as usize;
+            let now = flow.receiver[i];
+            if kept == usize::MAX as u32 as usize || kept == now || now == i { continue; }
+            if self.sediment[i] < ALLUVIAL || self.drainage[i] < AVULSION_AREA || self.ice[i] >= ICE_FREE { continue; }
+            let Some(link) = self.domain.links(i).iter().find(|l| l.to == kept) else { continue };
+            if flow.filled[kept] >= flow.filled[i] { continue; }
+            let along = (flow.filled[i] - flow.filled[kept]) / link.dist;
+            let aside = (flow.filled[i] - flow.filled[now]) / flow.receiver_dist[i];
+            let depth = CHANNEL_WIDTH * self.drainage[i].sqrt() / 20.;
+            let breaks = aside > ratio * along && flow.filled[i] - flow.filled[now] > depth;
+            if !breaks {
+                crate::terrain::flow::redirect(flow, i, kept, link.dist);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Lower exposed limestone by solution for `dt` years, in proportion to the rain; the rock
+    /// leaves in solution, not as sediment.
+    fn dissolve(&mut self, fixed: &[bool], dt: f64) {
+        let rate = self.params.planet.geology.karst_rate;
+        if rate <= 0. { return; }
+        let before = self.bed.clone();
+        for i in 0..self.domain.len() {
+            if fixed[i] || self.ice[i] >= ICE_FREE || self.rock(i) != Rock::Limestone { continue; }
+            self.bed[i] -= rate * self.precipitation[i] / 1000. * dt;
+        }
+        self.record(&before);
     }
 
     /// Advance to time `t` (no earlier than now).
@@ -243,9 +750,14 @@ impl Terrain {
 
     pub fn step(&mut self, dt: f64) {
         let fixed = self.outlets();
-        for (i, ((b, u), f)) in self.bed.iter_mut().zip(&self.uplift).zip(&fixed).enumerate() {
-            if !f { *b += u * dt; } else if self.domain.boundary[i] { *b += self.boundary_rate[i] * dt; }
+        for (i, (((b, x), u), f)) in self.bed.iter_mut().zip(&mut self.exhumed).zip(&self.uplift).zip(&fixed).enumerate() {
+            let rise = if !f { u * dt } else if self.domain.boundary[i] { self.boundary_rate[i] * dt } else { 0. };
+            *b += rise;
+            *x += rise;
         }
+
+        self.carry(dt, &fixed);
+        self.rain();
 
         if let Some(v) = &self.params.volcano {
             erupt(&self.domain, &self.vents, v, self.time, dt, &mut self.bed, &mut self.lava, &fixed);
@@ -267,19 +779,75 @@ impl Terrain {
             .map(|i| (flow.filled[i] - surface[i]).min(ice_free.filled[i] - self.bed[i]).max(0.)).collect();
         let erodibility: Vec<f64> = self.erodibility().iter().zip(&self.ice)
             .map(|(&k, &h)| if h < ICE_FREE { k } else { 0. }).collect();
+        // Rivers cut back the outer banks of their bends; what they take joins their sediment.
         let before = self.bed.clone();
-        self.sediment_flux = erode_and_deposit(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &glacial, &self.params.fluvial, dt);
+        let lateral = lateral_erosion(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &self.params.fluvial, dt);
         self.record(&before);
-        if let Some(m) = &self.params.marine {
+        let source: Vec<f64> = (0..self.domain.len()).map(|i| glacial[i] + lateral[i] + self.banks[i]).collect();
+        self.banks.iter_mut().for_each(|b| *b = 0.);
+        let before = self.bed.clone();
+        self.sediment_flux = erode_and_deposit(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &source, &self.params.fluvial, dt);
+        self.record(&before);
+        if let Some(m) = self.params.marine.clone() {
+            let m = &m;
             // What the rivers bring to the sea builds deltas.
             let sea: Vec<bool> = (0..self.domain.len()).map(|i| fixed[i] && !self.domain.boundary[i]).collect();
-            let supply: Vec<f64> = (0..self.domain.len()).map(|i| if sea[i] { self.sediment_flux[i] } else { 0. }).collect();
+            // And the waves cut back the coast, the rock going to the sea beside it.
+            let level = self.sea_level();
             let before = self.bed.clone();
-            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &supply, m, dt);
+            let erodibility = self.erodibility();
+            let cliffs = marine::erode_coast(&self.domain, &mut self.bed, &fixed, &sea, &erodibility, m, level, dt);
+            self.record(&before);
+            let supply: Vec<f64> = (0..self.domain.len()).map(|i| if sea[i] { self.sediment_flux[i] + cliffs[i] } else { 0. }).collect();
+            let before = self.bed.clone();
+            // The patch's edge, below sea level, is the open sea beyond it.
+            let open: Vec<bool> = (0..self.domain.len()).map(|i| self.domain.boundary[i] && self.bed[i] < level).collect();
+            // Each mouth's river comes in from the land cell bringing it the most sediment.
+            let mut heading = vec![crate::na::Vector3::zeros(); self.domain.len()];
+            let mut most = vec![0f64; self.domain.len()];
+            for i in 0..self.domain.len() {
+                let r = flow.receiver[i];
+                if r == i || sea[i] || !sea[r] || self.sediment_flux[i] <= most[r] { continue; }
+                most[r] = self.sediment_flux[i];
+                let (a, b) = (self.domain.dirs[i], self.domain.dirs[r]);
+                let t = (b - a) - b * b.dot(&(b - a));
+                if t.norm() > 0. { heading[r] = t.normalize(); }
+            }
+            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &open, &supply, &heading, m, level, self.wind, dt);
             self.record(&before);
         }
+        self.slide(&fixed, LANDSLIDE_PASSES, 1);
+        self.dissolve(&fixed, dt);
+        if let Some(a) = self.params.aeolian.clone() {
+            // The wind takes loose sediment where it is too dry for plants, and lays it down
+            // downwind as sand.
+            let n = self.domain.len();
+            let sink: Vec<bool> = (0..n).map(|i| fixed[i] || self.ice[i] >= ICE_FREE).collect();
+            // Loose: the wind's own sand, and the fine share of what was laid since its last pass.
+            let loose: Vec<f64> = (0..n).map(|i| {
+                let fresh = (self.sediment[i] - self.settled.get(i).copied().unwrap_or(self.sediment[i])).max(0.);
+                (self.sand[i] + a.sand_fraction.clamp(0., 1.) * fresh).min(self.sediment[i])
+            }).collect();
+            let change = crate::terrain::aeolian::blow(&self.domain, &self.surface(), &loose, &self.precipitation, &sink, self.wind, &a, dt);
+            let before = self.bed.clone();
+            for (b, c) in self.bed.iter_mut().zip(&change) { *b += c; }
+            self.record(&before);
+            for i in 0..n {
+                // What it took came from its own sand first.
+                self.sand[i] = (self.sand[i] + change[i]).max(0.).min(self.sediment[i]);
+            }
+            self.settled = self.sediment.clone();
+        }
+
+        // Soil creeps faster on weak rock, which weathers faster, and on loose sediment: slopes
+        // on shale relax while hard beds hold cliffs. And with the rain: in a desert little soil
+        // forms and less of it creeps, so slopes are bare rock, weathering-limited, and cliffs
+        // keep their edges, retreating by falling rather than rounding off (the rain over the
+        // rivers' reference, from a tenth to twice).
+        let wet = self.rain_factor();
+        let kappa: Vec<f64> = self.erodibility().iter().zip(&wet).map(|(k, w)| self.params.fluvial.diffusivity * k * w.clamp(0.1, 2.)).collect();
         let before = self.bed.clone();
-        diffuse(&self.domain, &mut self.bed, &fixed, self.params.fluvial.diffusivity, dt);
+        diffuse_varying(&self.domain, &mut self.bed, &fixed, &kappa, dt);
         self.record(&before);
 
         if let Some(c) = &self.params.channels {
@@ -289,46 +857,240 @@ impl Terrain {
                 if r == i { 0. } else { (self.bed[i] - self.bed[r]).max(0.) / flow.receiver_dist[i] }
             }).collect();
             let wet: Vec<bool> = (0..n).map(|i| fixed[i] || self.ice[i] >= ICE_FREE || lake[i] > LAKE).collect();
-            self.rivers.step(&self.domain, self.params.planet.seed, self.time, dt, &flow.receiver, &flow.area, &slope, &self.sediment, &wet, &self.bed, c);
+            let pushes = self.rivers.step(&self.domain, self.params.planet.seed, self.time, dt, &flow.receiver, &flow.area, &slope, &self.sediment, &wet, &self.bed, c);
+            self.cut_walls(&pushes, &fixed, dt);
         }
         self.receiver = flow.receiver.clone();
+        // The channels' courses, for them to keep next step (`persist`).
+        self.channel = (0..self.domain.len()).map(|i| if flow.area[i] >= AVULSION_AREA { flow.receiver[i] as u32 } else { u32::MAX }).collect();
         self.drainage = flow.area;
+        self.compensate(&fixed, dt);
         self.time += dt;
+    }
+
+    /// Let slopes steeper than their rock holds fail (`fluvial::landslide`), in up to `passes`
+    /// passes a round, but not under ice, which buttresses them: walls that glaciers left steep
+    /// fall in when it melts, unless the rock is strong. What falls is sediment where it lands.
+    /// As failing exposes other rock (and buries some under debris), each of up to `rounds`
+    /// rounds looks at the rock again, until nothing more fails.
+    fn slide(&mut self, fixed: &[bool], passes: usize, rounds: usize) {
+        let strength = self.params.planet.geology.slope_strength;
+        if strength <= 0. { return; }
+        let scale = self.slope_scale();
+        for _ in 0..rounds {
+            let critical: Vec<f64> = (0..self.domain.len()).into_par_iter().map(|i| {
+                if self.ice[i] >= ICE_FREE { return f64::INFINITY; }
+                strength * self.critical_slope_at(i, scale)
+            }).collect();
+            let before = self.bed.clone();
+            let (moved, _) = landslide(&self.domain, &mut self.bed, fixed, &critical, LANDSLIDE_TOLERANCE, passes);
+            self.record(&before);
+            if moved == 0. { break; }
+        }
+    }
+
+    /// The steepest slope cell `i` stands at before failing, rise over run: its rock's, less
+    /// where folding fractured it, for this domain's cells. Slopes measured over longer
+    /// distances are gentler, as they average cliffs with the benches between them, so the
+    /// rocks' limits (for cells of `LANDSLIDE_SPACING`) are steeper on finer grids and gentler on
+    /// coarser, as (`LANDSLIDE_SPACING` / spacing)^`LANDSLIDE_SCALING`; then nested patches of
+    /// different spacings agree roughly on how steep the ground stands.
+    pub fn critical_slope(&self, i: usize) -> f64 {
+        self.critical_slope_at(i, self.slope_scale())
+    }
+
+    /// How much steeper the rocks' critical slopes are on this domain's cells than on cells of
+    /// `LANDSLIDE_SPACING` (see `critical_slope`; `min_spacing` looks at every link, so this is
+    /// worked out once, not per cell).
+    fn slope_scale(&self) -> f64 {
+        (LANDSLIDE_SPACING / self.domain.min_spacing()).powf(LANDSLIDE_SCALING)
+    }
+
+    fn critical_slope_at(&self, i: usize, scale: f64) -> f64 {
+        scale * self.rock(i).critical_slope() / (1. + 0.3 * self.structure[i].fracture)
+    }
+
+    /// Carry the rock towards the foreland for `dt` years (`velocity`): the ground moves by
+    /// whole cells as the displacement passes each (moved a fraction of a cell each step, by
+    /// interpolation, it would be smoothed by far more than its hillslopes ever smooth it), and
+    /// the bedrock's structure is that of the rock each cell now holds, from where it was at
+    /// time zero, so rock comes in from the planet's geology beyond the patch's edge. Base level
+    /// (`fixed`) stays where it is.
+    fn carry(&mut self, dt: f64, fixed: &[bool]) {
+        if self.velocity == (0., 0.) { return; }
+        let Layout::Patch { spacing, .. } = self.domain.layout else { return };
+        self.displacement.0 += self.velocity.0 * dt;
+        self.displacement.1 += self.velocity.1 * dt;
+        let target = ((self.displacement.0 / spacing).round() as i64, (self.displacement.1 / spacing).round() as i64);
+        if target == self.shifted { return; }
+        while self.shifted != target {
+            let dx = (target.0 - self.shifted.0).signum();
+            let dy = if dx == 0 { (target.1 - self.shifted.1).signum() } else { 0 };
+            self.shift_cells(dx, dy, fixed);
+            self.shifted.0 += dx;
+            self.shifted.1 += dy;
+        }
+        self.place_structure();
+    }
+
+    /// Move the ground one cell east (`dx`) or north (`dy`), each cell but base level taking
+    /// its upwind neighbour's (the edge's own where there is none).
+    fn shift_cells(&mut self, dx: i64, dy: i64, fixed: &[bool]) {
+        let Layout::Patch { n, .. } = self.domain.layout else { return };
+        let n = n as i64;
+        let source: Vec<usize> = (0..self.domain.len()).map(|k| {
+            let (i, j) = (k as i64 % n, k as i64 / n);
+            if fixed[k] { return k; }
+            ((j - dy).clamp(0, n - 1) * n + (i - dx).clamp(0, n - 1)) as usize
+        }).collect();
+        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.sand, &mut self.settled, &mut self.lava, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
+            if f.len() != source.len() { continue; }
+            let old = f.clone();
+            for (k, &s) in source.iter().enumerate() { f[k] = old[s]; }
+        }
+    }
+
+    /// Where the rock now at cell `i` was at time zero.
+    pub fn origin(&self, i: usize) -> crate::na::Vector3<f64> {
+        let d = self.domain.dirs[i];
+        let Layout::Patch { up, east, north, spacing, .. } = self.domain.layout else { return d };
+        if self.shifted == (0, 0) { return d; }
+        let (x, z) = Domain::tangent(up, east, north, self.domain.radius, &d);
+        let (x, z) = (x - self.shifted.0 as f64 * spacing, z - self.shifted.1 as f64 * spacing);
+        (up * self.domain.radius + east * x + north * z).normalize()
+    }
+
+    /// The structure of the rock each cell holds, and the uplift there: the belt's, where the
+    /// cell is, and the folds' growth, which goes with the rock.
+    fn place_structure(&mut self) {
+        let origins: Vec<crate::na::Vector3<f64>> = (0..self.domain.len()).map(|i| self.origin(i)).collect();
+        let (planet, finest) = (&self.planet, self.finest);
+        self.structure = origins.par_iter().map(|d| planet.structure(d, finest)).collect();
+        let growth = self.params.planet.geology.fold_growth;
+        self.uplift = self.belt_uplift.iter().zip(&self.structure).map(|(u, s)| u * (1. + growth * s.crest).max(0.)).collect();
+    }
+
+    /// Cut back the valley walls meandering channels pressed against (`channel::Push`): each
+    /// by the area its bank would have swept times its height above the river, slowed by its
+    /// erodibility relative to alluvium, never below the river. The rock taken is the river's
+    /// sediment at the next step (`banks`).
+    fn cut_walls(&mut self, pushes: &[crate::terrain::channel::Push], fixed: &[bool], dt: f64) {
+        if pushes.is_empty() { return; }
+        let erodibility = self.erodibility();
+        let alluvium = self.params.sediment_erodibility.max(1e-9);
+        let before = self.bed.clone();
+        for push in pushes {
+            let (wall, river) = (push.wall, push.river);
+            if fixed[wall] || self.ice[wall] >= ICE_FREE { continue; }
+            let height = self.bed[wall] - before[river];
+            if height <= 0. { continue; }
+            let volume = push.area * height * (erodibility[wall] / alluvium).min(1.);
+            let lowered = (volume / self.domain.area[wall]).min(height);
+            self.bed[wall] -= lowered;
+            self.banks[river] += lowered * self.domain.area[wall] / dt;
+        }
+        self.record(&before);
+    }
+
+    /// Let the crust respond to the load erosion, deposition and ice have put on it or taken
+    /// off since time zero (`isostasy`), relaxing towards equilibrium over `dt` years. It moves
+    /// the rock as uplift does; base level (the sea, a patch's edge) is held.
+    fn compensate(&mut self, fixed: &[bool], dt: f64) {
+        let Some(p) = self.params.isostasy.clone() else { return };
+        let column: Vec<f64> = (0..self.domain.len()).map(|i| self.bed[i] - self.ground0[i] - self.exhumed[i]).collect();
+        let target = crate::terrain::isostasy::equilibrium(&self.domain, &column, &self.ice, &p);
+        let relax = 1. - (-dt / p.relaxation).exp();
+        for i in 0..self.domain.len() {
+            if fixed[i] { continue; }
+            let dw = (target[i] - self.rebound[i]) * relax;
+            self.bed[i] += dw;
+            self.exhumed[i] += dw;
+            self.rebound[i] += dw;
+        }
     }
 
     /// Returns the rate glaciers eroded each cell over the step, m³/yr.
     fn glaciate(&mut self, g: &GlacierParams, fixed: &[bool], dt: f64) -> Vec<f64> {
         let n = self.domain.len();
-        let start = self.bed.clone();
-        let erodibility = self.erodibility();
+        let erodibility = self.glacial_erodibility();
         // Ice flows for dt / acceleration years, and erodes as if for dt.
         let ice_time = dt / g.acceleration;
         let mut done = 0.;
         let mut mean_sliding = vec![0.; n];
+        // Snow follows the rain the terrain redistributes (more to windward, less in the lee),
+        // relative to the climate's own rain there: the snowline already reflects how wet the
+        // climate is (it lies lower where more snow falls), so scaling by the rain itself would
+        // count that twice.
+        let snow: Vec<f64> = (0..n).map(|i| (self.precipitation[i] / self.base_precipitation[i].max(1.)).clamp(0.3, 3.)).collect();
+        // What the meltwater carries off to the rivers, m³.
+        let mut meltwater = vec![0.; n];
         while done < ice_time * (1. - 1e-9) {
             let t = self.time + done * g.acceleration;
+            let ela: Vec<f64> = (0..n).map(|i| match &self.ela {
+                // Today's climate is an interglacial: the glacial cycle lowers the snowline from
+                // there.
+                Some(e) => e[i] + g.ela_amplitude * ((TAU * t / g.period).cos() - 1.),
+                None => g.ela(self.latitude[i], t),
+            }).collect();
             let balance: Vec<f64> = (0..n).map(|i| {
-                let ela = match &self.ela {
-                    // Today's climate is an interglacial: the glacial cycle lowers the snowline
-                    // from there.
-                    Some(e) => e[i] + g.ela_amplitude * ((TAU * t / g.period).cos() - 1.),
-                    None => g.ela(self.latitude[i], t),
-                };
-                g.mass_balance(self.bed[i] + self.ice[i], ela)
+                // Snow falls as the rain does: more on windward slopes, less in their lee.
+                let m = g.mass_balance(self.bed[i] + self.ice[i], ela[i]);
+                if m > 0. { m * snow[i] } else { m }
             }).collect();
             // Nothing to do while it is too warm for ice anywhere.
             if balance.iter().all(|&m| m <= 0.) && self.ice.iter().all(|&h| h <= 0.) { break; }
             let step = flow_ice(&self.domain, g, &self.bed, &mut self.ice, &balance, fixed, (ice_time - done).min(g.max_step));
+            // Only ice whose bed is at the melting point slides, and erodes.
+            let sliding: Vec<f64> = (0..n).map(|i| step.sliding[i] * g.basal_melting(self.bed[i] + self.ice[i], self.ice[i], ela[i])).collect();
             let before = self.bed.clone();
-            erode(g, &mut self.bed, &step.sliding, &erodibility, fixed, step.dt * g.acceleration);
+            erode(g, &mut self.bed, &sliding, &erodibility, fixed, step.dt * g.acceleration);
             self.record(&before);
-            for (m, s) in mean_sliding.iter_mut().zip(&step.sliding) { *m += s * step.dt / ice_time; }
+            // The ice carries a share of what it eroded to its margin: till and moraines.
+            let eroded: Vec<f64> = (0..n).map(|i| (before[i] - self.bed[i]).max(0.) * self.domain.area[i]).collect();
+            let share = g.debris.clamp(0., 1.);
+            let load: Vec<f64> = eroded.iter().map(|e| e * share).collect();
+            for i in 0..n { meltwater[i] += eroded[i] * (1. - share); }
+            if share > 0. {
+                let (laid, lost) = crate::terrain::glacier::carry_debris(&self.domain, &self.bed, &self.ice, &balance, &load, fixed, g);
+                let before = self.bed.clone();
+                for i in 0..n {
+                    self.bed[i] += laid[i];
+                    meltwater[i] += lost[i];
+                }
+                self.record(&before);
+                for i in 0..n { self.till[i] = (self.till[i] + laid[i]).min(self.sediment[i]); }
+            }
+            for (m, s) in mean_sliding.iter_mut().zip(&sliding) { *m += s * step.dt / ice_time; }
             done += step.dt;
             self.ice_steps += 1;
             self.ice_iterations += step.iterations;
         }
         self.sliding = mean_sliding;
-        (0..n).map(|i| (start[i] - self.bed[i]).max(0.) * self.domain.area[i] / dt).collect()
+        meltwater.iter().map(|m| m / dt).collect()
+    }
+}
+
+/// Each lake's water balance (`Terrain::basins`).
+pub struct Basins {
+    /// Cells in the depression of a closed basin, whose lake never spills.
+    pub closed: Vec<bool>,
+    /// Depth of the water standing in closed basins, metres: their terminal lakes. The rest
+    /// of a closed depression is dry: a playa where it is flat.
+    pub water: Vec<f64>,
+    /// How many closed basins there are.
+    pub count: usize,
+}
+
+/// Terminal lakes shallower than this, metres, count as dry playa.
+pub const SALT_LAKE_DEPTH: f64 = 0.5;
+
+impl Basins {
+    /// Whether cell `i` is under a closed basin's terminal lake.
+    pub fn salt_lake(&self, i: usize) -> bool { self.closed[i] && self.water[i] > SALT_LAKE_DEPTH }
+
+    /// Whether cell `i` of `t` is a playa: a closed basin's dry floor of lake beds.
+    pub fn playa(&self, t: &Terrain, i: usize) -> bool {
+        self.closed[i] && self.water[i] <= SALT_LAKE_DEPTH && t.sediment[i] > crate::terrain::map::ALLUVIUM && t.ice[i] < ICE_FREE
     }
 }
 
@@ -346,6 +1108,27 @@ pub struct Snapshot {
     drainage: Vec<f64>,
     receiver: Vec<usize>,
     sliding: Vec<f64>,
+    /// Absent from snapshots taken before rock was carried up with the ground.
+    #[serde(default)]
+    exhumed: Vec<f64>,
+    #[serde(default)]
+    rebound: Vec<f64>,
+    #[serde(default)]
+    displacement: (f64, f64),
+    #[serde(default)]
+    shifted: (i64, i64),
+    #[serde(default)]
+    ground0: Vec<f64>,
+    #[serde(default)]
+    banks: Vec<f64>,
+    #[serde(default)]
+    channel: Vec<u32>,
+    #[serde(default)]
+    till: Vec<f64>,
+    #[serde(default)]
+    sand: Vec<f64>,
+    #[serde(default)]
+    settled: Vec<f64>,
     channels: Vec<crate::terrain::channel::Channel>,
     oxbows: Vec<crate::terrain::channel::Oxbow>,
     rivers_found: Option<f64>,
@@ -359,7 +1142,7 @@ impl Snapshot {
     pub fn fits(&self, t: &Terrain) -> bool {
         let n = t.domain.len();
         [&self.bed, &self.sediment, &self.lava, &self.sediment_flux, &self.ice, &self.drainage, &self.sliding].iter().all(|f| f.len() == n)
-            && self.sea.len() == n && self.receiver.len() == n
+            && (self.exhumed.is_empty() || self.exhumed.len() == n) && (self.rebound.is_empty() || self.rebound.len() == n) && self.sea.len() == n && self.receiver.len() == n
     }
 }
 
@@ -368,7 +1151,8 @@ impl Terrain {
         Snapshot {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
-            drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(),
+            drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(), rebound: self.rebound.clone(),
+            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(), till: self.till.clone(), sand: self.sand.clone(), settled: self.settled.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -386,6 +1170,21 @@ impl Terrain {
         self.drainage = s.drainage;
         self.receiver = s.receiver;
         self.sliding = s.sliding;
+        // An older snapshot: the uplift since time zero.
+        self.exhumed = if s.exhumed.len() == self.domain.len() { s.exhumed }
+            else { self.uplift.iter().zip(&self.sea).map(|(u, &sea)| if sea { 0. } else { u * s.time }).collect() };
+        self.rebound = if s.rebound.len() == self.domain.len() { s.rebound } else { vec![0.; self.domain.len()] };
+        if s.ground0.len() == self.domain.len() { self.ground0 = s.ground0; }
+        self.banks = if s.banks.len() == self.domain.len() { s.banks } else { vec![0.; self.domain.len()] };
+        self.channel = s.channel;
+        self.till = if s.till.len() == self.domain.len() { s.till } else { vec![0.; self.domain.len()] };
+        self.sand = if s.sand.len() == self.domain.len() { s.sand } else { vec![0.; self.domain.len()] };
+        self.settled = s.settled;
+        self.displacement = s.displacement;
+        if s.shifted != self.shifted {
+            self.shifted = s.shifted;
+            self.place_structure();
+        }
         self.rivers.channels = s.channels;
         self.rivers.oxbows = s.oxbows;
         self.rivers.found = s.rivers_found;
@@ -439,38 +1238,251 @@ mod tests {
     }
 
     #[test]
-    fn test_time_zero_is_the_noise_topography() {
+    fn test_time_zero_is_the_noise_topography_where_it_can_stand() {
         let t = small(1);
-        let d = &t.domain.dirs[100];
-        assert_eq!(t.bed[100], t.planet.elevation(d, 2000.));
+        let noise: Vec<f64> = t.domain.dirs.iter().map(|d| t.planet.elevation(d, 2000.)).collect();
+        // Much of it is the noise topography as it was; the rest is cut down, with no debris.
+        let kept = (0..t.domain.len()).filter(|&i| t.bed[i] == noise[i]).count();
+        assert!(kept * 3 > t.domain.len(), "{} of {}", kept, t.domain.len());
+        for i in 0..t.domain.len() { assert!(t.bed[i] <= noise[i] && t.sediment[i] == 0.); }
+        // And nothing stands steeper than its rock holds.
+        for i in (0..t.domain.len()).filter(|&i| !t.domain.boundary[i]) {
+            let limit = t.critical_slope(i);
+            for l in t.domain.links(i) { assert!(t.bed[i] - t.bed[l.to] <= limit * l.dist + 0.2, "cell {}", i); }
+        }
     }
 
     #[test]
-    fn test_evolution_is_deterministic_and_resumable() {
-        let mut a = small(2);
-        a.run_to(3000.);
-        let mut b = small(2);
-        b.run_to(1000.);
-        b.run_to(3000.);
-        assert_eq!(a.bed, b.bed);
-        assert_eq!(a.ice, b.ice);
+    fn test_glaciers_make_more_of_fractured_rock_than_rivers() {
+        let t = small(3);
+        let (rivers, glaciers) = (t.erodibility(), t.glacial_erodibility());
+        let bedrock: Vec<usize> = (0..t.domain.len()).filter(|&i| !matches!(t.rock(i), Rock::Sediment | Rock::Basalt)).collect();
+        // Each cell's glacial over river erodibility, relative to its rock's own.
+        let gain = |i: usize| {
+            let r = t.rock(i);
+            (glaciers[i] / rivers[i]) / (r.erodibility(Process::Glaciers, 5.) / r.erodibility(Process::Rivers, 5.))
+        };
+        let fractured: Vec<usize> = bedrock.iter().copied().filter(|&i| t.structure[i].fracture > 0.5).collect();
+        let sound: Vec<usize> = bedrock.iter().copied().filter(|&i| t.structure[i].fracture < 0.05).collect();
+        assert!(!fractured.is_empty() && !sound.is_empty(), "{} fractured, {} sound", fractured.len(), sound.len());
+        assert!(fractured.iter().all(|&i| gain(i) > 1.3), "{:?}", fractured.iter().map(|&i| gain(i)).collect::<Vec<_>>());
+        assert!(sound.iter().all(|&i| (gain(i) - 1.).abs() < 0.1));
     }
 
     #[test]
-    fn test_cached_run_resumes_where_it_left_off() {
-        let dir = std::env::temp_dir().join(format!("landscape-cache-test-{}", std::process::id()));
-        let mut a = small(4);
-        a.run_cached(1000., &dir, "k");
-        let mut b = small(4);
-        b.run_cached(2000., &dir, "k");
-        let mut c = small(4);
-        c.run_to(2000.);
-        assert_eq!(b.bed, c.bed);
-        let mut d = small(4);
-        d.run_cached(2000., &dir, "k");
-        assert_eq!(d.bed, c.bed);
-        assert_eq!(d.time, 2000.);
-        let _ = std::fs::remove_dir_all(&dir);
+    fn test_erosion_lifts_the_crust() {
+        // Without ice, the mountains erode, and the crust rises by up to ρ_rock / ρ_mantle of
+        // the rock taken off (less while the mantle is still relaxing).
+        let mut params = TerrainParams::default();
+        params.glacier = None;
+        params.step = 500.;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = planet.most_mountainous(2000);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 24, 1000., params.planet.radius), params);
+        t.run_to(20_000.);
+        let inner: Vec<usize> = (0..t.domain.len()).filter(|&i| !t.domain.boundary[i] && !t.sea[i]).collect();
+        let mean = |f: &dyn Fn(usize) -> f64| inner.iter().map(|&i| f(i)).sum::<f64>() / inner.len() as f64;
+        let eroded = -mean(&|i| t.bed[i] - t.ground0[i] - t.exhumed[i]);
+        let rebound = mean(&|i| t.rebound[i]);
+        assert!(eroded > 0. && rebound > 0. && rebound < eroded * 2700. / 3300., "eroded {} rebound {}", eroded, rebound);
+    }
+
+    #[test]
+    fn test_thrust_sheets_carry_the_rock_towards_the_foreland() {
+        let mut params = TerrainParams::default();
+        params.glacier = None;
+        params.step = 500.;
+        params.planet.geology.shortening_rate = 0.5;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = planet.most_mountainous(2000);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 24, 1000., params.planet.radius), params);
+        let speed = t.velocity.0.hypot(t.velocity.1);
+        assert!(speed > 0.01, "{:?}", t.velocity);
+        let before = t.bed.clone();
+        // Long enough to move three cells.
+        t.run_to((3000. / speed / 500.).ceil() * 500.);
+        let cells = t.shifted.0.abs() + t.shifted.1.abs();
+        assert!(cells >= 3, "{:?} after {:?}", t.shifted, t.displacement);
+        // The cells move the way the rock does.
+        assert!(t.shifted.0 as f64 * t.velocity.0 >= 0. && t.shifted.1 as f64 * t.velocity.1 >= 0.);
+        // Each cell's rock is the planet's from where it was at time zero.
+        for i in [100, 300, 450] {
+            assert_eq!(t.structure[i], t.planet.structure(&t.origin(i), t.finest));
+        }
+        // And the relief went with it: the ground now looks more like the ground of time zero
+        // moved by the shift than as it was.
+        let n = 24i64;
+        let at = |k: i64, di: i64, dj: i64| -> Option<usize> {
+            let (i, j) = (k % n - di, k / n - dj);
+            (i > 0 && j > 0 && i < n - 1 && j < n - 1).then_some((j * n + i) as usize)
+        };
+        let misfit = |di: i64, dj: i64| -> f64 {
+            let pairs: Vec<(f64, f64)> = (0..n * n).filter_map(|k| at(k, di, dj).map(|s| (t.bed[k as usize], before[s]))).collect();
+            let mean = |f: &dyn Fn(&(f64, f64)) -> f64| pairs.iter().map(f).sum::<f64>() / pairs.len() as f64;
+            let (ma, mb) = (mean(&|p| p.0), mean(&|p| p.1));
+            mean(&|p| ((p.0 - ma) - (p.1 - mb)).powi(2))
+        };
+        assert!(misfit(t.shifted.0, t.shifted.1) < misfit(0, 0), "{} vs {}", misfit(t.shifted.0, t.shifted.1), misfit(0, 0));
+    }
+
+    #[test]
+    fn test_rain_on_limestone_sinks_and_rises_at_springs() {
+        let t = small(2);
+        let karst: Vec<usize> = (0..t.domain.len()).filter(|&i| t.rock(i) == Rock::Limestone && t.ice[i] < ICE_FREE).collect();
+        assert!(!karst.is_empty());
+        let flow = t.route();
+        let plain = route(&t.domain, &t.surface(), &t.outlets(), &t.rain_factor());
+        // All the water still leaves through the outlets.
+        let out = |f: &Flow| (0..t.domain.len()).filter(|&i| f.receiver[i] == i).map(|i| f.area[i]).sum::<f64>();
+        assert!((out(&flow) - out(&plain)).abs() < 1e-6 * out(&plain), "{} vs {}", out(&flow), out(&plain));
+        // But less of it runs over the limestone: at the heads of its valleys, only what
+        // doesn't sink (rivers coming onto it from elsewhere keep their water).
+        let heads: Vec<usize> = karst.iter().copied().filter(|&i| !t.outlets()[i] && (0..t.domain.len()).all(|j| plain.receiver[j] != i || j == i)).collect();
+        assert!(!heads.is_empty());
+        let keep = 1. - t.params.planet.geology.infiltration;
+        for &i in &heads { assert!((flow.area[i] - keep * plain.area[i]).abs() < 1e-6 * plain.area[i]); }
+        // And exposed limestone, alone, is lowered by solution.
+        let mut d = small(2);
+        let before = d.bed.clone();
+        let fixed = d.outlets();
+        d.dissolve(&fixed, 1000.);
+        for i in 0..d.domain.len() {
+            if karst.contains(&i) && !fixed[i] { assert!(d.bed[i] < before[i]); } else { assert_eq!(d.bed[i], before[i]); }
+        }
+    }
+
+    /// Validation, run with `--ignored --nocapture` (half a minute in a release build).
+    #[test]
+    #[ignore]
+    fn test_channels_and_slopes_are_steeper_on_hard_rock() {
+        // After long enough for the rivers to come near steady state with the uplift, channels
+        // on rock that resists rivers are steeper for their drainage (higher steepness index
+        // k_sn = S A^0.5) than on weak rock, as in real ranges (Kirby and Whipple, "Expression
+        // of active tectonics in erosional landscapes", J. Structural Geology 44, 2012), and so
+        // are their hillslopes.
+        let mut params = TerrainParams::default();
+        params.glacier = None;
+        params.volcano = None;
+        params.channels = None;
+        params.step = 2000.;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = planet.most_mountainous(2000);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 48, 500., params.planet.radius), params);
+        let start = std::time::Instant::now();
+        t.run_to(400_000.);
+        eprintln!("ran in {:.1?}", start.elapsed());
+        let flow = t.route();
+        let n = t.domain.len();
+        let hardness = |i: usize| -t.rock(i).scores().0;
+        let ksn: Vec<(f64, f64)> = (0..n).filter(|&i| !t.outlets()[i] && flow.area[i] > 2e6 && t.sediment[i] < 1. && flow.receiver[i] != i).map(|i| {
+            let s = (t.bed[i] - t.bed[flow.receiver[i]]).max(0.) / flow.receiver_dist[i];
+            (hardness(i), s * flow.area[i].sqrt())
+        }).collect();
+        let median = |mut v: Vec<f64>| { v.sort_by(|a, b| a.total_cmp(b)); if v.is_empty() { f64::NAN } else { v[v.len() / 2] } };
+        let hard = median(ksn.iter().filter(|c| c.0 > 0.4).map(|c| c.1).collect());
+        let soft = median(ksn.iter().filter(|c| c.0 < -0.2).map(|c| c.1).collect());
+        let slope2 = crate::terrain::glacier::slope_squared(&t.domain, &t.bed);
+        let slopes = |hard: bool| median((0..n).filter(|&i| !t.outlets()[i] && t.sediment[i] < 1. && flow.area[i] < 1e6 && (hardness(i) > 0.4) == hard && (hardness(i) < -0.2) != hard).map(|i| slope2[i].sqrt()).collect());
+        eprintln!("k_sn hard {} soft {}; hillslopes hard {} soft {} ({} channel cells)", hard, soft, slopes(true), slopes(false), ksn.len());
+        assert!(hard > soft, "k_sn on hard rock {} vs soft {}", hard, soft);
+        assert!(slopes(true) > slopes(false));
+    }
+
+    #[test]
+    fn test_meanders_cut_back_their_valley_walls() {
+        let mut params = TerrainParams::default();
+        params.glacier = None;
+        params.step = 500.;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = planet.most_coastal(2000);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 64, 500., params.planet.radius), params);
+        let mut cut = 0.;
+        for _ in 0..60 {
+            t.step(500.);
+            cut += t.banks.iter().sum::<f64>();
+        }
+        assert!(!t.rivers.channels.is_empty(), "no meandering rivers");
+        assert!(cut > 0., "no valley wall was cut");
+    }
+
+    #[test]
+    fn test_alluvial_channels_keep_their_course_until_they_avulse() {
+        // A plain of sediment sloping gently east, with a channel at the middle cell flowing
+        // east; a neighbour to the north is the steepest way down.
+        let mut t = small(1);
+        let n = 24;
+        let (i, east, north) = (12 * n + 12, 12 * n + 13, 13 * n + 12);
+        for k in 0..t.domain.len() {
+            if t.domain.boundary[k] { continue; }
+            t.bed[k] = 100. - (k % n) as f64 * 0.5;
+            t.sediment[k] = 50.;
+        }
+        t.drainage[i] = 1e9;
+        t.channel = vec![u32::MAX; t.domain.len()];
+        t.channel[i] = east as u32;
+        // A trough running north from beside the channel to the patch's edge, `drop` below it
+        // at its head and falling on, so the way down is open.
+        let mut course = |drop: f64| {
+            for j in 13..n { t.bed[j * n + 12] = t.bed[i] - drop - (j - 13) as f64; }
+            t.route().receiver[i]
+        };
+        // A little lower to the north: the channel keeps its course east.
+        assert_eq!(course(1.), east);
+        // Far lower (sixty times the slope, and deeper than the channel): it avulses north.
+        assert_eq!(course(30.), north);
+    }
+
+    #[test]
+    fn test_sea_level_follows_the_ice_ages_and_floods_what_it_reaches() {
+        let mut t = small(1);
+        let period = t.params.glacier.as_ref().unwrap().period;
+        assert_eq!(t.sea_level(), 0.);
+        t.time = period / 2.;
+        assert!((t.sea_level() + 120.).abs() < 1e-9);
+        t.time = period;
+        assert!(t.sea_level().abs() < 1e-9);
+        // A valley cut below sea level from the patch's edge is flooded by the sea; a basin
+        // below it inland, which the sea can't reach, is a lake.
+        let n = 24;
+        for k in 0..t.domain.len() { t.bed[k] = 50.; }
+        for i in 0..8 { t.bed[10 * n + i] = -20.; }
+        for i in 14..17 { for j in 14..17 { t.bed[j * n + i] = -20.; } }
+        let outlets = t.outlets();
+        assert!(outlets[10 * n + 5], "the drowned valley isn't sea");
+        assert!(!outlets[15 * n + 15], "the inland basin is sea");
+    }
+
+    #[test]
+    fn test_lakes_in_hot_dry_basins_never_spill() {
+        // A bowl 4 km across in ground sloping away to the patch's edges, under the same rain,
+        // warm (it evaporates more than it gets: closed) and cold (it overflows).
+        let mut t = small(1);
+        let n = 24;
+        let len = t.domain.len();
+        for k in 0..len {
+            let r = (((k % n) as f64 - 11.5).powi(2) + ((k / n) as f64 - 11.5).powi(2)).sqrt();
+            t.bed[k] = if r <= 4. { 300. + 30. * r } else { 420. - 10. * (r - 4.) };
+        }
+        t.ice = vec![0.; len];
+        t.sediment = vec![0.; len];
+        t.precipitation = vec![600.; len];
+        let total = |t: &Terrain| -> f64 { let f = t.route(); (0..len).filter(|&i| f.receiver[i] == i).map(|i| f.area[i]).sum() };
+        t.temperature = Some(vec![-10.; len]);
+        let (wet, open) = (total(&t), t.basins());
+        t.temperature = Some(vec![30.; len]);
+        let (dry, closed) = (total(&t), t.basins());
+        assert_eq!(open.count, 0);
+        assert!(closed.count == 1 && closed.closed[12 * n + 12], "{} closed basins", closed.count);
+        // Its rain no longer reaches the edge: the bowl's 44 km² (its lake when full), at the
+        // rain's factor.
+        let bowl = 40e6 * 600. / t.params.orographic.as_ref().map_or(600., |o| o.reference);
+        assert!(dry < wet - bowl, "{} vs {}", dry, wet);
+        // With nothing flowing in but its own rain, its floor is dry: a playa.
+        assert!(closed.water.iter().all(|&w| w == 0.));
+        // Without evaporation, every lake spills.
+        t.params.evaporation = 0.;
+        assert_eq!(t.basins().count, 0);
+        assert!((total(&t) - wet).abs() < 1e-6 * wet);
     }
 
     #[test]
@@ -486,8 +1498,10 @@ mod tests {
         let mut t = Terrain::new(Domain::patch(lat, lon, 24, 1000., params.planet.radius), params);
         let start = t.bed.clone();
         t.run_to(50_000.);
-        // The cells with the most drainage are lowered relative to uplift alone.
-        let big = (0..t.domain.len()).filter(|&i| !t.domain.boundary[i])
+        // The bedrock channel with the most drainage is lowered relative to uplift alone. (The
+        // most drained cell of all may lie in a basin behind a sill of hard rock or a growing
+        // fold, which fills with sediment instead.)
+        let big = (0..t.domain.len()).filter(|&i| !t.domain.boundary[i] && t.sediment[i] < 1.)
             .max_by(|&a, &b| t.drainage[a].total_cmp(&t.drainage[b])).unwrap();
         assert!(t.bed[big] < start[big] + t.uplift[big] * 50_000. - 1.);
     }

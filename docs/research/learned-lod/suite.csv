@@ -1,0 +1,28 @@
+case,pixels,description,flip,bright_all,bright_near,bright_far,built_primitives,placed,build_s,peak_mib,render_s,full_build_s,full_peak_mib,full_render_s,reference
+aerial,1,"the forest from the air, 15-30 degrees down (the research's own view)",0.0558,0.9882,0.9828,0.9898,2075136,163148674,81.38,601,35.608,31.02,3937,98.652,aerial-full-246a782b7d7d.exr
+aerial,2,"the forest from the air, 15-30 degrees down (the research's own view)",0.0608,0.9848,0.9763,0.9884,672353,46866857,16.27,503,30.074,31.02,3937,98.652,aerial-full-246a782b7d7d.exr
+aerial,4,"the forest from the air, 15-30 degrees down (the research's own view)",0.0731,0.9775,0.9734,0.9750,214349,13512058,17.20,431,25.962,31.02,3937,98.652,aerial-full-246a782b7d7d.exr
+low,1,"from 90 m up, looking along the forest",0.0284,1.0004,1.0025,1.0017,2736836,160788621,7.43,726,23.484,30.78,3974,46.997,low-full-4303cb8aaec2.exr
+low,2,"from 90 m up, looking along the forest",0.0304,0.9997,0.9974,1.0002,850939,46185639,2.14,347,19.566,30.78,3974,46.997,low-full-4303cb8aaec2.exr
+low,4,"from 90 m up, looking along the forest",0.0336,0.9986,0.9918,0.9945,271797,13560718,2.60,320,15.615,30.78,3974,46.997,low-full-4303cb8aaec2.exr
+nadir,1,straight down from 1200 m,0.0597,0.9846,0.9875,0.9819,508707,155263792,2.33,285,36.112,31.71,3973,91.215,nadir-full-685a0468a277.exr
+nadir,2,straight down from 1200 m,0.0672,0.9716,0.9732,0.9701,159899,39572104,1.67,224,29.381,31.71,3973,91.215,nadir-full-685a0468a277.exr
+nadir,4,straight down from 1200 m,0.0811,0.9731,0.9764,0.9700,36388,10415993,1.49,204,24.964,31.71,3973,91.215,nadir-full-685a0468a277.exr
+low-sun,1,"a sun 9 degrees up: long shadows, light through the crowns' sides",0.0378,0.9985,1.0108,0.9879,2075136,163148674,2.97,531,38.530,31.29,3962,101.924,low-sun-full-acaab1a340bf.exr
+low-sun,2,"a sun 9 degrees up: long shadows, light through the crowns' sides",0.0405,0.9819,0.9696,0.9850,672353,46866857,2.19,319,32.449,31.29,3962,101.924,low-sun-full-acaab1a340bf.exr
+low-sun,4,"a sun 9 degrees up: long shadows, light through the crowns' sides",0.0474,0.9783,0.9585,0.9863,214349,13512058,1.72,233,27.167,31.29,3962,101.924,low-sun-full-acaab1a340bf.exr
+backlit,1,the sun ahead of the camera: light through the leaves,0.0449,0.9947,1.0003,0.9878,2075136,163148674,3.14,535,39.029,31.38,3953,104.605,backlit-full-50a304945850.exr
+backlit,2,the sun ahead of the camera: light through the leaves,0.0489,0.9854,0.9782,0.9791,672353,46866857,2.23,314,33.379,31.38,3953,104.605,backlit-full-50a304945850.exr
+backlit,4,the sun ahead of the camera: light through the leaves,0.0577,0.9782,0.9665,0.9696,214349,13512058,1.80,233,27.844,31.38,3953,104.605,backlit-full-50a304945850.exr
+broadleaf-autumn,1,"broadleaves only, in autumn colour",0.0651,0.9927,0.9873,0.9962,910623,79171401,41.38,407,30.798,21.34,1967,69.290,broadleaf-autumn-full-3c189f88accb.exr
+broadleaf-autumn,2,"broadleaves only, in autumn colour",0.0734,0.9957,0.9987,0.9922,298206,25138560,7.58,419,24.657,21.34,1967,69.290,broadleaf-autumn-full-3c189f88accb.exr
+broadleaf-autumn,4,"broadleaves only, in autumn colour",0.0923,0.9785,0.9996,0.9556,93028,10273750,6.23,417,23.792,21.34,1967,69.290,broadleaf-autumn-full-3c189f88accb.exr
+conifers,1,conifers only,0.0473,1.0131,1.0340,1.0018,1340646,259046612,9.35,416,41.335,14.67,2184,115.649,conifers-full-53d4a070d408.exr
+conifers,2,conifers only,0.0486,0.9921,0.9990,0.9839,429135,71195686,1.82,215,32.550,14.67,2184,115.649,conifers-full-53d4a070d408.exr
+conifers,4,conifers only,0.0561,0.9839,0.9795,0.9814,140924,16134605,1.93,194,25.745,14.67,2184,115.649,conifers-full-53d4a070d408.exr
+sparse,1,"trees twice as far apart, with more clearings: more ground and shadow",0.0380,0.9827,0.9849,0.9776,1649524,33293305,5.52,373,23.196,17.94,3896,47.898,sparse-full-d1776d8d5573.exr
+sparse,2,"trees twice as far apart, with more clearings: more ground and shadow",0.0427,0.9783,0.9787,0.9745,524094,9559815,1.56,198,19.821,17.94,3896,47.898,sparse-full-d1776d8d5573.exr
+sparse,4,"trees twice as far apart, with more clearings: more ground and shadow",0.0511,0.9755,0.9760,0.9711,161116,2726725,1.39,130,20.070,17.94,3896,47.898,sparse-full-d1776d8d5573.exr
+ground,1,at eye height in a wood: trees from near to far,0.0254,1.0077,1.0017,1.0461,5076129,139638844,25.12,2937,221.614,10.31,3104,241.787,ground-full-c51d1fc2ab9c.exr
+ground,2,at eye height in a wood: trees from near to far,0.0411,1.0080,1.0006,1.0502,2255127,44421034,9.75,2326,206.221,10.31,3104,241.787,ground-full-c51d1fc2ab9c.exr
+ground,4,at eye height in a wood: trees from near to far,0.0546,1.0036,0.9952,1.0458,587643,12955604,8.73,2443,194.988,10.31,3104,241.787,ground-full-c51d1fc2ab9c.exr

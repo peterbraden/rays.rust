@@ -24,12 +24,18 @@
 //!
 //! ## Detail below the grid
 //!
-//! Below the finest simulation's resolution, fractal noise adds the relief no simulation
+//! Below the finest simulation's resolution, synthetic relief adds what no simulation
 //! resolves, in proportion to the local slope: rough on mountainsides, little on valley floors
 //! and plains. This is "amplification" of a coarse terrain (as in Guérin et al., "Sparse
-//! representation of terrains for procedural modeling", Computer Graphics Forum 35(2), 2016), in
-//! its simplest form: warped ridged noise, for crests and spurs between gullies. It is drawn
-//! down to whatever spacing the mesh has at that point.
+//! representation of terrains for procedural modeling", Computer Graphics Forum 35(2), 2016),
+//! shaped as water shapes slopes: gullies running straight down the large-scale slope, with
+//! narrow beds and broad spurs rounded by creep, each octave running down the sides of the
+//! coarser ones' so they branch (`Relief::gullies`, after the "erosion noise" of Clay John and
+//! Fewes), and a little plain noise to break their lines. (Isotropic ridged noise, which this
+//! replaced, rose in rounded mounds and crests going every way, which read as made.) It is drawn
+//! down to whatever spacing the mesh has at that point, and no finer than `RELIEF_FINEST`. Up
+//! close, the world adds a simulation five times finer than its finest about the camera
+//! (`world::close_level`), so the gullies a few hundred metres apart are eroded, not drawn.
 //!
 //! ## Adaptive resolution: a clipmap about the camera
 //!
@@ -78,6 +84,7 @@ use crate::ray::Ray;
 use crate::scene::Scene;
 use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
 use crate::terrain::channel::{point_cell, WaterLines};
+use crate::terrain::geology::Rock;
 use crate::terrain::domain::{sphere_dir, Domain, Layout};
 use crate::terrain::climate::{Biome, Climate};
 use crate::terrain::glacier::GlacierParams;
@@ -152,13 +159,16 @@ pub struct SceneryParams {
     pub min_river_width: f64,
     /// Cells per face edge of the mesh over the whole planet.
     pub globe: usize,
+    /// Shade bare rock, scree, sand and gravel with the library's natural materials
+    /// (`material::library`), each rock its own; else with plain colours.
+    pub ground_materials: bool,
 }
 
 impl Default for SceneryParams {
     fn default() -> SceneryParams {
         SceneryParams {
             resolution: 384, min_spacing: 0.5, roughness: 1., exaggeration: 1.,
-            snowline: None, treeline: None, min_river_width: 0., globe: 192,
+            snowline: None, treeline: None, min_river_width: 0., globe: 192, ground_materials: true,
         }
     }
 }
@@ -171,9 +181,13 @@ fn catmull_rom(a: f64, b: f64, c: f64, d: f64, t: f64) -> f64 {
 /// Surface height (ground plus ice) at each of a domain's cell corners: the mean of the cells
 /// meeting there.
 pub fn corner_heights(t: &Terrain) -> Vec<f64> {
-    let surface = t.surface();
+    corner_values(t, &t.surface())
+}
+
+/// A field `v` of `t`'s cells at its domain's corners, each the mean of the cells about it.
+pub fn corner_values(t: &Terrain, v: &[f64]) -> Vec<f64> {
     t.domain.corner_cells.iter()
-        .map(|cells| cells.iter().map(|&c| surface[c]).sum::<f64>() / cells.len() as f64)
+        .map(|cells| cells.iter().map(|&c| v[c]).sum::<f64>() / cells.len() as f64)
         .collect()
 }
 
@@ -211,6 +225,7 @@ const SEA_FLOOR: u8 = 1;
 const ALLUVIUM: u8 = 2;
 const LAVA: u8 = 3;
 const LAND: u8 = 4;
+const TILL: u8 = 5;
 
 /// One simulation, as drawn: its surface heights and what covers its ground.
 pub struct Layer {
@@ -224,6 +239,9 @@ pub struct Layer {
     blend: f64,
     /// What the simulation left, for graphs' `field` nodes.
     fields: crate::terrain::fields::SimFields,
+    /// The prevailing wind, a unit vector in the patch's tangent plane at its centre, and the
+    /// direction across it there (None for no wind, or a whole planet): the dunes' trend.
+    wind: Option<(Vector3<f64>, Vector3<f64>)>,
 }
 
 impl Layer {
@@ -235,6 +253,7 @@ impl Layer {
             if t.ice[i] >= ICE_FREE { ICE }
             else if t.bed[i] < 0. { SEA_FLOOR }
             else if t.lava[i] > 1. && t.sediment[i] < map::ALLUVIUM { LAVA }
+            else if map::is_till(&t, i) { TILL }
             else if t.sediment[i] > map::ALLUVIUM { ALLUVIUM }
             else { LAND }
         }).collect();
@@ -245,7 +264,15 @@ impl Layer {
             Layout::Patch { n, spacing, .. } => (spacing, (0.05 * n as f64 * spacing).max(3. * spacing)),
             Layout::Sphere { n } => (std::f64::consts::FRAC_PI_2 * t.domain.radius / n as f64, 0.),
         };
-        Layer { spacing, corners, class, water, blend, fields, domain: t.domain }
+        let norm = t.wind.0.hypot(t.wind.1);
+        let wind = match &t.domain.layout {
+            Layout::Patch { up, east, north, .. } if norm > 0. => {
+                let along = (east * t.wind.0 + north * t.wind.1) / norm;
+                Some((along, up.cross(&along)))
+            }
+            _ => None,
+        };
+        Layer { spacing, corners, class, water, blend, fields, wind, domain: t.domain }
     }
 
     /// Tangent coordinates of `d` on a patch, if it is on the patch's side of the planet.
@@ -290,6 +317,11 @@ impl Layer {
 }
 
 /// Heights of the landscape, from its layers and the planet's own topography.
+/// The large-scale surface's slope at a point: its gradient (uphill, metres per metre, in the
+/// planet's frame, along the surface) and the steepness, its length up to 1.5.
+#[derive(Clone, Copy, Debug)]
+pub struct Slope { pub steepness: f64, pub gradient: Vector3<f64> }
+
 pub struct Relief {
     pub layers: Arc<Vec<Layer>>,
     planet: Planet,
@@ -298,12 +330,17 @@ pub struct Relief {
     finest: f64,
     roughness: f64,
     noise: SeededNoise,
-    ridges: SeededNoise,
 }
 
 /// The longest wavelength of synthetic detail is a power of two metres, so the octaves are the
 /// same everywhere.
 const LONGEST_DETAIL: f64 = 65536.;
+
+/// ... and the shortest, metres: below it the ground's own detail (`terrain::detail`), drawn
+/// from its geology, takes over. (Synthetic relief, ridged noise then, down to the displaced patches' centimetre
+/// cells raised sharp ridges a metre high a few metres apart on steep faces, which the ground's
+/// detail then stood on as fins.)
+const RELIEF_FINEST: f64 = 12.;
 
 impl Relief {
     /// `finest`: the spacing below which detail is synthetic; layers coarser than it have the
@@ -314,7 +351,6 @@ impl Relief {
             layers, radius, finest, roughness,
             planet: Planet::new(planet.params.clone()),
             noise: SeededNoise::new(seed.wrapping_add(0x5ce7e)),
-            ridges: SeededNoise::new(seed.wrapping_add(0x41d9e)),
         }
     }
 
@@ -352,54 +388,167 @@ impl Relief {
     }
 
     /// The slope of the large-scale surface at `d`, over about a cell of the finest layer.
-    pub fn slope(&self, d: &Vector3<f64>) -> f64 {
+    pub fn slope(&self, d: &Vector3<f64>) -> Slope {
         let (t1, t2) = Relief::tangents(d);
         let e = self.finest;
         let gx = self.base(&self.step(d, &t1, &t2, e, 0.)) - self.base(&self.step(d, &t1, &t2, -e, 0.));
         let gz = self.base(&self.step(d, &t1, &t2, 0., e)) - self.base(&self.step(d, &t1, &t2, 0., -e));
-        (gx.hypot(gz) / (2. * e)).min(1.5)
+        let gradient = (t1 * gx + t2 * gz) / (2. * e);
+        Slope { steepness: gradient.norm().min(1.5), gradient }
     }
 
     /// Synthetic relief at `d`, for a surface of slope `slope`, drawn down to wavelengths the
-    /// mesh's spacing `local` there can carry.
-    pub fn detail(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
+    /// mesh's spacing `local` there can carry: gullies down the slope (`gullies`), and a little
+    /// noise to break them up.
+    pub fn detail(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
         let p = d * self.radius;
         let mut sum = 0.;
+        // The slope as the gullies so far leave it: each octave's run down the sides of the
+        // coarser ones, so they branch.
+        let mut gradient = slope.gradient;
         let mut wavelength = LONGEST_DETAIL;
         let mut octave = 0.;
-        while wavelength >= local {
+        while wavelength >= local.max(RELIEF_FINEST) {
             // The simulation only resolves features several cells across: below about eight
             // cells its slopes are smoothed by its own diffusion.
             let resolved = smoothstep(4. * self.finest, 8. * self.finest, wavelength);
             let carried = 1. - smoothstep(wavelength / 4., wavelength / 2., local);
             let w = (1. - resolved) * carried;
             if w > 0. {
-                // Warped ridged noise: sharp crests and spurs between gullies, with a little
-                // plain noise to break them up.
+                let amplitude = w * self.roughness * wavelength;
+                let (g, dg) = self.gullies(&p, d, &gradient, wavelength, octave);
+                // As deep as their slope allows: on a slope s, gullies a wavelength apart are
+                // about a tenth of it deep per unit of slope; none on the flat.
+                let depth = 0.1 * amplitude * slope.steepness;
+                sum += depth * g;
+                gradient += dg * depth;
+                // Noise everywhere, a little more on slopes, to break the gullies' lines.
                 let q = (p + Vector3::new(31.7, 17.3, 5.1) * (octave * wavelength)) / wavelength;
-                let warp = Vector3::new(
-                    self.noise.noise(q * 0.5 + Vector3::new(3.1, 0.7, 7.7)),
-                    self.noise.noise(q * 0.5 + Vector3::new(5.3, 2.9, 0.4)),
-                    self.noise.noise(q * 0.5 + Vector3::new(9.4, 4.2, 1.3)));
-                let r = (1. - self.ridges.noise(q + warp * 0.6).abs()).powi(2);
-                let n = 1.4 * (r - 0.45) + 0.4 * self.noise.noise(q * 1.7);
-                sum += w * self.roughness * wavelength / 4. * n;
+                sum += 0.06 * amplitude * (0.15 + slope.steepness) * self.noise.noise(q * 1.3);
             }
             wavelength /= 2.;
             octave += 1.;
         }
-        sum * (0.05 + slope)
+        sum
+    }
+
+    /// Gullies `wavelength` apart running down a surface of slope `gradient` (uphill, metres per
+    /// metre) at `p` (`d` from the planet's centre), from -1 in their beds to 1 on the spurs
+    /// between, and their gradient (per metre). Erosion's pattern (as in Fewes's "erosion
+    /// noise", after Clay John's): waves across the slope from points scattered on a lattice of
+    /// the wavelength, each fading with distance, so they run straight down the slope and are
+    /// broken where one point's waves give way to another's. The beds are narrow and the spurs
+    /// broad and rounded, as creep leaves them.
+    fn gullies(&self, p: &Vector3<f64>, d: &Vector3<f64>, gradient: &Vector3<f64>, wavelength: f64, octave: f64) -> (f64, Vector3<f64>) {
+        let g = gradient - d * d.dot(gradient);
+        let steep = g.norm();
+        if steep < 1e-6 { return (0., Vector3::zeros()); }
+        let across = d.cross(&(g / steep));
+        let q = p / wavelength;
+        let cell = q.map(f64::floor);
+        let (mut v, mut dv, mut total) = (0., Vector3::zeros(), 0.);
+        let seed = (octave as u64).wrapping_mul(0x632b_e59b_d9b4_e019) ^ 0x9e37_79b9;
+        for i in -1..=1 {
+            for j in -1..=1 {
+                for k in -1..=1 {
+                    let c = cell + Vector3::new(i as f64, j as f64, k as f64);
+                    let mut h = seed;
+                    for x in [c.x, c.y, c.z] { h = (h ^ (x as i64 as u64)).wrapping_mul(0xbf58_476d_1ce4_e5b9); h ^= h >> 29; }
+                    let r = |s: u32| ((h >> s) & 0xffff) as f64 / 65535.;
+                    let at = c + Vector3::new(r(0), r(16), r(32));
+                    let o = q - at;
+                    let weight = (-2. * o.norm_squared()).exp();
+                    if weight < 1e-4 { continue; }
+                    let phase = std::f64::consts::TAU * (o.dot(&across) + r(48));
+                    v += weight * phase.cos();
+                    dv -= across * (weight * phase.sin() * std::f64::consts::TAU / wavelength);
+                    total += weight;
+                }
+            }
+        }
+        if total <= 0. { return (0., Vector3::zeros()); }
+        let (v, dv) = (v / total, dv / total);
+        // Narrow beds, broad spurs: a profile rising steeply out of each bed.
+        let shaped = 1. - 2. * (1. - (0.5 + 0.5 * v).clamp(0., 1.)).powf(1.5);
+        let slope = 1.5 * (1. - (0.5 + 0.5 * v).clamp(0., 1.)).sqrt();
+        (shaped, dv * slope)
+    }
+
+    /// The wind-blown sand at `d`, metres, blended between the layers as their surfaces are,
+    /// and the wind of the layer that counts most there.
+    fn sand(&self, d: &Vector3<f64>) -> (f64, Option<(Vector3<f64>, Vector3<f64>)>) {
+        let (mut rest, mut sand, mut wind, mut most) = (1., 0., None, 0.);
+        for l in self.layers.iter() {
+            let w = l.weight(d) * rest;
+            if w > 0. {
+                sand += w * l.fields.at(&l.domain, crate::graph::Field::Sand, d, 0.).unwrap_or(0.);
+                if w > most { most = w; wind = l.wind; }
+                rest -= w;
+            }
+            if rest <= 1e-12 { break; }
+        }
+        (sand, wind)
+    }
+
+    /// Dunes on the wind-blown sand at `d` (`terrain::aeolian`), metres, drawn where the mesh's
+    /// spacing `local` can carry them. Ridges across the prevailing wind, `DUNE_SPACING` apart:
+    /// a long windward slope rising to the crest, then the slip face down the lee at the
+    /// angle of repose's steepness over a short run; their height grows with the sand's depth,
+    /// up to a twelfth of their spacing (transverse dunes are 10-15 times as far apart as they
+    /// are high: Lancaster, "Geomorphology of Desert Dunes", 1995). Their crests wander, and
+    /// where the sand is thin they break into separate crescents, barchans, the more so the
+    /// thinner it is.
+    pub fn dunes(&self, d: &Vector3<f64>, local: f64) -> f64 {
+        let (sand, wind) = self.sand(d);
+        self.dunes_on(d, local, sand, wind)
+    }
+
+    fn dunes_on(&self, d: &Vector3<f64>, local: f64, sand: f64, wind: Option<(Vector3<f64>, Vector3<f64>)>) -> f64 {
+        const DUNE_SPACING: f64 = 400.;
+        let carried = 1. - smoothstep(DUNE_SPACING / 6., DUNE_SPACING / 3., local);
+        if carried <= 0. { return 0.; }
+        let Some((downwind, side)) = wind else { return 0. };
+        // Dunes fade in with the sand, so the ground doesn't step where it begins.
+        let fade = smoothstep(0.2, 1.5, sand);
+        if fade <= 0. { return 0.; }
+        // Distances along and across the wind, in the patch's own frame.
+        let p = d * self.radius;
+        let (along, across) = (p.dot(&downwind), p.dot(&side));
+        // Noise along the crests, changing only slowly along the wind, so that each dune keeps
+        // its shape from its windward foot to its slip face.
+        let crests = |scale: f64, stretch: f64, o: f64| self.noise.noise(Vector3::new(across / (scale * DUNE_SPACING), along / (stretch * scale * DUNE_SPACING), o));
+        // Wandering crests.
+        let phase = along / DUNE_SPACING + 0.5 * crests(2.5, 3., 8.1) + 0.2 * crests(0.8, 2., 4.6);
+        let s = phase.rem_euclid(1.);
+        const SLIP: f64 = 0.15;
+        let profile = if s < 1. - SLIP { s / (1. - SLIP) } else { (1. - s) / SLIP } - 0.5;
+        // The sand gathers into dunes standing on the ground between them, rather than
+        // spreading as a thin sheet: they are 8 m high on thin sand, higher where there is
+        // more, up to a twelfth of their spacing, and cover as much of the ground as the
+        // sand's volume allows (a dune's profile holds half its height on average), the rest
+        // bare between barchans.
+        let height = (8. + 0.5 * sand).min(DUNE_SPACING / 12.);
+        let cover = (sand / (0.5 * height)).min(1.);
+        // Where along the crests the dunes stand: as much of them as `cover`.
+        let threshold = 0.6 - 1.2 * cover;
+        let present = if cover >= 1. { 1. } else { smoothstep(threshold - 0.1, threshold + 0.1, crests(1., 1.5, 1.9)) };
+        // The sand the dunes take is taken from the surface beneath them, which already
+        // stands on all of it.
+        carried * fade * (present * height * (profile + 0.5) - sand.min(0.5 * height * cover))
     }
 
     /// The surface's height at `d` with detail down to spacing `local`, given its large-scale
     /// slope there.
-    pub fn height(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
-        self.base(d) + self.detail(d, slope, local)
+    pub fn height(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
+        let (sand, wind) = self.sand(d);
+        // Drifting sand buries the ground's small relief.
+        let buried = 1. - 0.8 * smoothstep(0.5, 4., sand);
+        self.base(d) + buried * self.detail(d, slope, local) + self.dunes_on(d, local, sand, wind)
     }
 
     /// The surface's normal at `d` (outwards, in planet coordinates), by finite differences
     /// over the mesh's spacing.
-    pub fn normal(&self, d: &Vector3<f64>, slope: f64, local: f64) -> Vector3<f64> {
+    pub fn normal(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> Vector3<f64> {
         let (t1, t2) = Relief::tangents(d);
         let e = local / 2.;
         let h = |a: f64, b: f64| self.height(&self.step(d, &t1, &t2, a, b), slope, local);
@@ -547,7 +696,7 @@ impl crate::procedural::heightmap::HeightSource for Surface<'_> {
         let mut y = 0.;
         for _ in 0..4 {
             let (d, h) = at(y);
-            y += (self.relief.height(&d, slope, spacing) - h) * self.frame.exaggeration;
+            y += (self.relief.height(&d, &slope, spacing) - h) * self.frame.exaggeration;
         }
         y
     }
@@ -639,8 +788,8 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams,
     // Heights and normals.
     let shaped: Vec<(Vector3<f64>, Vector3<f64>)> = vertices.par_iter().map(|v| {
         let slope = relief.slope(&v.d);
-        let h = relief.height(&v.d, slope, v.local);
-        let n = relief.normal(&v.d, slope, v.local);
+        let h = relief.height(&v.d, &slope, v.local);
+        let n = relief.normal(&v.d, &slope, v.local);
         // Rotated into the scene: to_scene is a rotation about the planet's centre.
         let normal_scene = frame.to_scene(&n, 0.) - frame.centre();
         (frame.to_scene(&v.d, h), normal_scene.normalize())
@@ -683,6 +832,82 @@ pub struct Ground {
     /// the bluer ice beneath.
     snow: [Snow; 2],
     ice: [Ice; 2],
+    /// The library's materials for each kind of bare ground (`Bare::index`), if used.
+    materials: Vec<Option<Box<dyn MaterialModel + Sync + Send>>>,
+}
+
+/// What lies bare on the ground at a point, under any snow or ice: plants and soil (the
+/// cover's colour), or bare rock of a kind, or loose stones, sand or gravel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Bare { Plain, Rock(Rock), Scree, Sand, Gravel }
+
+impl Bare {
+    const COUNT: usize = 4 + 9;
+
+    fn index(self) -> usize {
+        match self {
+            Bare::Plain => 0,
+            Bare::Scree => 1,
+            Bare::Sand => 2,
+            Bare::Gravel => 3,
+            Bare::Rock(r) => 4 + r.index(),
+        }
+    }
+
+    /// The library's material for it, and its seed's salt: rocks by their lithology (slate
+    /// for shale), loose ground by what it is.
+    fn library(self) -> Option<&'static str> {
+        Some(match self {
+            Bare::Plain => return None,
+            Bare::Scree => "scree",
+            Bare::Sand => "dune_sand",
+            Bare::Gravel => "river_gravel",
+            Bare::Rock(r) => match r {
+                Rock::Sediment => "scree",
+                Rock::Shale => "slate",
+                Rock::Sandstone => "sandstone",
+                Rock::Limestone => "limestone_cliff",
+                Rock::Quartzite => "quartzite",
+                Rock::Schist => "schist",
+                Rock::Gneiss => "gneiss",
+                Rock::Granite => "granite_outcrop",
+                Rock::Basalt => "basalt",
+            },
+        })
+    }
+}
+
+/// The shares of each kind of bare ground at a point, as the cover's colours are blended.
+#[derive(Clone, Copy, Debug)]
+struct Shares([f64; Bare::COUNT]);
+
+impl Shares {
+    fn of(s: Bare) -> Shares {
+        let mut w = [0.; Bare::COUNT];
+        w[s.index()] = 1.;
+        Shares(w)
+    }
+
+    /// As `mix` blends colours: `t` of `other` into these.
+    fn mix(&mut self, other: Shares, t: f64) {
+        let t = t.clamp(0., 1.);
+        for (a, b) in self.0.iter_mut().zip(other.0) { *a = *a * (1. - t) + b * t; }
+    }
+
+    /// One of them, chosen by its share.
+    fn pick(&self) -> Bare {
+        let mut x = rand() * self.0.iter().sum::<f64>();
+        for (k, &w) in self.0.iter().enumerate() {
+            if x < w || k == Bare::COUNT - 1 {
+                return match k {
+                    0 => Bare::Plain, 1 => Bare::Scree, 2 => Bare::Sand, 3 => Bare::Gravel,
+                    k => Bare::Rock(Rock::from_index(k - 4)),
+                };
+            }
+            x -= w;
+        }
+        Bare::Plain
+    }
 }
 
 /// What covers the ground at a point: the shares of snow and of glacier ice, the rest bare
@@ -696,6 +921,8 @@ pub struct Cover {
     pub ice: f64,
     /// How much of the ice is blue rather than white, 0 to 1.
     pub blue: f64,
+    /// What lies bare under the snow and ice, chosen by the shares of the kinds there.
+    pub surface: Bare,
 }
 
 /// Albedos of real surfaces (linear, as the renderer's colours are).
@@ -708,6 +935,13 @@ const FIELDS: [f64; 3] = [0.13, 0.13, 0.07];
 const GRAVEL: [f64; 3] = [0.24, 0.23, 0.21];
 const SAND: [f64; 3] = [0.32, 0.28, 0.21];
 const BASALT: [f64; 3] = [0.06, 0.055, 0.05];
+/// Playas: salt crust (halite and gypsum, about half the light; Bonneville's is brighter
+/// still), and the clay pan where there is less salt.
+const SALT: [f64; 3] = [0.58, 0.57, 0.54];
+const CLAY_PAN: [f64; 3] = [0.36, 0.32, 0.27];
+/// Dune sand: quartz, pale where fresh, red where old (the Namib's, the Simpson's).
+const DUNE_SAND: [f64; 3] = [0.46, 0.37, 0.24];
+const RED_SAND: [f64; 3] = [0.45, 0.25, 0.12];
 
 fn colour(c: [f64; 3]) -> Color { Color::new(c[0], c[1], c[2]) }
 
@@ -718,6 +952,12 @@ impl Ground {
             noise: PerlinNoise::shuffled(seed.wrapping_add(77)),
             snow: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("firn"), 1., seed)],
             ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
+            materials: (0..Bare::COUNT).map(|k| {
+                let s = if k < 4 { [Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel][k] } else { Bare::Rock(Rock::from_index(k - 4)) };
+                let name = s.library().filter(|_| p.ground_materials)?;
+                let definition = serde_json::json!({"type": "library", "name": name, "seed": seed.wrapping_mul(31).wrapping_add(k as u64)});
+                Some(crate::scenefile::SceneFile::parse_material_definition(&definition, name, &serde_json::Map::new()))
+            }).collect(),
         }
     }
 
@@ -746,10 +986,88 @@ impl Ground {
         self.layers.iter().find(|l| l.contains(d))
     }
 
+    /// The rock exposed at `d`, `h` metres up (`SimFields::rock`): from the finest simulation
+    /// that is more than half of the blend there, so it isn't averaged between simulations.
+    pub fn rock(&self, d: &Vector3<f64>, h: f64) -> Option<Rock> {
+        let l = self.layers.iter().find(|l| l.weight(d) > 0.5).or(self.layers.last())?;
+        Some(l.fields.rock(&l.domain, d, h))
+    }
+
+    /// The colour of bare rock at `d`, `h` metres up: the bedrock's own (a sediment-covered
+    /// cell's steep slopes show the default rock), weathered towards a common grey, with the
+    /// rock's own texture: shale and schist finely laminated, sandstone in beds with iron
+    /// stains, limestone pale with dark streaks where water runs down it, granite speckled with
+    /// pale weathered patches, gneiss in bands of foliation, quartzite cut by dark joints,
+    /// basalt dark with rusty weathering. Seen from afar the textures average out (they are
+    /// metres across), so the rock's colour is what shows.
+    fn stone(&self, d: &Vector3<f64>, h: f64) -> Color {
+        let Some(rock) = self.rock(d, h).filter(|&r| r != Rock::Sediment) else { return colour(ROCK) };
+        let q = d * self.frame.radius;
+        // Noise in [-1/2, 1/2] at scale `s` metres, stretched `v` times vertically.
+        let n = |s: f64, v: f64, o: f64| self.noise.fbm(q.x / s + o * 13., q.y / s + h / (s * v), q.z / s, 3, 0.5, 2.) - 0.5;
+        let band = |period: f64, phase: f64| (std::f64::consts::TAU * (h + phase) / period).sin();
+        let base = colour(ROCK) * 0.3 + colour(rock.colour()) * 0.7;
+        let (light, tint) = match rock {
+            Rock::Shale => (0.12 * band(1.5, 2. * n(20., 1., 0.1)), [1., 1., 1.]),
+            Rock::Schist => (0.1 * band(0.8, 3. * n(15., 1., 0.2)) + 0.15 * n(3., 1., 0.3), [1., 1., 1.03]),
+            Rock::Sandstone => {
+                let iron = (n(25., 0.5, 0.4) + 0.2).max(0.);
+                (0.15 * band(6., 10. * n(60., 1., 0.5)), [1. + 0.5 * iron, 1. + 0.1 * iron, 1. - 0.3 * iron])
+            }
+            Rock::Limestone => {
+                // Streaks: noise along the ground only, so they run straight down the face.
+                let streak = self.noise.fbm(q.x / 4., q.y / 4. + 7.7, q.z / 4., 2, 0.5, 2.) - 0.5;
+                (-0.35 * (streak + 0.15).max(0.) * 2. + 0.05 * band(4., 0.), [1., 1., 1.])
+            }
+            Rock::Granite => (0.18 * n(0.6, 1., 0.6) + 0.25 * (n(80., 1., 0.7) + 0.1).max(0.), [1.02, 1., 0.98]),
+            Rock::Gneiss => {
+                // Foliation dipping across the ground, not level like bedding.
+                let dip = q.dot(&Vector3::new(0.6, 0.3, 0.74)) * 0.5;
+                (0.22 * band(3., dip + 4. * n(30., 1., 0.8)), [1., 1., 1.])
+            }
+            Rock::Quartzite => {
+                let joint = (self.noise.fbm(q.x / 6., q.y / 6. + h / 6., q.z / 6. + 3.3, 2, 0.5, 2.) - 0.5).abs();
+                (-0.3 * (1. - smoothstep(0., 0.03, joint)), [1., 1., 1.])
+            }
+            Rock::Basalt => {
+                let rust = (n(10., 1., 0.9) + 0.1).max(0.);
+                (0.1 * n(2., 1., 1.), [1. + 1.2 * rust, 1. + 0.4 * rust, 1.])
+            }
+            Rock::Sediment => (0., [1., 1., 1.]),
+        };
+        let shade = 1. + light;
+        Color::new(base.rgb.x * tint[0] * shade, base.rgb.y * tint[1] * shade, base.rgb.z * tint[2] * shade)
+    }
+
+    /// How readily the rock at `d`, `h` metres up goes bare, in steepness: positive for rock
+    /// that keeps thin soils (quartzite, granite, limestone), bare on gentler slopes; negative
+    /// for rock that weathers to soil (shale, schist), mantled until steeper.
+    fn bareness(&self, d: &Vector3<f64>, h: f64) -> f64 {
+        match self.rock(d, h) {
+            Some(Rock::Quartzite) | Some(Rock::Granite) => 0.06,
+            Some(Rock::Limestone) | Some(Rock::Gneiss) | Some(Rock::Basalt) => 0.03,
+            Some(Rock::Shale) | Some(Rock::Schist) => -0.04,
+            _ => 0.,
+        }
+    }
+
     /// Whether scene point `p` is in a river or lake.
     pub fn wet(&self, p: &Vector3<f64>) -> bool {
         let (d, _) = self.frame.on_planet(p);
         self.layer_at(&d).is_some_and(|l| l.wet(&d))
+    }
+
+    /// Whether scene point `p` is under a closed basin's terminal lake: brine, shallow over a
+    /// pale floor of salt and clay.
+    pub fn salt_lake(&self, p: &Vector3<f64>) -> bool {
+        let (d, _) = self.frame.on_planet(p);
+        self.layer_at(&d).is_some_and(|l| l.fields.salt_lake(&l.domain, &d) > crate::terrain::simulation::SALT_LAKE_DEPTH)
+    }
+
+    /// How much of the ground at scene point `p` is a playa (`graph::Field::Playa`), blended
+    /// between the simulations as their surfaces are.
+    fn playa(&self, p: &Vector3<f64>) -> f64 {
+        crate::graph::Fields::field(self, crate::graph::Field::Playa, p).unwrap_or(0.)
     }
 
     /// The climate at `d`, `h` metres up, its edges wandering with the weather from year to
@@ -796,10 +1114,10 @@ impl Ground {
         let mix = |a: Color, b: Color, t: f64| { let t = t.clamp(0., 1.); a * (1. - t) + b * t };
         let snowline = self.snowline(&d);
         let treeline = self.treeline(&d);
-        let bare = |ground: Color| Cover { ground, snow: 0., snow_age: 0., ice: 0., blue: 0. };
+        let bare = |ground: Color| Cover { ground, snow: 0., snow_age: 0., ice: 0., blue: 0., surface: Bare::Plain };
         // Snow ages towards the snowline: coarser, dustier, turning to firn.
         let age = |h: f64| 1. - smoothstep(snowline, snowline + 800., h + (n(300., 0.35) - 0.5) * 300.);
-        if class == LAVA { return bare(colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain); }
+        if class == LAVA { return Cover { surface: Bare::Rock(Rock::Basalt), ..bare(colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain) }; }
         if class == ICE {
             // Snow over the glacier's accumulation zone, bare ice below the snowline.
             let snow = smoothstep(snowline - 300., snowline + 100., h + (n(700., 0.2) - 0.5) * 300.);
@@ -811,7 +1129,7 @@ impl Ground {
             let blue = smoothstep(0.45, 0.7, n(80., 0.4) + 0.3 * (n(15., 0.45) - 0.5));
             let low = smoothstep(snowline - 300., snowline - 1500., h);
             let debris = (1. - snow) * smoothstep(0.55, 0.75, n(350., 0.6) + 0.35 * low - 0.1);
-            let stone = colour(ROCK) * (0.7 + 0.6 * n(250., 0.7)) * grain;
+            let stone = self.stone(&d, h) * (0.7 + 0.6 * n(250., 0.7)) * grain;
             let ground = mix(stone, colour(GRAVEL) * (0.8 + 0.4 * n(40., 0.65)), held);
             // Crevasses: where the ice steepens it speeds up and stretches, and opens in
             // cracks across its flow (along the slope's contours), tens of metres apart, their
@@ -831,6 +1149,7 @@ impl Ground {
                 snow_age: age(h),
                 ice,
                 blue: if ice > 0. { (bare_ice * (1. - crevasse) * blue + crevasse) / ice } else { 0. },
+                surface: Bare::Plain,
             };
         }
         let tree = treeline + (n(1500., 0.3) - 0.5) * 400.;
@@ -865,25 +1184,78 @@ impl Ground {
         };
         // Alpine meadow from the treeline up.
         ground = mix(ground, colour(MEADOW), smoothstep(tree - 100., tree + 200., h));
+        // The kinds of bare ground, blended as their colours are.
+        let mut shares = Shares::of(Bare::Plain);
+        if class == TILL {
+            // Till and moraines: unsorted rubble, boulders in a grey matrix of rock flour,
+            // thinly grown over where it is warm enough (moraines left by the last glaciers
+            // carry forest and pasture).
+            let rubble = colour(SCREE) * (0.75 + 0.5 * n(12., 0.95)) * (1. - 0.3 * smoothstep(0.6, 0.7, n(3., 0.15)));
+            let grown = if dry { 0.15 } else { 0.6 * (1. - smoothstep(tree - 200., tree + 100., h)) };
+            let g = grown * smoothstep(0.3, 0.6, n(200., 0.45));
+            ground = mix(rubble, ground, g);
+            shares = Shares::of(Bare::Scree);
+            shares.mix(Shares::of(Bare::Plain), g);
+        }
         if class == ALLUVIUM {
             // Valley floors: fields and meadows where it is wet enough, gravel where it is too
             // high or too dry for them.
             let fields = mix(colour(GRASS), colour(FIELDS), smoothstep(0.4, 0.6, n(350., 0.8)));
             let barren = if dry { 1. } else { smoothstep(tree, tree + 300., h) };
             ground = mix(fields, colour(GRAVEL), barren);
+            shares.mix(Shares::of(Bare::Gravel), barren);
+        }
+        // Playas: the flat floors of closed basins, white with salt where the water last
+        // evaporated, cracked into polygons a few metres across, darker and browner where the
+        // clay is damp or dust has blown over it.
+        let playa = self.playa(p);
+        if playa > 0. {
+            // (A playa is level by nature: only its shores and the sides of its own cracks are
+            // steep, and the crust covers those.)
+            let extent = smoothstep(0.35, 0.65, playa + 0.3 * (n(600., 0.25) - 0.5)) * smoothstep(0.5, 0.7, flat);
+            if extent > 0. {
+                let salt = smoothstep(0.35, 0.6, n(900., 0.75) + 0.3 * playa);
+                let crust = mix(colour(CLAY_PAN), colour(SALT), salt);
+                // Polygonal cracks: the ridges of a noise's cells, thin dark lines.
+                let crack = 1. - 0.35 * (1. - smoothstep(0.0, 0.025, (n(4., 0.15) - 0.5).abs()));
+                ground = mix(ground, crust * crack * (0.92 + 0.16 * n(40., 0.35)), extent);
+                // (Salt crust has no library material: a plain colour.)
+                shares.mix(Shares::of(Bare::Plain), extent);
+            }
+        }
+        // Wind-blown sand, over all but steep rock (slip faces stand at about 33°), its colour
+        // varying between dune fields: redder where it is older and its grains are coated in
+        // iron oxide.
+        let sand = crate::graph::Fields::field(self, crate::graph::Field::Sand, p).unwrap_or(0.);
+        if sand > 0.5 {
+            let extent = smoothstep(0.5, 2.5, sand + 2. * (n(300., 0.85) - 0.5)) * smoothstep(0.75, 0.85, flat);
+            let dune = mix(colour(DUNE_SAND), colour(RED_SAND), smoothstep(0.3, 0.7, n(8000., 0.55)));
+            ground = mix(ground, dune * (0.9 + 0.2 * n(20., 0.15)), extent);
+            shares.mix(Shares::of(Bare::Sand), extent);
         }
         // Beaches.
-        ground = mix(ground, colour(SAND), 1. - smoothstep(2., 12., h + 8. * n(150., 0.4)));
+        let beach = 1. - smoothstep(2., 12., h + 8. * n(150., 0.4));
+        ground = mix(ground, colour(SAND), beach);
+        shares.mix(Shares::of(Bare::Sand), beach);
         // Bare rock on steep slopes (about 40°), and scree and rock above the meadows.
         let high = smoothstep(tree + 300., tree + 900., h + (n(600., 0.6) - 0.5) * 300.);
-        let rock = (1. - smoothstep(0.7, 0.85, flat)).max(high * (1. - 0.6 * smoothstep(0.92, 0.99, flat)));
-        let stone = mix(colour(ROCK), colour(SCREE), smoothstep(0.85, 0.95, flat)) * (0.7 + 0.6 * n(250., 0.7));
+        // (Bare at gentler slopes on rock that keeps thin soils, steeper on rock that weathers to
+        // soil.)
+        let bare = self.bareness(&d, h);
+        let rock = (1. - smoothstep(0.7 + bare, 0.85 + bare, flat)).max(high * (1. - 0.6 * smoothstep(0.92, 0.99, flat)));
+        let loose = smoothstep(0.85, 0.95, flat);
+        let stone = mix(self.stone(&d, h), colour(SCREE), loose) * (0.7 + 0.6 * n(250., 0.7));
         ground = mix(ground, stone, rock) * grain;
+        if rock > 0. {
+            let mut bare = Shares::of(Bare::Rock(self.rock(&d, h).filter(|&r| r != Rock::Sediment).unwrap_or(Rock::Sediment)));
+            bare.mix(Shares::of(Bare::Scree), loose);
+            shares.mix(bare, rock);
+        }
         // Snow lies above the snowline where slopes are gentle enough to hold it, and drifts
         // lower in sheltered places.
         let line = snowline + (n(900., 0.1) - 0.5) * 500.;
         let snow = smoothstep(line - 150., line + 150., h) * smoothstep(0.72, 0.88, flat + 0.15 * (n(120., 0.3) - 0.5));
-        Cover { ground, snow, snow_age: age(h), ice: 0., blue: 0. }
+        Cover { ground, snow, snow_age: age(h), ice: 0., blue: 0., surface: shares.pick() }
     }
 }
 
@@ -913,6 +1285,11 @@ impl crate::graph::Fields for Ground {
                 let local = self.climate.as_ref()?.local(&d, h);
                 return Some(if f == Field::Temperature { local.mean } else { local.precipitation });
             },
+            // A rock's number can't be blended between simulations.
+            Field::Rock => return self.rock(&d, h).map(|r| r.index() as f64),
+            Field::Bedrock => return self.layers.iter().find(|l| l.weight(&d) > 0.5).or(self.layers.last())
+                .map(|l| l.fields.bedrock(&l.domain, &d, h).index() as f64),
+            Field::Hardness => return self.rock(&d, h).map(|r| -r.scores().0),
             _ => {},
         }
         let (mut sum, mut left) = (0., 1.);
@@ -944,7 +1321,11 @@ impl MaterialModel for Land {
         match crate::material::snow::pick(&[1. - c.snow - c.ice, c.snow, c.ice]) {
             1 => scatter_bsdf(&g.snow[(rand() < c.snow_age) as usize].bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s),
             2 => scatter_bsdf(&g.ice[(rand() < c.blue) as usize].bsdf(&i.normal, Some(s)), r, &i.point, s),
-            _ => scatter_bsdf(&LambertianBSDF { albedo: c.ground.as_reflectance(), normal: i.normal }, r, &i.point, s),
+            // Bare ground: its library material, or its colour.
+            _ => match g.materials.get(c.surface.index()).and_then(|m| m.as_deref()) {
+                Some(m) => m.scatter(r, intersection, s),
+                None => scatter_bsdf(&LambertianBSDF { albedo: c.ground.as_reflectance(), normal: i.normal }, r, &i.point, s),
+            },
         }
     }
 }
@@ -955,6 +1336,8 @@ pub struct LandscapeMedium {
     ground: Arc<Ground>,
     land: Box<dyn MaterialModel + Sync + Send>,
     water: PhysicalOcean,
+    /// Terminal lakes: shallow brine over a pale floor, greener and brighter than rivers.
+    brine: PhysicalOcean,
 }
 
 impl LandscapeMedium {
@@ -970,6 +1353,7 @@ impl LandscapeMedium {
             land: material.unwrap_or_else(|| Box::new(Land { ground: ground.clone() })),
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
             water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None },
+            brine: PhysicalOcean { water: Color::new(0.03, 0.07, 0.065), roughness: 0.003, center: Some(centre), foam: None, absorption: None },
             ground,
         }
     }
@@ -977,7 +1361,9 @@ impl LandscapeMedium {
 
 impl Medium for LandscapeMedium {
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
-        if self.ground.wet(&pt) { &self.water } else { &*self.land }
+        if self.ground.wet(&pt) { &self.water }
+        else if self.ground.salt_lake(&pt) { &self.brine }
+        else { &*self.land }
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(&*self.ground) }
@@ -1032,6 +1418,69 @@ mod tests {
         let coarse = Terrain::new(Domain::patch(lat + 0.01, lon, 16, 4000., params.planet.radius), params.clone());
         let globe = Terrain::new(Domain::sphere(16, params.planet.radius), params);
         (planet, Arc::new(vec![Layer::new(fine, 0.), Layer::new(coarse, 0.), Layer::new(globe, 0.)]), (lat, lon))
+    }
+
+    #[test]
+    fn test_dunes_fade_in_with_the_sand() {
+        // Sand thickening from nothing across a patch: the dunes' relief changes by no more
+        // than their slopes allow from one metre to the next, even where the sand begins.
+        let mut params = TerrainParams::default();
+        params.planet.radius = 6.36e6;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = (20., 10.);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 16, 1000., params.planet.radius), params.clone());
+        let n = t.domain.len();
+        let east: Vec<f64> = (0..n).map(|k| (k % 16) as f64).collect();
+        t.sediment = east.iter().map(|x| (x - 6.).max(0.) * 0.5).collect();
+        t.sand = t.sediment.clone();
+        t.wind = (0., 1.);
+        let relief = Relief::new(Arc::new(vec![Layer::new(t, 0.)]), &planet, params.planet.radius, 0., 1000.);
+        let frame = Frame::new(lat, lon, params.planet.radius, 1.);
+        // Across the wind (which blows north), from no sand to several metres.
+        for row in 0..8 {
+            let z = -2000. + 500. * row as f64;
+            let h: Vec<f64> = (0..5000).map(|k| relief.dunes(&frame.dir(-3500. + k as f64, z), 5.)).collect();
+            let steepest = h.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0., f64::max);
+            assert!(steepest < 0.3, "row {}: a step of {} m", row, steepest);
+        }
+    }
+
+    #[test]
+    fn test_dunes_face_their_slip_faces_downwind() {
+        // A patch covered in 30 m of sand under a wind towards the east: along the wind the
+        // dunes rise gently and drop steeply; without sand there are none.
+        let mut params = TerrainParams::default();
+        params.planet.radius = 6.36e6;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = (20., 10.);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 16, 1000., params.planet.radius), params.clone());
+        let n = t.domain.len();
+        t.sediment = vec![30.; n];
+        t.sand = vec![30.; n];
+        t.wind = (1., 0.);
+        let relief = Relief::new(Arc::new(vec![Layer::new(t, 0.)]), &planet, params.planet.radius, 0., 1000.);
+        let frame = Frame::new(lat, lon, params.planet.radius, 1.);
+        // Lines along the wind, some through dunes and some between crescents.
+        let mut lines = 0;
+        for z in 0..12 {
+            let profile: Vec<f64> = (0..4000).map(|k| relief.dunes(&frame.dir(-2000. + k as f64, -3000. + 500. * z as f64), 5.)).collect();
+            let (mut rise, mut drop) = (0f64, 0f64);
+            for w in profile.windows(2) {
+                rise = rise.max(w[1] - w[0]);
+                drop = drop.max(w[0] - w[1]);
+            }
+            let span = profile.iter().cloned().fold(f64::MIN, f64::max) - profile.iter().cloned().fold(f64::MAX, f64::min);
+            // About one crest every 400 m.
+            let crests = profile.windows(3).filter(|w| w[1] > w[0] && w[1] >= w[2] && w[1] > 0.).count();
+            assert!((7..=14).contains(&crests), "{} crests in 4 km", crests);
+            if span < 15. { continue; }
+            lines += 1;
+            assert!(drop > 3. * rise, "rise {} drop {} per metre", rise, drop);
+            assert!(drop < 1., "slip faces {} per metre", drop);
+        }
+        assert!(lines >= 6, "dunes on {} lines of 12", lines);
+        // Too coarse a mesh carries none.
+        assert_eq!(relief.dunes(&frame.dir(0., 0.), 500.), 0.);
     }
 
     #[test]
@@ -1111,7 +1560,12 @@ mod tests {
         for (x0, z0) in [(0., 0.), (140e3, -70e3)] {
             let local = Local::under(&f, x0, z0);
             let (d, h) = f.on_planet(&local.origin);
-            let ground = r.height(&d, r.slope(&d), 2.) - h;
+            let ground = r.height(&d, &r.slope(&d), 2.) - h;
+            // The synthetic detail, which the rings carry less of than the patch, grows with
+            // the slope (`Relief::detail`), and so may their difference near the patch's edge.
+            // The octaves the rings leave out, up to about twice their cells (a few metres here),
+            // sum to about half that wavelength times (0.05 + slope); with a margin.
+            let tolerance = 6. * (0.05 + r.slope(&d).steepness);
             let view = Viewpoint { location: local.to_scene(&Vector3::new(0., ground + 50., 0.)) };
             let clipmap = Clipmap::new(&r, &f, &view, &p);
             let surface = Surface { relief: &r, frame: &f, local: &local, clipmap: &clipmap, cell: 2. };
@@ -1136,16 +1590,19 @@ mod tests {
                 // No crack where the patch meets the rings, and no step.
                 let h = y(&both, x, z).unwrap_or_else(|| panic!("crack at {} ({}, {})", x, x0, z0));
                 if let Some(l) = last {
-                    assert!((h - l).abs() < 1., "step of {} at {} ({}, {})", h - l, x, x0, z0);
+                    // Where the patch gives way to the rings, as much as they may differ: each may be
+                    // `tolerance` from the surface, on either side.
+                    assert!((h - l).abs() < (2. * tolerance).max(1.), "step of {} at {} ({}, {})", h - l, x, x0, z0);
                 }
                 last = Some(h);
-                // Inside, the patch's surface (as diced); near its edge, close to the rings'.
-                if x < 190. {
-                    assert!((h - grid.smooth(x, z).0).abs() < 0.01, "{} vs the patch's {}", h, grid.smooth(x, z).0);
+                // Inside, the patch's surface (as diced); near its edge, from 180 m, where the rings
+                // may stand a little above it, close to the rings'.
+                if x < 180. {
+                    assert!((h - grid.smooth(x, z).0).abs() < 0.01, "{} vs the patch's {} at {} ({}, {})", h, grid.smooth(x, z).0, x, x0, z0);
                 }
                 if (180. ..200.).contains(&x) {
                     let ring = y(&rings, x, z).unwrap();
-                    assert!((h - ring).abs() < 1., "{} vs the rings' {} at {} ({}, {})", h, ring, x, x0, z0);
+                    assert!((h - ring).abs() < tolerance, "{} vs the rings' {} at {} ({}, {}), within {}", h, ring, x, x0, z0, tolerance);
                 }
             }
         }

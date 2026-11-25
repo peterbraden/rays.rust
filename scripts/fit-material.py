@@ -103,6 +103,15 @@ turned blue, ochre turned pink.) Give colours that cover little of the surface a
 `chroma`: their hue hardly moves the loss, so it drifts (trail_dirt's stones, a tenth of its
 area, turned mint green at 0.12).
 
+All that is how colours were searched for. Now they are solved for instead (`ColourSolve`;
+`--no-solve` searches as above): a preset's image is linear in its colours, so a few renders
+of each candidate give each colour's share of every pixel, and the colours nearest the scan
+follow by transport and least squares in moments, drawn to their author's where they hardly
+show. The search is left the pattern alone (often just the scale), and every candidate is
+judged with its best colours. The bounds above then don't apply: granite_outcrop, whose
+scan is darker and browner than any gain could take it, went from 167 to 9 by its colours
+alone, where forty generations of searching them had reached 62.
+
     scripts/fit-material.py scree|spec.json [--iterations 30] [--resolution 160] [--samples 8] [--record] [-o out_dir]
 
 Writes to out_dir: fitted.json (a library file with the fitted preset under `name`, and the
@@ -463,10 +472,14 @@ def put(obj, path, value):
 class Problem:
     """The spec's parameters as a vector in [0, 1]^n, and the material they make."""
 
-    def __init__(self, spec, preset):
+    def __init__(self, spec, preset, colours=True):
+        """With colours False, the spec's colours are left out of the vector (ColourSolve
+        finds them)."""
         self.spec, self.preset = spec, preset
         self.slots = []  # (param, component or None)
         for p in spec["params"]:
+            if p.get("kind") in ("color", "colours") and not colours:
+                continue
             if p.get("kind") == "color":
                 self.slots += [(p, c) for c in range(3)]
             elif p.get("kind") == "colours":
@@ -594,6 +607,123 @@ class Problem:
         return preset, usage
 
 
+def sliced_transport(x, y, passes=12, seed=1):
+    """x's points moved to y's distribution (iterated sliced optimal transport, Pitié et al.
+    2005, Rabin et al. 2011): along each of three orthogonal directions a pass, each point to
+    the value of y's at its rank. Points stay where they were as far as the distributions
+    allow, so each pixel's colour goes to the scan's colour nearest it in kind."""
+    rng = np.random.default_rng(seed)
+    x = x.copy()
+    q = np.linspace(0, 1, len(x))
+    for _ in range(passes):
+        axes, _ = np.linalg.qr(rng.normal(size=(3, 3)))
+        for d in axes.T:
+            px, py = x @ d, np.sort(y @ d)
+            target = np.interp(q, np.linspace(0, 1, len(py)), py)
+            order = np.argsort(px)
+            step = np.empty_like(px)
+            step[order] = target - px[order]
+            x += step[:, None] * d
+    return x
+
+
+class ColourSolve:
+    """The spec's colours found for each candidate rather than searched for.
+
+    Seen top-down under the white sky, a preset's image is linear in its colours: each pixel
+    is what doesn't depend on them (the gloss of a plastic, colours not fitted) plus each
+    colour times how much of it the pixel shows (its share in the colour maps and mixes, its
+    shading). So a candidate is rendered with the fitted colours black (`B`), then with three
+    of them at a time, one in each channel (each colour's share `W`, its channel's render less
+    B), and any colours make the image B + W c without rendering it.
+
+    Which colours: each pixel's colour moved to the scan's distribution in Oklab by sliced
+    optimal transport, then the colours that come nearest those targets by least squares
+    (errors weighed to be about Oklab's lightness: by the cube root's slope at the target), a
+    few times over. Each colour is drawn toward its author's by as much as a fiftieth of the
+    surface would draw it (`prior`), so a colour that hardly shows keeps its own (left free,
+    trail_dirt's stones went mint green) and the visible ones go where the scan says. As each
+    colour answers for the pixels it paints, the colours keep their places: the stones' colour
+    is fitted to the scan's stones, not swapped with the ground's.
+
+    For a search this means far fewer dimensions (scree's 34 become 1, its scale) and the best
+    colours for every candidate, at the cost of a render for every three colours more."""
+
+    def __init__(self, spec, preset, prior=0.02, iterations=6):
+        paths = []
+        for p in spec["params"]:
+            if p.get("kind") == "colours":
+                paths += [tuple(q) for q in p["paths"]]
+            elif p.get("kind") == "color":
+                paths.append(tuple(p["path"]))
+        self.paths = list(dict.fromkeys(paths))
+        self.own = np.array([get(preset, list(p)) for p in self.paths], dtype=np.float64)
+        self.prior, self.iterations = prior, iterations
+
+    @property
+    def renders(self):
+        return 1 + (len(self.paths) + 2) // 3
+
+    def basis(self, preset, r):
+        """The preset with the fitted colours black (r = 0), or colours 3(r - 1) to 3r - 1 each
+        white in one channel."""
+        out = copy.deepcopy(preset)
+        for j, path in enumerate(self.paths):
+            c = [0., 0., 0.]
+            if r > 0 and j // 3 == r - 1:
+                c[j % 3] = 1.
+            put(out, list(path), c)
+        return out
+
+    def shares(self, images):
+        """(B, W) from the renders (linear light): W is height x width x colours."""
+        b = images[0]
+        w = np.stack([images[1 + j // 3][:, :, j % 3] - b[:, :, j % 3] for j in range(len(self.paths))], axis=-1)
+        return b, w
+
+    @staticmethod
+    def compose(view, colours):
+        b, w = view
+        return b + w @ colours
+
+    @staticmethod
+    def slope(lin):
+        """d(cube root)/d(linear): an error in linear light as one in Oklab's lightness."""
+        return 1. / (3. * np.maximum(lin, 0.004) ** (2. / 3.))
+
+    def solve(self, views, targets):
+        """The colours (colours x 3, linear) bringing each view nearest its target (sRGB
+        pixels)."""
+        c = self.own.copy()
+        k = len(self.paths)
+        prior = self.prior * sum(v[0].shape[0] * v[0].shape[1] for v in views) * self.slope(self.own) ** 2
+        for _ in range(self.iterations):
+            a = np.zeros((3, k, k))
+            rhs = np.zeros((3, k))
+            for view, y in zip(views, targets):
+                b, w = view
+                lin = np.clip(self.compose(view, c), 0, 1).reshape(-1, 3)
+                moved = sliced_transport(oklab(linear_to_srgb(lin)), oklab(y.reshape(-1, 3)))
+                t = srgb_to_linear(np.clip(from_oklab(moved), 0, 1))
+                weight = self.slope(t) ** 2
+                wf, bf = w.reshape(-1, k), b.reshape(-1, 3)
+                for ch in range(3):
+                    ww = wf * weight[:, ch:ch + 1]
+                    a[ch] += ww.T @ wf
+                    rhs[ch] += ww.T @ (t[:, ch] - bf[:, ch])
+            for ch in range(3):
+                m = a[ch] + np.diag(prior[:, ch])
+                c[:, ch] = np.linalg.solve(m, rhs[ch] + prior[:, ch] * self.own[:, ch])
+            c = np.clip(c, 0.003, 0.95)
+        return c
+
+    def apply(self, preset, colours):
+        out = copy.deepcopy(preset)
+        for path, c in zip(self.paths, colours):
+            put(out, list(path), [round(float(v), 4) for v in c])
+        return out
+
+
 def scene(usage, library_path, size, resolution, samples, seed, view="ground"):
     # A scan of a cliff was taken facing the cliff, its up the scene's up: seen as a wall (the
     # plane z = 0, from in front), so a preset's beds and streaks along y line up with it.
@@ -613,7 +743,7 @@ def scene(usage, library_path, size, resolution, samples, seed, view="ground"):
     }
 
 
-def render(preset, usage, name, args, size, tmp, tag):
+def render(preset, usage, name, args, size, tmp, tag, linear=False):
     library_path = os.path.join(tmp, "library-%s.json" % tag)
     json.dump({name: preset}, open(library_path, "w"))
     path = os.path.join(tmp, "scene-%s.json" % tag)
@@ -624,7 +754,7 @@ def render(preset, usage, name, args, size, tmp, tag):
     img = srgb_to_linear(np.asarray(Image.open(out).convert("RGB"), dtype=np.float64) / 255.)
     # Rendered at twice the size and averaged down in linear light, as the reference was.
     img = 0.25 * (img[0::2, 0::2] + img[1::2, 0::2] + img[0::2, 1::2] + img[1::2, 1::2])
-    return linear_to_srgb(img)
+    return img if linear else linear_to_srgb(img)
 
 
 def main():
@@ -640,6 +770,8 @@ def main():
     a.add_argument("-o", "--output", default="fit")
     a.add_argument("--no-structure", dest="structure", action="store_false",
                    help="the colour loss alone (PatchLoss), as fits before the structure term were")
+    a.add_argument("--no-solve", dest="solve", action="store_false",
+                   help="search for the colours with the rest (as fits before ColourSolve did)")
     a.add_argument("--no-detail", dest="detail", action="store_false",
                    help="the whole scan only, without the detail view (half the renders)")
     args = a.parse_args()
@@ -675,38 +807,84 @@ def main():
     details = [load_reference(os.path.join(base, spec["reference"]), args.resolution, t) for t in DETAIL_TILES] \
         if args.detail else []
     loss = FitLoss() if args.structure else PatchLoss()
-    problem = Problem(spec, preset)
+    solver = ColourSolve(spec, preset) if args.solve else None
+    if solver is not None and not solver.paths:
+        solver = None
+    problem = Problem(spec, preset, colours=solver is None)
     os.makedirs(args.output, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
+        sizes = [size] + ([size * DETAIL] if details else [])
+        # The detail view's colours are fitted to its tiles together.
+        targets = [reference] + ([np.concatenate([t.reshape(-1, 3) for t in details])] if details else [])
+
+        def score(imgs):
+            total = loss(reference, imgs[0])
+            if details:
+                # The detail view: as much again, its loss the mean over the scan's tiles.
+                total += float(np.mean([loss(t, imgs[1]) for t in details]))
+            return total
+
+        def rendered(p, u, tag):
+            return [render(p, u, name, args, s, tmp, tag + "v%d" % v) for v, s in enumerate(sizes)]
+
         def evaluate(x, tag):
+            """The loss at x, its images and the preset (with its colours solved for)."""
             p, u = problem.make(x, usage)
-            img = render(p, u, name, args, size, tmp, tag)
-            total = loss(reference, img)
-            if not details:
-                return total, [img]
-            # The detail view: as much again, its loss the mean over the scan's tiles.
-            detail = render(p, u, name, args, size * DETAIL, tmp, tag + "d")
-            return total + float(np.mean([loss(t, detail) for t in details])), [img, detail]
+            if solver is None:
+                imgs = rendered(p, u, tag)
+                return score(imgs), imgs, p
+            views = [solver.shares([render(solver.basis(p, r), u, name, args, s, tmp, tag + "v%dr%d" % (v, r), linear=True)
+                                    for r in range(solver.renders)]) for v, s in enumerate(sizes)]
+            colours = solver.solve(views, targets)
+            imgs = [linear_to_srgb(np.clip(solver.compose(view, colours), 0, 1)) for view in views]
+            return score(imgs), imgs, solver.apply(p, colours)
 
         x0 = problem.start(usage)
-        start_loss, start_img = evaluate(x0, "start")
-        print("start: loss %.5f" % start_loss, file=sys.stderr)
-        es = cma.CMAEvolutionStrategy(list(x0), args.sigma, {"bounds": [0, 1], "seed": args.seed, "verbose": -9})
-        best = (start_loss, x0, start_img)
+        p0, u0 = problem.make(x0, usage)
+        start_img = rendered(p0, u0, "start")
+        start_loss = score(start_img)
+        print("start: loss %.5f%s" % (start_loss, "; solving for %d colours, %d renders a view" % (
+            len(solver.paths), solver.renders) if solver else ""), file=sys.stderr)
+        best = (start_loss, x0, start_img, p0)
         log = [("iteration", "evaluations", "best", "generation_best", "seconds")]
         t0 = time.time()
-        for it in range(args.iterations):
+        if solver is not None:
+            # The author's pattern with its colours solved for, before any search.
+            r = evaluate(x0, "solved")
+            best = (r[0], x0, r[1], r[2])
+            print("colours solved: loss %.5f" % r[0], file=sys.stderr)
+        es = cma.CMAEvolutionStrategy(list(x0), args.sigma, {"bounds": [0, 1], "seed": args.seed, "verbose": -9}) \
+            if len(x0) > 1 else None
+        if es is None and len(x0) == 1:
+            # One number (CMA-ES needs two): a grid over its range, then finer about the best.
+            lo, hi, step = 0., 1., 0.1
+            for it in range(4):
+                xs = [np.array([u]) for u in np.arange(lo, hi + 1e-9, step)]
+                for k, x in enumerate(xs):
+                    r = evaluate(x, "g%d" % k)
+                    if r[0] < best[0]:
+                        best = (r[0], x, r[1], r[2])
+                log.append((it + 1, len(xs), best[0], best[0], round(time.time() - t0, 1)))
+                print("round %d: best %.5f at %.4f" % (it + 1, best[0], best[1][0]), file=sys.stderr)
+                lo, hi, step = max(best[1][0] - step, 0.), min(best[1][0] + step, 1.), step / 4
+        for it in range(args.iterations if es else 0):
             xs = es.ask()
             results = [evaluate(np.array(x), "c%d" % k) for k, x in enumerate(xs)]
             es.tell(xs, [r[0] for r in results])
             k = int(np.argmin([r[0] for r in results]))
             if results[k][0] < best[0]:
-                best = (results[k][0], np.array(xs[k]), results[k][1])
+                best = (results[k][0], np.array(xs[k]), results[k][1], results[k][2])
             log.append((it + 1, es.countevals, best[0], results[k][0], round(time.time() - t0, 1)))
             print("iteration %d: best %.5f (this generation %.5f)" % (it + 1, best[0], results[k][0]), file=sys.stderr)
-
-        fitted, fitted_usage = problem.make(best[1], usage)
+        _, fitted_usage = problem.make(best[1], usage)
+        fitted = best[3]
+        if solver is not None:
+            # The images composed from the shares, checked by rendering the fit itself.
+            composed = best[0]
+            imgs = rendered(fitted, fitted_usage, "fitted")
+            best = (score(imgs), best[1], imgs, fitted)
+            print("fitted, rendered: loss %.5f (composed %.5f)" % (best[0], composed), file=sys.stderr)
         json.dump({"library": {name: fitted}, "material": fitted_usage, "loss": {"start": start_loss, "fitted": best[0]}},
                   open(os.path.join(args.output, "fitted.json"), "w"), indent=1)
         with open(os.path.join(args.output, "log.csv"), "w", newline="") as f:
@@ -738,7 +916,8 @@ def main():
             library[name]["references"][index]["fit"] = {
                 "loss": {"start": round(start_loss, 6), "fitted": round(best[0], 6)},
                 "iterations": args.iterations, "resolution": args.resolution, "samples": args.samples,
-                "loss_kind": ("structure" if args.structure else "colour") + ("+detail" if args.detail else ""),
+                "loss_kind": ("structure" if args.structure else "colour") + ("+detail" if args.detail else "")
+                + ("+solved" if solver else ""),
                 "date": time.strftime("%Y-%m-%d"), "applied": False, "values": values}
             with open(library_path, "w") as f:
                 json.dump(library, f, indent=2)

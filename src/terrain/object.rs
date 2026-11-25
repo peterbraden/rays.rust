@@ -954,7 +954,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
     let (foot, height) = frame.on_planet(&view.location);
     let ground = relief.height(&foot, &relief.slope(&foot), 1.);
-    say(format!("Landscape: the camera is {:.1} m above the ground under it ({:.1} m above sea level)", height - ground, ground));
+    say(format!("Landscape: the camera is {:.1} m above the ground under it (the ground {:.1} m above sea level)", height - ground, ground));
     let (o, displacement) = &procedural_displacement(o, height - ground, params.planet.seed);
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
     // Built first, so the displacement's graphs can read its fields.

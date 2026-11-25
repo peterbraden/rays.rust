@@ -720,6 +720,8 @@ def free_params(preset, taken=()):
             return
         node, seed = o.get("node"), o.get("seed")
         for k, v in o.items():
+            if k == "normal":
+                continue  # bump: not rendered for a fit (strip_relief)
             here = path + [k]
             key = lambda: (node, k, seed, v) if seed is not None else None
             if k in ("scale", "smallest", "cell", "wavelength") and number(v) and node:
@@ -758,8 +760,6 @@ def free_params(preset, taken=()):
             add(["variables", name], v, "count")
     walk(preset.get("variables", {}), ["variables"])
     walk(preset.get("material", {}), ["material"])
-    if "normal" in preset:
-        walk(preset["normal"], ["normal"])
     return params
 
 
@@ -1039,9 +1039,17 @@ class ColourSolve:
         return out
 
 
-def scene(usage, library_path, size, resolution, samples, seed, view="ground"):
+def scene(usage, library_path, size, resolution, samples, seed, view="ground", lighting="sun"):
     # A scan of a cliff was taken facing the cliff, its up the scene's up: seen as a wall (the
     # plane z = 0, from in front), so a preset's beds and streaks along y line up with it.
+    # Lit by a sun behind the camera, of irradiance pi so a matte surface facing it shows its
+    # albedo, under a black sky: each point's light is then exact (a white sky's is sampled,
+    # and its noise, a tenth of the albedo at a sample a pixel, reads as grain to the spectra).
+    # The scans are albedo maps, lit evenly; `strip_relief` takes the preset's bump off so the
+    # sun doesn't shade it (under the white sky a matte surface showed its albedo regardless).
+    toward = [0, 0, -1] if view == "wall" else [0, 1, 0]
+    light = {"background": [0, 0, 0], "sun": {"direction": toward, "intensity": math.pi, "angular_radius": 0.01}} \
+        if lighting == "sun" else {"background": [1, 1, 1]}
     if view == "wall":
         camera = {"type": "orthographic", "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "height": size}
         ground = {"type": "plane", "normal": [0, 0, -1], "distance": 0, "material": "M"}
@@ -1050,7 +1058,7 @@ def scene(usage, library_path, size, resolution, samples, seed, view="ground"):
         ground = {"type": "plane", "y": 0, "material": "M"}
     return {
         "width": 2 * resolution, "height": 2 * resolution, "supersamples": samples, "max_depth": 2, "seed": seed,
-        "background": [1, 1, 1], "output": {"tonemap": "none", "exposure": 1.0},
+        **light, "output": {"tonemap": "none", "exposure": 1.0},
         "library": library_path,
         "camera": camera,
         "materials": {"M": usage},
@@ -1058,11 +1066,23 @@ def scene(usage, library_path, size, resolution, samples, seed, view="ground"):
     }
 
 
+def strip_relief(o):
+    """o without its bump maps (every "normal" key)."""
+    if isinstance(o, dict):
+        return {k: strip_relief(v) for k, v in o.items() if k != "normal"}
+    if isinstance(o, list):
+        return [strip_relief(v) for v in o]
+    return o
+
+
 def render(preset, usage, name, args, size, tmp, tag, linear=False):
+    lighting = getattr(args, "lighting", "sun")
+    if lighting == "sun":
+        preset = strip_relief(preset)
     library_path = os.path.join(tmp, "library-%s.json" % tag)
     json.dump({name: preset}, open(library_path, "w"))
     path = os.path.join(tmp, "scene-%s.json" % tag)
-    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view), open(path, "w"))
+    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view, lighting), open(path, "w"))
     out = os.path.join(tmp, "render-%s.png" % tag)
     subprocess.run([args.rays, path, "--fresh", "-o", out], check=True, cwd=ROOT,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1078,7 +1098,7 @@ def main():
     a.add_argument("--record", action="store_true", help="write the fit into the preset's reference in library.json")
     a.add_argument("--iterations", type=int, default=30)
     a.add_argument("--resolution", type=int, default=160, help="pixels across (at least 64, for the loss's four levels)")
-    a.add_argument("--samples", type=int, default=8)
+    a.add_argument("--samples", type=int, default=1, help="a pixel's samples (each of 2 x 2 subpixels): the sun's light is exact, so one does")
     a.add_argument("--seed", type=int, default=1)
     a.add_argument("--sigma", type=float, default=0.2, help="CMA-ES's initial step, in the unit cube")
     a.add_argument("--rays", default=os.path.join(ROOT, "target/release/rays"))

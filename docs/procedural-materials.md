@@ -304,9 +304,9 @@ samples (the fits' own scores, over both views, are lower):
 | trail_dirt | 97.3 | 1.35 | | angular_rubble | 12.9 | 3.09 |
 | pebble_bed | 7.78 | 1.59 | | foliated_rock | 190 | 3.66 |
 | weathered_pink_granite | 26.8 | 1.62 | | laterite | 199 | 3.88 |
-| | | | | scree | 80.1 | 4.35 |
+| leaf_litter_gravel | 26.0 | 2.26 | | scree | 80.1 | 4.35 |
 
-All but two are applied. angular_rubble's fit is closer in tone but turns its angular stones
+All but two of the seventeen are applied. angular_rubble's fit is closer in tone but turns its angular stones
 into blobs close up. ochre_crust's fit swirls where the scan cracks. Both keep the presets as
 written.
 
@@ -319,7 +319,7 @@ angular shapes) rather than more search.
 
 ![The first ten presets and their scans](material-fit-scans.png)
 
-*Each: the scan, the preset as written, and fitted (the first ten; the six after them aren't pictured). All sixteen fits of that round were applied (leaf_litter_gravel's after its leaves were remade by `bombing`); the round above has since refitted fifteen of them.*
+*Each: the scan, the preset as written, and fitted (the first ten; the six after them aren't pictured). All sixteen fits of that round were applied (leaf_litter_gravel's after its leaves were remade by `bombing`); the round above has since refitted sixteen of them.*
 
 Sixteen presets were written to imitate particular Poly Haven scans, each scan recorded in the
 preset's `references`:

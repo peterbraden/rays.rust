@@ -11668,27 +11668,27 @@
     "variables": {
       "stones": {
         "node": "warp",
-        "amount": 0.01,
-        "scale": 0.04,
+        "amount": 0.0258,
+        "scale": 0.0252,
         "seed": 1042,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "edges",
-          "scale": 0.05,
+          "scale": 0.0447,
           "seed": 1041
         }
       },
       "stone_id": {
         "node": "warp",
-        "amount": 0.01,
-        "scale": 0.04,
+        "amount": 0.0258,
+        "scale": 0.0252,
         "seed": 1042,
         "octaves": 2,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.05,
+          "scale": 0.0447,
           "seed": 1041
         }
       },
@@ -11699,12 +11699,12 @@
           "m": {
             "node": "bombing",
             "shape": "leaf",
-            "cell": 0.014,
+            "cell": 0.056,
             "size": [
-              0.012,
-              0.035
+              0.0034,
+              0.1372
             ],
-            "width": 0.45,
+            "width": 0.3183,
             "density": "$density",
             "seed": 1043,
             "output": "mask"
@@ -11722,12 +11722,12 @@
       "leaf_id": {
         "node": "bombing",
         "shape": "leaf",
-        "cell": 0.014,
+        "cell": 0.056,
         "size": [
-          0.012,
-          0.035
+          0.0034,
+          0.1372
         ],
-        "width": 0.45,
+        "width": 0.3183,
         "density": "$density",
         "seed": 1043,
         "output": "id"
@@ -11735,12 +11735,12 @@
       "vein": {
         "node": "bombing",
         "shape": "leaf",
-        "cell": 0.014,
+        "cell": 0.056,
         "size": [
-          0.012,
-          0.035
+          0.0034,
+          0.1372
         ],
-        "width": 0.45,
+        "width": 0.3183,
         "density": "$density",
         "seed": 1043,
         "output": "vein"
@@ -11748,50 +11748,50 @@
       "leaf_height": {
         "node": "bombing",
         "shape": "leaf",
-        "cell": 0.014,
+        "cell": 0.056,
         "size": [
-          0.012,
-          0.035
+          0.0034,
+          0.1372
         ],
-        "width": 0.45,
+        "width": 0.3183,
         "density": "$density",
         "seed": 1043,
         "output": "height"
       },
-      "density": 1.9666,
-      "reach": 0.1583,
-      "on_stones": 0.1,
+      "density": 1.985,
+      "reach": 0.1891,
+      "on_stones": 0.0753,
       "gravel": [
-        0.0381,
-        0.0373,
-        0.0403
+        0.0456,
+        0.0276,
+        0.017
       ],
       "gravel2": [
-        0.0572,
-        0.0537,
-        0.0556
+        0.0635,
+        0.0608,
+        0.0496
       ],
       "gap": [
-        0.0257,
-        0.0209,
-        0.0183
+        0.0201,
+        0.0159,
+        0.0132
       ],
       "leaf": [
-        0.1023,
-        0.047,
-        0.0163
+        0.0904,
+        0.0433,
+        0.0201
       ],
       "leaf2": [
-        0.1462,
-        0.0801,
-        0.0342
+        0.1723,
+        0.1089,
+        0.0637
       ],
       "rib": [
         0.2,
         0.1,
         0.05
       ],
-      "grain": 0.7577
+      "grain": 1.1852
     },
     "material": {
       "type": "lambertian",
@@ -11799,16 +11799,16 @@
         "pattern": "$leaves",
         "color_map": [
           [
-            0,
+            0.0176,
             {
               "pattern": "$stones",
               "color_map": [
                 [
-                  0,
+                  0.0049,
                   "$gap"
                 ],
                 [
-                  0.05,
+                  0.0544,
                   {
                     "pattern": {
                       "node": "add",
@@ -11820,7 +11820,7 @@
                             "$grain",
                             {
                               "node": "fractal",
-                              "scale": 0.004,
+                              "scale": 0.0019,
                               "octaves": 3,
                               "seed": 1047
                             }
@@ -11830,11 +11830,11 @@
                     },
                     "color_map": [
                       [
-                        -0.3,
+                        0.1893,
                         "$gravel"
                       ],
                       [
-                        1.3,
+                        1.0045,
                         "$gravel2"
                       ]
                     ]
@@ -11844,28 +11844,28 @@
             }
           ],
           [
-            1,
+            0.955,
             {
               "pattern": "$vein",
               "color_map": [
                 [
-                  0,
+                  -0.1082,
                   {
                     "pattern": "$leaf_id",
                     "color_map": [
                       [
-                        0,
+                        -0.1009,
                         "$leaf"
                       ],
                       [
-                        1,
+                        0.9078,
                         "$leaf2"
                       ]
                     ]
                   }
                 ],
                 [
-                  1,
+                  1.6929,
                   "$rib"
                 ]
               ]
@@ -11978,49 +11978,84 @@
         ],
         "fit": {
           "loss": {
-            "start": 0.095185,
-            "fitted": 0.00094
+            "start": 17.562226,
+            "fitted": 1.97278
           },
-          "iterations": 20,
+          "iterations": 60,
           "resolution": 128,
-          "samples": 8,
-          "date": "2026-11-24",
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-25",
           "applied": true,
           "values": {
-            "scale": 0.9865,
+            "scale": 0.8529,
             "variables.gravel": [
-              0.0381,
-              0.0373,
-              0.0403
+              0.0456,
+              0.0276,
+              0.017
             ],
             "variables.gravel2": [
-              0.0572,
-              0.0537,
-              0.0556
+              0.0635,
+              0.0608,
+              0.0496
             ],
             "variables.gap": [
-              0.0257,
-              0.0209,
-              0.0183
+              0.0201,
+              0.0159,
+              0.0132
             ],
             "variables.leaf": [
-              0.1023,
-              0.047,
-              0.0163
+              0.0904,
+              0.0433,
+              0.0201
             ],
             "variables.leaf2": [
-              0.1462,
-              0.0801,
-              0.0342
+              0.1723,
+              0.1089,
+              0.0637
             ],
-            "variables.density": 1.9666,
-            "variables.reach": 0.1583,
-            "variables.grain": 0.7577
+            "variables.density": 1.985,
+            "variables.reach": 0.1891,
+            "variables.grain": 1.1852,
+            "variables.on_stones": 0.0753,
+            "variables.stones.amount": 0.0258,
+            "variables.stone_id.amount": 0.0258,
+            "variables.stones.scale": 0.0252,
+            "variables.stone_id.scale": 0.0252,
+            "variables.stones.input.scale": 0.0447,
+            "variables.stone_id.input.scale": 0.0447,
+            "variables.leaves.inputs.m.cell": 0.056,
+            "variables.leaf_id.cell": 0.056,
+            "variables.vein.cell": 0.056,
+            "variables.leaf_height.cell": 0.056,
+            "variables.leaves.inputs.m.size.0": 0.0034,
+            "variables.leaf_id.size.0": 0.0034,
+            "variables.vein.size.0": 0.0034,
+            "variables.leaf_height.size.0": 0.0034,
+            "variables.leaves.inputs.m.size.1": 0.1372,
+            "variables.leaf_id.size.1": 0.1372,
+            "variables.vein.size.1": 0.1372,
+            "variables.leaf_height.size.1": 0.1372,
+            "variables.leaves.inputs.m.width": 0.3183,
+            "variables.leaf_id.width": 0.3183,
+            "variables.vein.width": 0.3183,
+            "variables.leaf_height.width": 0.3183,
+            "material.albedo.color_map.0.0": 0.0176,
+            "material.albedo.color_map.1.0": 0.955,
+            "material.albedo.color_map.0.1.color_map.0.0": 0.0049,
+            "material.albedo.color_map.0.1.color_map.1.0": 0.0544,
+            "material.albedo.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.scale": 0.0019,
+            "material.albedo.color_map.0.1.color_map.1.1.color_map.0.0": 0.1893,
+            "material.albedo.color_map.0.1.color_map.1.1.color_map.1.0": 1.0045,
+            "material.albedo.color_map.1.1.color_map.0.0": -0.1082,
+            "material.albedo.color_map.1.1.color_map.1.0": 1.6929,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.0.0": -0.1009,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.0": 0.9078
           }
         }
       }
     ],
-    "scale": 0.9865
+    "scale": 0.8414
   },
   "stony_bank": {
     "show": "landscape",

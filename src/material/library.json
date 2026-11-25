@@ -10461,36 +10461,54 @@
         ],
         "fit": {
           "loss": {
-            "start": 0.649952,
-            "fitted": 0.049067
+            "start": 208.132121,
+            "fitted": 3.071273
           },
-          "iterations": 20,
+          "iterations": 60,
           "resolution": 128,
-          "samples": 8,
-          "date": "2026-11-24",
-          "applied": true,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-25",
+          "applied": false,
           "values": {
-            "scale": 1.1873,
+            "scale": 0.7004,
             "variables.rock": [
-              0.1473,
-              0.1133,
-              0.0746
+              0.1464,
+              0.1131,
+              0.0748
             ],
             "variables.rock2": [
-              0.1704,
-              0.1289,
-              0.0797
+              0.143,
+              0.1242,
+              0.0796
             ],
             "variables.rust": [
-              0.1879,
-              0.102,
-              0.0479
+              0.1347,
+              0.0872,
+              0.0454
             ],
             "variables.streak": [
-              0.0525,
-              0.0572,
-              0.0541
-            ]
+              0.0665,
+              0.0578,
+              0.0378
+            ],
+            "variables.foliation.wavelength": 0.015,
+            "variables.foliation.spread": 0.4498,
+            "variables.break.amount": 0.153,
+            "variables.break.scale": 0.089,
+            "variables.break.input.scale": 0.0766,
+            "variables.break.input.smallest": 0.0025,
+            "variables.tone.scale": 0.2511,
+            "variables.tone.smallest": 0.0319,
+            "variables.tone.roughness": 0.5474,
+            "material.albedo.pattern.inputs.0.inputs.0": 0.2449,
+            "material.albedo.pattern.inputs.1.inputs.0": 1.746,
+            "material.albedo.color_map.0.0": -1.0809,
+            "material.albedo.color_map.1.0": -0.062,
+            "material.albedo.color_map.2.0": 0.2377,
+            "material.albedo.color_map.2.1.color_map.0.0": -0.6626,
+            "material.albedo.color_map.2.1.color_map.1.0": -0.2541,
+            "material.albedo.color_map.2.1.color_map.2.0": 0.0013
           }
         }
       }
@@ -10685,36 +10703,55 @@
         ],
         "fit": {
           "loss": {
-            "start": 0.631842,
-            "fitted": 0.001076
+            "start": 38.20436,
+            "fitted": 1.572367
           },
-          "iterations": 20,
+          "iterations": 60,
           "resolution": 128,
-          "samples": 8,
-          "date": "2026-11-24",
-          "applied": true,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-25",
+          "applied": false,
           "values": {
-            "scale": 0.7854,
+            "scale": 1.0412,
             "variables.light": [
-              0.3571,
-              0.3166,
-              0.2338
+              0.3662,
+              0.3167,
+              0.2282
             ],
             "variables.mid": [
-              0.2423,
-              0.2167,
-              0.1633
+              0.2338,
+              0.2227,
+              0.1794
             ],
             "variables.dark": [
-              0.0983,
-              0.0889,
-              0.0712
+              0.0367,
+              0.0315,
+              0.0176
             ],
             "variables.sand": [
-              0.2616,
-              0.2252,
-              0.1551
-            ]
+              0.1789,
+              0.1368,
+              0.0778
+            ],
+            "variables.edges.amount": 0.0076,
+            "variables.id.amount": 0.0076,
+            "variables.edges.scale": 0.0059,
+            "variables.id.scale": 0.0059,
+            "variables.edges.input.scale": 0.033,
+            "variables.id.input.scale": 0.033,
+            "variables.drift.scale": 0.3086,
+            "variables.drift.smallest": 0.0113,
+            "material.albedo.color_map.0.0": 0.0559,
+            "material.albedo.color_map.1.0": 0.0956,
+            "material.albedo.color_map.2.0": 0.1352,
+            "material.albedo.color_map.0.1.color_map.0.0": -0.3167,
+            "material.albedo.color_map.0.1.color_map.1.0": 0.2937,
+            "material.albedo.color_map.2.1.pattern.inputs.0.inputs.0": 1.1957,
+            "material.albedo.color_map.2.1.pattern.inputs.1.inputs.0": 0.7792,
+            "material.albedo.color_map.2.1.color_map.0.0": -0.7224,
+            "material.albedo.color_map.2.1.color_map.1.0": 0.2447,
+            "material.albedo.color_map.2.1.color_map.2.0": 1.098
           }
         }
       }
@@ -10938,36 +10975,64 @@
         ],
         "fit": {
           "loss": {
-            "start": 0.4308,
-            "fitted": 0.063767
+            "start": 86.057543,
+            "fitted": 1.0931
           },
-          "iterations": 20,
+          "iterations": 60,
           "resolution": 128,
-          "samples": 8,
-          "date": "2026-11-24",
-          "applied": true,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-25",
+          "applied": false,
           "values": {
-            "scale": 0.9051,
+            "scale": 0.8182,
             "variables.rock": [
-              0.0111,
-              0.0092,
-              0.008
+              0.0083,
+              0.0058,
+              0.0051
             ],
             "variables.rock2": [
-              0.036,
-              0.0288,
-              0.0236
+              0.0273,
+              0.0231,
+              0.0207
             ],
             "variables.stain_colour": [
-              0.0789,
-              0.0495,
-              0.03
+              0.0666,
+              0.0457,
+              0.0264
             ],
             "variables.vein": [
-              0.1515,
-              0.1549,
-              0.1194
-            ]
+              0.0095,
+              0.0078,
+              0.0063
+            ],
+            "variables.veins.input.amount": 0.016,
+            "variables.veins.input.scale": 0.1365,
+            "variables.veins.input.input.scale": 0.0699,
+            "variables.veins.input.input.smallest": 0.0055,
+            "variables.veins.input.input.roughness": 0.6679,
+            "variables.fractures.inputs.0.from": 0.1586,
+            "variables.fractures.inputs.0.input.scale.0": 34.339,
+            "variables.fractures.inputs.0.input.scale.2": 16.151,
+            "variables.fractures.inputs.0.input.input.amount": 0.0035,
+            "variables.fractures.inputs.0.input.input.scale": 0.1803,
+            "variables.fractures.inputs.0.input.input.input.scale": 0.3706,
+            "variables.fractures.inputs.1.from": -0.1995,
+            "variables.fractures.inputs.1.to": -0.1055,
+            "variables.fractures.inputs.1.input.scale": 0.8175,
+            "variables.stain.from": -0.0496,
+            "variables.stain.to": 0.2675,
+            "variables.stain.input.scale": 0.174,
+            "variables.stain.input.smallest": 0.0067,
+            "material.albedo.pattern.inputs.1.from": 0.1624,
+            "material.albedo.color_map.0.0": -0.7024,
+            "material.albedo.color_map.1.0": 1.2258,
+            "material.albedo.color_map.0.1.color_map.0.0": -0.1986,
+            "material.albedo.color_map.0.1.color_map.1.0": 1.7768,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.scale": 0.0253,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.smallest": 0.005,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.0": -0.1704,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.0": 0.4366
           }
         }
       }
@@ -11152,31 +11217,49 @@
         ],
         "fit": {
           "loss": {
-            "start": 0.557049,
-            "fitted": 0.001762
+            "start": 32.855377,
+            "fitted": 1.886275
           },
-          "iterations": 20,
+          "iterations": 60,
           "resolution": 128,
-          "samples": 8,
-          "date": "2026-11-24",
-          "applied": true,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-25",
+          "applied": false,
           "values": {
-            "scale": 0.951,
+            "scale": 0.7902,
             "variables.rock": [
-              0.1629,
-              0.1276,
-              0.0999
+              0.1584,
+              0.124,
+              0.0903
             ],
             "variables.rock2": [
-              0.1912,
-              0.153,
-              0.121
+              0.2312,
+              0.1909,
+              0.1469
             ],
             "variables.pit": [
-              0.0737,
-              0.07,
-              0.0642
-            ]
+              0.0974,
+              0.0845,
+              0.0666
+            ],
+            "variables.tone.inputs.0.scale": 0.3162,
+            "variables.tone.inputs.0.smallest": 0.0056,
+            "variables.tone.inputs.0.roughness": 0.7356,
+            "variables.tone.inputs.1.inputs.0": 0.1861,
+            "variables.tone.inputs.1.inputs.1.scale": 0.465,
+            "variables.tone.inputs.1.inputs.1.smallest": 0.0087,
+            "variables.grain.scale": 0.0117,
+            "variables.pits.inputs.0.from": 0.4189,
+            "variables.pits.inputs.0.to": 0.3439,
+            "variables.pits.inputs.0.input.scale": 0.008,
+            "variables.pits.inputs.1.to": 0.0446,
+            "variables.pits.inputs.1.input.scale": 1.0837,
+            "material.albedo.color_map.0.0": 0.0431,
+            "material.albedo.color_map.1.0": 0.5531,
+            "material.albedo.color_map.0.1.pattern.inputs.1.inputs.0": 0.8402,
+            "material.albedo.color_map.0.1.color_map.0.0": 0.0201,
+            "material.albedo.color_map.0.1.color_map.1.0": 0.8066
           }
         }
       }
@@ -11310,31 +11393,45 @@
         ],
         "fit": {
           "loss": {
-            "start": 0.560127,
-            "fitted": 0.003289
+            "start": 22.542599,
+            "fitted": 1.217373
           },
-          "iterations": 20,
+          "iterations": 60,
           "resolution": 128,
-          "samples": 8,
-          "date": "2026-11-24",
-          "applied": true,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-25",
+          "applied": false,
           "values": {
-            "scale": 1.3523,
+            "scale": 0.8651,
             "variables.pink": [
-              0.3058,
-              0.2043,
-              0.1299
+              0.5019,
+              0.3355,
+              0.2153
             ],
             "variables.grey": [
-              0.1887,
-              0.1623,
-              0.1131
+              0.1537,
+              0.1116,
+              0.0671
             ],
             "variables.dark": [
-              0.0649,
-              0.0541,
-              0.0373
-            ]
+              0.061,
+              0.0489,
+              0.0328
+            ],
+            "variables.blotch.amount": 0.0795,
+            "variables.blotch.scale": 0.0332,
+            "variables.blotch.input.scale": 0.0491,
+            "variables.blotch.input.smallest": 0.0151,
+            "variables.blotch.input.roughness": 0.7511,
+            "variables.crystals.amount": 0.0019,
+            "variables.crystals.scale": 0.0241,
+            "variables.crystals.input.scale": 0.0032,
+            "material.albedo.pattern.inputs.1.inputs.0": 0.482,
+            "material.albedo.color_map.0.0": -0.6989,
+            "material.albedo.color_map.1.0": -0.3061,
+            "material.albedo.color_map.2.0": 0.0867,
+            "material.albedo.color_map.3.0": 0.5777
           }
         }
       }

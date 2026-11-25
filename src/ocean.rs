@@ -1341,12 +1341,30 @@ pub struct Surf {
     pub depth: Depth,
     pub hrms: f64,
     pub omega: f64,
+    /// The sea's waves (as its surface has them), whose crests break where they are too high
+    /// for the water under them.
+    pub waves: Option<std::sync::Arc<WaveField>>,
 }
 
 impl Surf {
     /// The fraction of waves breaking at `p`: the waves there as tall as shoaling makes them.
     pub fn breaking(&self, p: &Vector3<f64>) -> f64 {
         (self.depth)(p).map_or(0., |d| breaking_fraction(self.hrms * shoaling(self.omega, d), d))
+    }
+
+    /// The white water at `p`, 0 to 1, and the fraction of waves breaking there: where the sea's
+    /// own crest there, grown by shoaling, is too high for the water under it (a wave twice
+    /// the crest's height, at least McCowan's 0.78 of the depth), so it lies along the crests
+    /// that are breaking, as a surf zone does; softened over a tenth of that either side. In
+    /// the shallowest water every crest breaks. Without the waves, the fraction breaking.
+    pub fn white(&self, p: &Vector3<f64>) -> (f64, f64) {
+        let Some(d) = (self.depth)(p) else { return (0., 0.) };
+        let ks = shoaling(self.omega, d);
+        let breaking = breaking_fraction(self.hrms * ks, d);
+        if breaking <= 0. { return (0., 0.); }
+        let Some(waves) = &self.waves else { return (breaking, breaking) };
+        let crest = ks * waves.full_height(p.x, p.z);
+        (crate::math::smoothstep(0.9, 1.1, 2. * crest / (BREAKING_INDEX * d.max(1e-3))), breaking)
     }
 }
 
@@ -1729,8 +1747,8 @@ impl MaterialModel for PhysicalOcean {
         // The surf: where waves break over the shallows, white water over that fraction of the
         // sea, as fresh foam.
         if let Some(surf) = &self.surf {
-            let breaking = surf.breaking(&intersection.point);
-            if breaking > 0. && geometry::rand() < breaking {
+            let (white, breaking) = surf.white(&intersection.point);
+            if white > 0. && geometry::rand() < white {
                 let albedo = self.foam.as_ref().map_or(Color::new(0.6, 0.6, 0.6), |f| f.albedo).as_reflectance();
                 let normal = if up.dot(&v) > 0. { up } else { -up };
                 return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal }, r, &intersection.point, s);
@@ -1880,7 +1898,7 @@ pub fn create_ocean_over(opts: &Value, ground: Option<std::sync::Arc<crate::scen
             let omega = (2. * std::f64::consts::PI * 9.81 / jonswap_peak(wind.norm(), fetch.min(1e12))).sqrt();
             let centre = planet_radius.map(|r| Vector3::new(0., -r, 0.));
             let (above, reach) = (200., 2000.);
-            m.surf = Some(Surf { hrms, omega, depth: std::sync::Arc::new(move |p: &Vector3<f64>| {
+            m.surf = Some(Surf { hrms, omega, waves: Some(std::sync::Arc::new(waves_of(opts))), depth: std::sync::Arc::new(move |p: &Vector3<f64>| {
                 // Sea level under `p`, and the ground below it.
                 let (up, level) = match centre {
                     Some(c) => { let u = (p - c).normalize(); (u, c + u * (-c.y)) },
@@ -2043,6 +2061,27 @@ mod curved_tests {
         let h: f64 = 0.05;
         let green = (9.81 / (2. * omega) / (9.81 * h).sqrt()).sqrt();
         assert!((shoaling(omega, h) / green - 1.).abs() < 0.02, "{} vs {}", shoaling(omega, h), green);
+    }
+
+    #[test]
+    fn test_crests_break_where_too_high_for_the_water() {
+        // The sea of a 7 m/s wind over water of a constant depth: white along the crests where
+        // twice their height (shoaled) reaches 0.78 of the depth; none out at sea, more the
+        // shallower it gets, and in water as deep as the waves are high, only the crests (not
+        // the troughs, about half the sea).
+        let wind = Vector2::new(7., 2.);
+        let waves = std::sync::Arc::new(WaveField::sea(wind, 0., 1, SeaState::default()));
+        let (_, sd) = waves.height_exceeded(0.5);
+        let omega = (2. * std::f64::consts::PI * 9.81 / jonswap_peak(wind.norm(), 1e12)).sqrt();
+        let white = |depth: f64| {
+            let surf = Surf { depth: std::sync::Arc::new(move |_| Some(depth)), hrms: 4. * sd / 2f64.sqrt(), omega, waves: Some(waves.clone()) };
+            let n = 4000;
+            (0..n).map(|i| surf.white(&Vector3::new(1.37 * i as f64, 0., 0.71 * (i % 97) as f64)).0).sum::<f64>() / n as f64
+        };
+        let shares: Vec<f64> = [20., 3., 1.5, 0.8, 0.3].iter().map(|&d| white(d)).collect();
+        assert_eq!(shares[0], 0.);
+        assert!(shares.windows(2).all(|w| w[0] <= w[1]), "{:?}", shares);
+        assert!(shares[4] > 0.3 && shares[4] < 0.7, "{:?}", shares);
     }
 
     #[test]

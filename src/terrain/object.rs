@@ -689,9 +689,9 @@ pub fn above_ground(o: &Value, points: &[Vector3<f64>]) -> Option<Vec<Vector3<f6
     };
     let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
     let frame = world.frame.clone();
-    let World { planet, globe, patches, .. } = world;
+    let World { planet, globe, patches, close: close_level, .. } = world;
     let finest = finest_spacing(o, &patches);
-    let layers = Layer::of_world(patches, globe, p.min_river_width);
+    let layers = Layer::of_world(patches, globe, close_level, p.min_river_width);
     let relief = Relief::new(Arc::new(layers), &planet, radius, p.roughness, finest);
     Some(points.iter().map(|q| {
         let (d, _) = frame.on_planet(&Vector3::new(q.x, 0., q.z));
@@ -780,8 +780,8 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
                 cells as f64 * spacing * spacing / 1e6, t.ice[i], at.x, at.y, at.z));
         }
     }
-    let World { planet, climate, globe, patches, .. } = world;
-    let built = Layer::of_world(patches, globe, p.min_river_width);
+    let World { planet, climate, globe, patches, close: close_level, .. } = world;
+    let built = Layer::of_world(patches, globe, close_level, p.min_river_width);
 
     let start = web_time::Instant::now();
     if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }

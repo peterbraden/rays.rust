@@ -310,16 +310,15 @@ impl Layer {
 
     fn class_at(&self, d: &Vector3<f64>) -> u8 { self.class[self.domain.cell_at(d)] }
 
-    /// The layers of a world's `patches` (finest first) and its `globe`, each patch taking the
-    /// closed basins of the one around it (`SimFields::take_basins`), coarsest first, so a
-    /// playa or salt lake carries on across the patches' edges.
-    pub fn of_world(patches: Vec<Terrain>, globe: Option<Terrain>, min_river_width: f64) -> Vec<Layer> {
+    /// The layers of a world's `patches` (finest first) and its `globe`; a close level
+    /// (`close`, the finest) drawn with the closed basins of the patch around it
+    /// (`SimFields::take_basins`).
+    pub fn of_world(patches: Vec<Terrain>, globe: Option<Terrain>, close: bool, min_river_width: f64) -> Vec<Layer> {
         let n = patches.len();
         let mut layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, min_river_width)).collect();
-        for k in (0..n.saturating_sub(1)).rev() {
-            let (fine, coarse) = layers.split_at_mut(k + 1);
-            let (fine, around) = (&mut fine[k], &coarse[0]);
-            fine.fields.take_basins(&fine.domain, &around.fields, &around.domain);
+        if close && n >= 2 {
+            let (fine, around) = layers.split_at_mut(1);
+            fine[0].fields.take_basins(&fine[0].domain, &around[0].fields, &around[0].domain);
         }
         layers
     }

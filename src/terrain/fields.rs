@@ -113,14 +113,15 @@ impl SimFields {
         }
     }
 
-    /// Take the closed basins of `around`, the fields of the coarser patch around this one on
-    /// `domain`: its playas and terminal lakes wherever they are more than this one's own. A
-    /// patch's edges are outlets, so a basin that crosses one drains out of the finer patch,
-    /// and would end at its edge.
+    /// Take the closed basins of `around`, the fields of the patch around this one on
+    /// `domain`, in place of its own: a close level's. Its edges are outlets, so a basin that
+    /// crosses one drains out of it, and its simulation holds its edges at their first
+    /// heights while the ground inside wears down, so water ponds behind them: its own
+    /// basins end in a square, and line its edges with lakes.
     pub fn take_basins(&mut self, domain: &Domain, around: &SimFields, around_domain: &Domain) {
         for (k, c) in domain.corners.iter().enumerate() {
-            self.playa[k] = self.playa[k].max(sample(around_domain, &around.playa, c));
-            self.salt_lake[k] = self.salt_lake[k].max(sample(around_domain, &around.salt_lake, c));
+            self.playa[k] = sample(around_domain, &around.playa, c);
+            self.salt_lake[k] = sample(around_domain, &around.salt_lake, c);
         }
     }
 

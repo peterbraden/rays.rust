@@ -475,6 +475,8 @@ pub struct World {
     pub globe: Option<Terrain>,
     /// The patches, finest first.
     pub patches: Vec<Terrain>,
+    /// Whether the finest patch is a close level (`close_level`).
+    pub close: bool,
     pub manifest: Manifest,
     /// Where the manifest is, if there is a directory.
     pub manifest_path: Option<PathBuf>,
@@ -795,7 +797,9 @@ fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&
         // only run on the finest, where they are drawn.
         b.patch(d, &d.patch_name(k), l, (k == 0, k == 0), &centre, &frame, &mut outer, &mut built)?;
     }
+    let mut close = false;
     if let (Some(l), Some(camera)) = (close_level(d, &frame, built.last()), &d.close) {
+        close = true;
         let centre = camera.centre(&frame, 0.25 * l.cells as f64 * l.spacing);
         // Its glaciers are the finest level's: ice moving over cells this fine needs steps
         // too short to run (25 times as many as there for the same cells), and the ice's
@@ -810,7 +814,7 @@ fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&
     let globe = d.planet_cells.map(|_| patches.remove(0));
     patches.reverse();
     let manifest_path = b.manifest_file.as_deref().and_then(|f| b.store.path(f));
-    Ok(World { site, frame, planet, climate, globe, patches, manifest: b.manifest, manifest_path })
+    Ok(World { site, frame, planet, climate, globe, patches, close, manifest: b.manifest, manifest_path })
 }
 
 /// The close level `d` adds (`Description::close_level`), if its focus is a camera within
@@ -838,18 +842,13 @@ fn take_shape(close: &mut Terrain, around: &Terrain, finer: f64) {
         .collect();
     // Two box filters a cell of the patch around wide: a tent, smooth enough not to show.
     let r = (finer / 2.).round().max(1.) as isize;
-    let raw = diff.clone();
     for _ in 0..2 {
         diff = box_filter(&diff, n, r);
     }
-    // At its edges it is the patch around exactly, so the two meet without a step, its own
-    // relief growing in over the next two cells of that patch.
-    let fade = 2. * finer;
-    for (i, (b, (d, raw))) in close.bed.iter_mut().zip(diff.iter().zip(&raw)).enumerate() {
-        let (x, z) = (i % n, i / n);
-        let edge = x.min(z).min(n - 1 - x).min(n - 1 - z) as f64;
-        let w = crate::procedural::nubis_clouds::smoothstep(0., fade, edge);
-        *b += raw + w * (d - raw);
+    // (Not matched exactly at its edges: that would dam the valleys its rivers cut out
+    // through them, leaving lakes along the edges. The patches blend into each other there.)
+    for (b, d) in close.bed.iter_mut().zip(&diff) {
+        *b += d;
     }
 }
 
@@ -981,7 +980,7 @@ mod tests {
             cells.iter().map(|&i| surface[i] - outer[i]).sum::<f64>() / cells.len() as f64
         };
         let (whole, edges) = (offset(&|_| true), offset(&|i| close.domain.boundary[i]));
-        assert!(whole.abs() < 3. && edges.abs() < 0.01, "{} {}", whole, edges);
+        assert!(whole.abs() < 3. && edges.abs() < 15., "{} {}", whole, edges);
         // A constant is its own average.
         assert!(box_filter(&vec![2.; 25], 5, 2).iter().all(|&v| (v - 2.).abs() < 1e-12));
     }

@@ -481,14 +481,24 @@ class PaletteLoss:
       of the pair (total variation between the two images' matrices). The colours in the
       wrong places, the wrong grain, stones without their dark rims.
 
-    A candidate of the wrong colours falls mostly into one or two entries, and its shares say
-    so; one whose stones are the right colours but the wrong size, its instances."""
+    - `spectra`: the power spectra of the colour itself, Oklab's lightness and both opponent
+      axes in units of the just noticeable difference (not normalised, so how much the colour
+      changes at each size counts as well as at which sizes it does), in half-octave bands,
+      compared as logarithms: the sizes over which the colour changes, the grain's included,
+      where `StructureLoss`'s spectrum sees only the shape of lightness's.
+    - `entry_spectra`: the same for each entry's indicator (1 where the entry is, 0 elsewhere),
+      weighed by its share: the sizes over which each colour comes and goes, and the
+      sharpness of its edges (a soft-edged blob has less power at the finest bands than a
+      crisp flake of the same size).
 
-    WEIGHTS = {"share": 4., "instances": 1., "adjacency": 2.}
+    A candidate of the wrong colours falls mostly into one or two entries, and its shares say
+    so; one whose stones are the right colours but the wrong size, its instances and spectra."""
+
+    WEIGHTS = {"share": 4., "instances": 1., "adjacency": 2., "spectra": 1., "entry_spectra": 1.}
     OFFSETS = (1, 3, 9)
     BINS = np.arange(0., 15.)  # log2 of a patch's area in pixels
 
-    def __init__(self, k=6, parts=("share", "instances", "adjacency"), seed=1):
+    def __init__(self, k=6, parts=("share", "instances", "adjacency", "spectra", "entry_spectra"), seed=1):
         self.k, self.parts, self.seed = k, parts, seed
         self.cache = {}
 
@@ -557,7 +567,31 @@ class PaletteLoss:
         if "adjacency" in self.parts:
             out["adjacency"] = float(np.mean([0.5 * np.abs(self.cooccurrence(ca, d) - self.cooccurrence(cb, d)).sum()
                                               for d in self.OFFSETS]))
+        if "spectra" in self.parts:
+            # Not smoothed: the finest band is the grain's.
+            fa, fb = oklab(a) / JND, oklab(b) / JND
+            out["spectra"] = float(np.mean([np.mean((self.log_spectrum(fa[:, :, c], 1e-3) - self.log_spectrum(fb[:, :, c], 1e-3)) ** 2)
+                                            for c in range(3)]))
+        if "entry_spectra" in self.parts:
+            t, total = 0., 0.
+            for j in range(self.k):
+                ia, ib = (ca == j).astype(np.float64), (cb == j).astype(np.float64)
+                w = 0.5 * (ia.mean() + ib.mean())
+                if w > 0:
+                    t += w * np.mean((self.log_spectrum(ia, 1e-5) - self.log_spectrum(ib, 1e-5)) ** 2)
+                    total += w
+            out["entry_spectra"] = float(t / max(total, 1e-9))
         return {k: self.WEIGHTS[k] * v for k, v in out.items()}
+
+    @staticmethod
+    def log_spectrum(x, eps):
+        """Half-octave bands of x's power spectrum (less its mean), as StructureLoss's."""
+        h, w = x.shape
+        p = np.abs(np.fft.fft2(x - x.mean())) ** 2 / (h * w)
+        fy, fx = np.meshgrid(np.fft.fftfreq(h), np.fft.fftfreq(w), indexing="ij")
+        r = np.hypot(fx, fy)
+        edges = 0.5 * 2. ** -np.arange(0., np.log2(min(h, w) / 8.) + 0.25, 0.5)[::-1]
+        return np.log(np.array([p[(r >= lo) & (r < hi)].mean() for lo, hi in zip(edges[:-1], edges[1:])]) + eps)
 
     def __call__(self, a, b):
         return sum(self.parts_of(a, b).values())
@@ -603,7 +637,8 @@ class FloorLoss:
     # family's `parts_of` units.
     TYPICAL = {"colour.mean": 0.0531, "colour.spread": 0.0118, "colour.binding": 0.0107,
                "structure.bank": 0.000626, "structure.spectrum": 0.021,
-               "palette.share": 0.3975, "palette.instances": 0.6878, "palette.adjacency": 0.2594}
+               "palette.share": 0.3975, "palette.instances": 0.6878, "palette.adjacency": 0.2594,
+               "palette.spectra": 0.0961, "palette.entry_spectra": 0.0514}
     GUARD = 0.25
 
     def __init__(self, tiles, power=2.):

@@ -215,7 +215,9 @@ fn bend(nodes: &[Node], seed: u64) -> Vec<Node> {
     let mut out = nodes.to_vec();
     for j in 0..nodes.len() {
         let n = &nodes[j];
-        let lambda = MEANDER_WAVELENGTH * 2. * n.half;
+        // (A node dry at the mean flow is taken as a metre wide: its wavelength would be none,
+        // and the phase past it infinite, every point beyond NaN.)
+        let lambda = MEANDER_WAVELENGTH * 2. * n.half.max(0.5);
         if j > 0 { phase += TAU * (along[j] - along[j - 1]) / lambda; }
         if n.meanders { continue; }
         // From sinuosity P: πa/λ = √(P - 1).
@@ -1085,6 +1087,15 @@ mod tests {
     use super::*;
 
     fn node(x: f64, z: f64) -> Node { Node { p: [x, z], half: 5., depth: 1., freeboard: 0.5, bed: 0., slope: 1e-3, meanders: false, grain: 0.01, turbidity: 0., froude: 0.3, discharge: 1. } }
+
+    #[test]
+    fn test_a_dry_reach_bends_without_nan() {
+        // A course with a stretch dry at the mean flow (no water, so no width) bends finitely.
+        let mut n: Vec<Node> = (0..=400).map(|x| node(x as f64 * 5., 0.)).collect();
+        for k in 100..120 { n[k].half = 0.; }
+        let b = bend(&n, 7);
+        assert!(b.iter().all(|x| x.p[0].is_finite() && x.p[1].is_finite()));
+    }
 
     #[test]
     fn test_bends_give_the_sinuosity_and_keep_the_ends() {

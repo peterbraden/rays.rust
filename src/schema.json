@@ -7810,6 +7810,13 @@
           "doc": "0 for trees spread evenly, up to 1 for clumps with open ground between."
         },
         {
+          "name": "placement",
+          "kind": "enum",
+          "default": "darts",
+          "options": ["darts", "grid"],
+          "doc": "darts: each tree kept its spacing from the rest; grid: one candidate per cell of the closest spacing, as thick but thirty times cheaper, for trees far off."
+        },
+        {
           "name": "max_slope",
           "kind": "number",
           "default": 35,

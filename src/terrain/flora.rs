@@ -352,11 +352,13 @@ pub fn shares(samples: &[Vec<(&'static Community, f64)>]) -> Vec<(&'static Commu
     out
 }
 
-/// Off what nothing roots in (glacier ice, drifting sand, playas), and sparse on bare rock: a
-/// fifth as thick where there is no soil, as plants hold on only in its cracks.
+/// Off what nothing roots in (glacier ice, drifting sand, playas), and sparse on bare rock:
+/// 40% as thick where the soil is thin on a steep slope, where rock shows and plants hold on
+/// only in its cracks. (Not on every thin soil: forests cover thin-soiled slopes.)
 fn rooted() -> [Value; 4] {
     let none_on = |field: &str, from: f64, to: f64| json!({"node": "field", "field": field, "from": from, "to": to});
-    let soil = json!({"node": "add", "inputs": [0.2, {"node": "multiply", "inputs": [0.8, none_on("sediment", 0.05, 0.5)]}]});
+    let bare = json!({"node": "multiply", "inputs": [-0.6, none_on("sediment", 0.5, 0.05), {"node": "slope", "from": 25, "to": 40}]});
+    let soil = json!({"node": "add", "inputs": [1, bare]});
     [none_on("ice", 2., 0.5), none_on("sand", 2., 0.5), none_on("playa", 0.5, 0.1), soil]
 }
 
@@ -365,68 +367,107 @@ fn sum(terms: Vec<Value>) -> Value {
     if terms.len() == 1 { terms.into_iter().next().unwrap() } else { json!({"node": "add", "inputs": terms}) }
 }
 
-/// The populations of an ecosystem with `"flora"` for the communities `present` about the
-/// camera, and the materials they name: a forest of each plant of those communities (each
-/// stunted height a population of its own), trees then shrubs, and a grass of each
-/// community's ground plants. `strata` picks which: "trees", "shrubs" and "ground". Trees grow
-/// `reach` metres out from under the camera, shrubs half as far, each thinning out over the
-/// last third of it, so the woods have no edge to see.
-pub fn populations(present: &[&'static Community], strata: &[&str], seed: u64, reach: f64) -> (Vec<Value>, Map<String, Value>) {
+/// Where trees and shrubs stand at all: ground no steeper than `max_slope`, rooted, trees below
+/// the treeline (the biome's edge, which wanders, besides) and shrubs below the snow.
+fn ground_rule(stratum: Stratum, max_slope: f64) -> Vec<Value> {
+    let mut rule = vec![json!({"node": "slope", "from": max_slope, "to": max_slope - 10.})];
+    rule.extend(rooted());
+    rule.push(match stratum {
+        Tree => json!({"node": "field", "field": "treeline", "from": 50, "to": -150}),
+        Shrub => json!({"node": "field", "field": "snowline", "from": -100, "to": -300}),
+    });
+    rule
+}
+
+/// The forest's entry for plant `p`, `weight` of its trees, perhaps stunted to `height`, its
+/// materials added to `materials`.
+fn species_entry(p: &Plant, weight: f64, height: Option<f64>, materials: &mut Map<String, Value>) -> Value {
+    let (b, l) = (format!("FLORA_{}_BARK", p.species), format!("FLORA_{}_LEAVES", p.species));
+    materials.insert(b.clone(), json!({"type": "lambertian", "albedo": p.bark}));
+    let succulent = matches!(p.species, "saguaro" | "barrel-cactus" | "prickly-pear" | "agave");
+    materials.insert(l.clone(), if succulent {
+        json!({"type": "lambertian", "albedo": p.leaves})
+    } else {
+        json!({"type": "leaf", "reflectance": p.leaves, "transmittance": p.leaves.map(|c| c * 0.5), "roughness": 0.4})
+    });
+    // Stunted, they crowd closer, in proportion to how much they shrank.
+    let spacing = match height { Some(h) => p.spacing * (h / 2.).clamp(0.3, 1.), None => p.spacing };
+    let mut e = json!({"species": p.species, "weight": weight, "spacing": spacing, "bark": b, "leaves": l});
+    if let Some(h) = height { e["params"] = json!({"scale": h, "scale_v": 0.3 * h}); }
+    e
+}
+
+/// What an ecosystem with `"flora"` grows about the camera at (`cx`, `cz`), for the
+/// communities `present` there, and the materials they name; trees first, then shrubs, then
+/// the ground's plants (`strata` picks which: "trees", "shrubs" and "ground"):
+///
+/// - each community's trees, as one forest of their species weighted by their abundance (so
+///   that its plants mix as the community says, and it is as thick as the community's woods,
+///   `woods`): out to `reach` metres from the camera by dart throwing, thinning out over the
+///   last third of it, and from there out to `far` metres on a grid (`ForestLayout::grid`), its
+///   trees fading in as the near ones thin out, and thinning out in turn over the last third;
+/// - each community's shrubs, out to half the reach (stunted where it stunts them);
+/// - each plant of wet ground (willows, alders, mesquite), only where water gathers;
+/// - each community's ground plants, 30 m out.
+pub fn populations(present: &[&'static Community], strata: &[&str], seed: u64, reach: f64, far: f64, (cx, cz): (f64, f64))
+    -> (Vec<Value>, Map<String, Value>)
+{
     let mut out = vec![];
     let mut materials = Map::new();
     for (stratum, name) in [(Tree, "trees"), (Shrub, "shrubs")] {
         if !strata.contains(&name) { continue; }
-        for p in PLANTS.iter().filter(|p| p.stratum == stratum) {
-            // The communities it grows in, by how tall it grows there (stunted shrubs).
-            let mut heights: Vec<Option<f64>> = vec![];
-            for c in present {
-                let h = if stratum == Shrub { c.stunted } else { None };
-                if c.plants.iter().any(|(s, _)| *s == p.species) && !heights.contains(&h) { heights.push(h); }
+        for c in present {
+            let height = if stratum == Shrub { c.stunted } else { None };
+            let plants: Vec<(&Plant, f64)> = c.plants.iter()
+                .filter_map(|(s, a)| plant_named(s).map(|p| (p, *a)))
+                .filter(|(p, _)| p.stratum == stratum && !p.wet)
+                .collect();
+            if plants.is_empty() { continue; }
+            let thickness = plants.iter().map(|(_, a)| a).sum::<f64>().min(1.);
+            let max_slope = plants.iter().map(|(p, _)| p.max_slope).fold(0., f64::max);
+            let mean_spacing = plants.iter().map(|(p, a)| p.spacing * a).sum::<f64>() / plants.iter().map(|(_, a)| a).sum::<f64>();
+            let species: Vec<Value> = plants.iter().map(|(p, a)| species_entry(p, *a, height, &mut materials)).collect();
+            let mut rule = vec![weight(c), json!(thickness)];
+            rule.extend(ground_rule(stratum, max_slope));
+            let forest = |reach: f64, fade: f64, grid: bool, rule: Vec<Value>| json!({"forest": {
+                "reach": reach, "fade": fade, "spacing": c.crowding, "clustering": if stratum == Tree { 0.25 } else { 0.45 },
+                "placement": if grid { "grid" } else { "darts" },
+                "clearings": 0.1, "patch_size": 30. * mean_spacing, "patchiness": 0.5,
+                "max_slope": max_slope, "variants": 3, "lod": true,
+                "species": species,
+                "where": {"node": "multiply", "inputs": rule},
+            }});
+            match stratum {
+                Tree => {
+                    out.push(forest(reach, 0.3, false, rule.clone()));
+                    if far > reach {
+                        // Beyond the near trees, fading in as they thin out.
+                        let mut beyond = rule;
+                        beyond.push(json!({"node": "smoothstep", "from": 0.7 * reach, "to": reach,
+                            "input": {"node": "rings", "center": [cx, 0, cz], "axis": [0, 1, 0], "scale": 1}}));
+                        out.push(forest(far, 0.3, true, beyond));
+                    }
+                },
+                Shrub => out.push(forest(0.5 * reach, 0.3, false, rule)),
             }
-            for height in heights {
-                let growing = || present.iter()
-                    .filter(|c| (if stratum == Shrub { c.stunted } else { None }) == height)
-                    .filter(|c| c.plants.iter().any(|(s, _)| *s == p.species));
-                // As close as the most crowded of them.
-                let crowding = growing().map(|c| c.crowding).fold(1., f64::min);
-                let terms: Vec<Value> = present.iter()
-                    .filter(|c| (if stratum == Shrub { c.stunted } else { None }) == height)
-                    .filter_map(|c| c.plants.iter().find(|(s, _)| *s == p.species).map(|&(_, a)| (c, a)))
-                    .map(|(c, a)| json!({"node": "multiply", "inputs": [weight(c), a]}))
-                    .collect();
-                let mut rule = vec![sum(terms), json!({"node": "slope", "from": p.max_slope, "to": p.max_slope - 10.})];
-                rule.extend(rooted());
-                // Trees stop at the treeline (the biome's edge, which wanders, besides); shrubs
-                // stop below the snow.
-                rule.push(match stratum {
-                    Tree => json!({"node": "field", "field": "treeline", "from": 50, "to": -150}),
-                    Shrub => json!({"node": "field", "field": "snowline", "from": -100, "to": -300}),
-                });
-                if p.wet { rule.push(json!({"node": "field", "field": "wetness", "from": 9, "to": 12})); }
-                let mut species = json!({"species": p.species, "weight": 1});
-                if let Some(h) = height { species["params"] = json!({"scale": h, "scale_v": 0.3 * h}); }
-                let (b, l) = (format!("FLORA_{}_BARK", p.species), format!("FLORA_{}_LEAVES", p.species));
-                materials.insert(b.clone(), json!({"type": "lambertian", "albedo": p.bark}));
-                let succulent = matches!(p.species, "saguaro" | "barrel-cactus" | "prickly-pear" | "agave");
-                materials.insert(l.clone(), if succulent {
-                    json!({"type": "lambertian", "albedo": p.leaves})
-                } else {
-                    json!({"type": "leaf", "reflectance": p.leaves, "transmittance": p.leaves.map(|c| c * 0.5), "roughness": 0.4})
-                });
-                species["bark"] = Value::from(b);
-                species["leaves"] = Value::from(l);
-                let reach = match stratum { Tree => reach, Shrub => 0.5 * reach };
-                // Stunted, they crowd closer, in proportion to how much they shrank.
-                let spacing = crowding * match height { Some(h) => p.spacing * (h / 2.).clamp(0.3, 1.), None => p.spacing };
-                // In clumps rather than evenly spread: groves and thickets, more so for shrubs.
-                let clustering = match stratum { Tree => 0.25, Shrub => 0.45 };
-                out.push(json!({"forest": {
-                    "reach": reach, "fade": 0.3, "spacing": spacing, "clustering": clustering, "clearings": 0.1, "patch_size": 30. * p.spacing, "patchiness": 0.5,
-                    "max_slope": p.max_slope, "variants": 3, "lod": true,
-                    "species": [species],
-                    "where": {"node": "multiply", "inputs": rule},
-                }}));
-            }
+        }
+        // Plants of wet ground, each its own population, summed over the communities it is in.
+        for p in PLANTS.iter().filter(|p| p.stratum == stratum && p.wet) {
+            let terms: Vec<Value> = present.iter()
+                .filter_map(|c| c.plants.iter().find(|(s, _)| *s == p.species).map(|&(_, a)| (c, a)))
+                .map(|(c, a)| json!({"node": "multiply", "inputs": [weight(c), a]}))
+                .collect();
+            if terms.is_empty() { continue; }
+            let mut rule = vec![sum(terms), json!({"node": "field", "field": "wetness", "from": 9, "to": 12})];
+            rule.extend(ground_rule(stratum, p.max_slope));
+            let entry = species_entry(p, 1., None, &mut materials);
+            out.push(json!({"forest": {
+                "reach": if stratum == Tree { reach } else { 0.5 * reach }, "fade": 0.3, "spacing": 1., "clustering": 0.45,
+                "clearings": 0.1, "patch_size": 30. * p.spacing, "patchiness": 0.5,
+                "max_slope": p.max_slope, "variants": 3, "lod": true,
+                "species": [entry],
+                "where": {"node": "multiply", "inputs": rule},
+            }}));
         }
     }
     if strata.contains(&"ground") {
@@ -545,33 +586,45 @@ mod tests {
     }
 
     /// The populations are those of the communities present only, trees before shrubs before
-    /// the ground, each rule parses, and a plant of two communities is one population (two
-    /// if stunted in one of them).
+    /// the ground; each community's trees one forest of their species, by abundance, near by
+    /// darts and far on a grid; its shrubs stunted where it stunts them; plants of wet ground
+    /// their own; and each rule parses.
     #[test]
     fn test_populations_follow_the_communities_present() {
         let named = |n: &str| COMMUNITIES.iter().find(|c| c.name == n).unwrap();
         let present = [named("spruce-fir forest"), named("pine heath"), named("dwarf-shrub heath")];
-        let (pops, materials) = populations(&present, &["trees", "shrubs", "ground"], 1, 300.);
+        let (pops, materials) = populations(&present, &["trees", "shrubs", "ground"], 1, 300., 3000., (0., 0.));
         let kinds: Vec<&str> = pops.iter().map(|p| if p.get("forest").is_some() { "forest" } else { "grass" }).collect();
         let first_grass = kinds.iter().position(|&k| k == "grass").unwrap();
         assert!(kinds[..first_grass].iter().all(|&k| k == "forest") && kinds[first_grass..].iter().all(|&k| k == "grass"));
         assert_eq!(kinds.len() - first_grass, 3);
-        let names: Vec<String> = pops.iter().filter_map(|p| p["forest"]["species"][0]["species"].as_str().map(String::from)).collect();
-        for n in ["norway-spruce", "balsam-fir", "scots-pine", "silver-birch", "grey-alder", "dwarf-birch"] {
-            assert!(names.contains(&n.to_string()), "{} missing from {:?}", n, names);
-        }
-        assert!(!names.contains(&"european-larch".to_string()) && !names.contains(&"saguaro".to_string()));
-        assert_eq!(names.iter().filter(|n| *n == "silver-birch").count(), 1);
-        // The heath's junipers are dwarfs, the forests' not.
-        let junipers: Vec<&Value> = pops.iter().filter(|p| p["forest"]["species"][0]["species"] == "juniper").collect();
-        assert_eq!(junipers.len(), 2);
-        assert_eq!(junipers.iter().filter(|p| p["forest"]["species"][0]["params"]["scale"] == json!(0.6)).count(), 1);
+        let forests: Vec<&Value> = pops.iter().filter_map(|p| p.get("forest")).collect();
+        let species = |f: &Value| -> Vec<String> { f["species"].as_array().unwrap().iter().map(|e| e["species"].as_str().unwrap().to_string()).collect() };
+        // The spruce-fir forest's trees, near and far, by their abundances.
+        let spruce: Vec<&&Value> = forests.iter().filter(|f| species(f).contains(&"norway-spruce".to_string())).collect();
+        assert_eq!(spruce.len(), 2);
+        assert_eq!(spruce.iter().filter(|f| f["placement"] == "grid").count(), 1);
+        assert_eq!(species(spruce[0]), vec!["norway-spruce", "balsam-fir", "silver-birch"]);
+        assert_eq!(spruce[0]["species"][0]["weight"], json!(0.7));
+        // Alders, of wet ground, alone; no larch, nor anything of another biome.
+        let all: Vec<String> = forests.iter().flat_map(|f| species(f)).collect();
+        assert!(forests.iter().any(|f| species(f) == vec!["grey-alder"]));
+        assert!(!all.contains(&"european-larch".to_string()) && !all.contains(&"saguaro".to_string()));
+        // Each community's shrubs its own: the heath's junipers dwarfs, the forests' not.
+        let junipers: Vec<&Value> = forests.iter().flat_map(|f| f["species"].as_array().unwrap().iter()).filter(|e| e["species"] == "juniper").collect();
+        assert_eq!(junipers.len(), 3);
+        assert_eq!(junipers.iter().filter(|e| e["params"]["scale"] == json!(0.6)).count(), 1);
         for p in &pops {
             let spec = p.get("forest").or(p.get("grass")).unwrap();
             Graph::parse(&spec["where"]).unwrap();
-            if let Some(b) = spec["species"][0]["bark"].as_str() { assert!(materials.contains_key(b)); }
+            for e in spec["species"].as_array().into_iter().flatten() {
+                if let Some(b) = e["bark"].as_str() { assert!(materials.contains_key(b)); }
+            }
         }
-        let (trees_only, _) = populations(&present, &["trees"], 1, 300.);
+        let (trees_only, _) = populations(&present, &["trees"], 1, 300., 3000., (0., 0.));
         assert!(trees_only.iter().all(|p| p.get("forest").is_some()) && trees_only.len() < pops.len());
+        // Without a far reach, no grid.
+        let (near_only, _) = populations(&present, &["trees"], 1, 300., 0., (0., 0.));
+        assert!(near_only.iter().all(|p| p["forest"]["placement"] != "grid"));
     }
 }

@@ -90,18 +90,27 @@ Plants of wet ground grow in the communities that have them only where water gat
 (`wetness`): willows and grey alders by temperate and boreal rivers, mesquite in desert washes.
 The tundra's shrubs are stunted (to 0.6 m on the heath, 1.5 m as krummholz).
 
-Each plant is a population of its own, its rule the sum over the communities about the camera
-that it grows in of their weight times its abundance there; on ground no steeper than it holds,
-off ice, dunes and playas, a fifth as thick on bare rock; trees below the treeline, shrubs below
-the snow. Trees come first, then shrubs, then each community's ground plants, so each grows in
-the room those before it leave. Only the communities found about the camera (their weights at
-12 x 12 points over 300 m) choose plants, and the load prints them:
+Each community's trees are one forest, its species weighted by their abundance there, so they
+mix as the community says and stand as thickly as its woods; its rule is the community's weight,
+on ground no steeper than its trees hold, off ice, dunes and playas, sparser where thin soil on a
+steep slope shows rock, and below the treeline. Each community's shrubs are another (below the
+snow), and plants of wet ground one each. Trees come first, then shrubs, then each community's
+ground plants, so each grows in the room those before it leave.
+
+Trees stand out to the horizon as instances: by dart throwing out to `reach` (300 m) from the
+camera, thinning out over its last third, and from there out to `far` (3 km) on a jittered grid
+(`"placement": "grid"` on a forest: one candidate per cell of the closest spacing, kept by the
+rule and by how much room its species needs, as thickly as darts fill the ground; thirty times
+fewer candidates, and no test against neighbours, which nobody sees a few hundred metres off),
+fading in as the near trees thin out. Their levels of detail make the far ones cards. About
+100,000 trees over 3 km cost three minutes and 2 GB. Only the communities found as far as the
+trees reach (their weights at 24 x 24 points) choose plants, and the load prints them:
 
 ```
 Flora: oak and hazel (temperate_forest) 71%, beech wood (temperate_forest) 29% about the camera; 13 populations: ...
 ```
 
-`"flora"` can also be `{"strata": ["trees", "shrubs", "ground"], "reach": 300, "samples": 12}`,
+`"flora"` can also be `{"strata": ["trees", "shrubs", "ground"], "reach": 300, "far": 3000, "samples": 24}`,
 to grow only some layers, or survey further. Populations the ecosystem lists itself (rocks,
 say) are placed after the flora's.
 
@@ -112,12 +121,12 @@ shaded with the soil material's `forest_floor`; only cliffs stay bare. Materials
 rules after the ecosystem read the same as a field, `canopy` (0 to 1). The ground's relief
 doesn't: its displaced cells' bounds are found before the trees are planted.
 
-Beyond the trees planted about the camera, the landscape draws woods of its own from the same
+Beyond the trees planted about the camera (past `far`), the landscape draws woods of its own from the same
 communities (`flora::Regions::woods`: how much of the ground their trees' crowns cover, and how
 much of that is conifers'), so the forests carry on to the horizon: a canopy material of crowns
 (`Bare::Woods`, `Bare::Conifers`: `cells` domes 8 m apart for broadleaves, 5 m for conifers,
 lit by their relief, dark in the gaps between), thinner and thicker from place to place, below
 the treeline and off cliffs. Within the planted trees' reach the ground between them is open,
-and the two fade into each other as the trees thin out towards it (`canopy::Slot::planted`). Nothing grows within `"clear"` metres of the camera (12 with
-a flora, 0 otherwise), so it doesn't stand inside a tree. The flora's trees grow `reach` metres
-out (shrubs half as far), thinning out over the last third of it.
+and the two fade into each other as the trees thin out towards it (`canopy::Slot::planted`).
+Nothing grows within `"clear"` metres of the camera (12 with a flora, 0 otherwise), so it
+doesn't stand inside a tree.

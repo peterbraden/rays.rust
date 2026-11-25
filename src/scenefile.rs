@@ -1390,6 +1390,7 @@ impl SceneFile {
             max_slope: SceneFile::parse_number(&o["max_slope"], 35.),
             variants: SceneFile::parse_int(&o["variants"], 3).max(1),
             clustering: SceneFile::parse_number(&o["clustering"], 0.),
+            grid: o["placement"].as_str() == Some("grid"),
         };
         let entries = o["species"].as_array().filter(|e| !e.is_empty())
             .unwrap_or_else(|| panic!("a forest needs a list of \"species\""));
@@ -1638,6 +1639,7 @@ impl SceneFile {
                 if spec.get(key).is_none() && o.get(key).is_some() { spec[key] = o[key].clone(); }
             }
             if spec.get("seed").is_none() { spec["seed"] = Value::from(seed.wrapping_mul(31).wrapping_add(k as u64 + 1)); }
+            let began = web_time::Instant::now();
             let given = spec.clone();
             let num = |key: &str, def: f64| SceneFile::parse_number(&given[key], def);
             let reach = SceneFile::parse_number(&spec["reach"], match kind { "forest" => 300., "scatter" => 150., _ => 25. });
@@ -1677,7 +1679,7 @@ impl SceneFile {
                     (vec![Arc::new(SceneFile::grass_in(&spec, materials, media, geometries, landscape, Some(&room)))], vec![])
                 },
             };
-            println!("Ecosystem: population {} ({}): {} placed", k, kind, claims.len());
+            println!("Ecosystem: population {} ({}): {} placed in {:.1} s", k, kind, claims.len(), began.elapsed().as_secs_f64());
             objects.extend(made);
             occupancy.extend(claims);
         }
@@ -1778,6 +1780,7 @@ impl SceneFile {
             max_slope: SceneFile::parse_number(&o["max_slope"], 90.),
             variants: items.iter().map(|i| i.models.len()).max().unwrap_or(1),
             clustering: SceneFile::parse_number(&o["clustering"], 0.),
+            grid: o["placement"].as_str() == Some("grid"),
         };
         let ground = |x: f64, z: f64| footing.at(x, z);
         let density = Footing::parse_rule(o, "scatter").or_else(|| o.get("density")

@@ -1797,6 +1797,11 @@ impl MaterialModel for PhysicalOcean {
         // diffusely about the mean surface (foam rides the wave, smoothing its ripples). Fresh
         // foam is a dense froth; residual foam a thin skin of bubbles over the water, darker.
         let mut bubbles = 0.;
+        // Rays leave the surface this far off it: as far as the hit may be in error, which for
+        // a sea the planet's size is centimetres (a ray-sphere test's terms are ~R²), more than
+        // a fixed millimetre: a ray left from under the surface met the sea again from below,
+        // whose foam then scattered down through the planet.
+        let lift = crate::material::functions::surface_offset(intersection, s).max(1e-3);
         // The surf: where waves break over the shallows, white water over that fraction of the
         // sea, as fresh foam.
         if let Some(surf) = &self.surf {
@@ -1804,7 +1809,7 @@ impl MaterialModel for PhysicalOcean {
             if white > 0. && geometry::rand() < white {
                 let albedo = self.foam.as_ref().map_or(Color::new(0.6, 0.6, 0.6), |f| f.albedo).as_reflectance();
                 let normal = if up.dot(&v) > 0. { up } else { -up };
-                return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal }, r, &intersection.point, s);
+                return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal }, r, &(intersection.point + normal * lift), s);
             }
             bubbles = breaking;
         }
@@ -1816,7 +1821,7 @@ impl MaterialModel for PhysicalOcean {
                 let thin = if solid >= lace { 1. } else { RESIDUAL_FOAM };
                 let albedo = foam.albedo.as_reflectance() * thin;
                 let normal = if up.dot(&v) > 0. { up } else { -up };
-                return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal }, r, &intersection.point, s);
+                return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal }, r, &(intersection.point + normal * lift), s);
             }
             // Between the patches, the clouds of bubbles a breaking crest drove down linger
             // under the surface, scattering light back up through the water: paler, greener sea.
@@ -1854,7 +1859,7 @@ impl MaterialModel for PhysicalOcean {
         let reflected = if self.absorption.is_some() && reflected.dot(&up) <= 0. { reflected - up * 2. * reflected.dot(&up) } else { reflected };
         let reflects = reflected.dot(&up) > 0. && m.dot(&v) > 0.;
         let f = fresnel(m.dot(&v).max(0.));
-        let mirror = Ray { ro: intersection.point + up * 1e-3, rd: reflected };
+        let mirror = Ray { ro: intersection.point + up * lift, rd: reflected };
         // Through transparent water, what lies beneath within reach of the light: the ray
         // refracted through the ripple, and the fraction of light the water lets through.
         let beneath = self.absorption.as_ref().and_then(|a| {

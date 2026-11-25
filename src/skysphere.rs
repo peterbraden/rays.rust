@@ -246,6 +246,16 @@ impl SkyMaterial {
     /// enters (0 if it starts inside) to where it leaves, or hits the ground if it starts above
     /// the surface. None if it misses the atmosphere entirely. From orbit, the ray starts in
     /// space, and the air begins at the entry.
+    /// `p`, or, deeper than `AIR_FLOOR` below the ground, the point that deep above it: the air
+    /// is sampled no deeper (land lies a few hundred metres below sea level, the Dead Sea's
+    /// shore; a path that runs through the planet would otherwise overflow its density, and
+    /// make NaN of the light it gathers, where it should take it all).
+    fn above_floor(&self, p: Vector3<f64>) -> Vector3<f64> {
+        let radial = p - self.earth.center;
+        let (r, floor) = (radial.norm(), self.earth.radius - AIR_FLOOR);
+        if r < floor && r > 0. { self.earth.center + radial * (floor / r) } else { p }
+    }
+
     fn view_ray_span(&self, r: &Ray) -> Option<(f64, f64)> {
         let o = r.ro - self.atmosphere.center;
         let b = o.dot(&r.rd);
@@ -479,6 +489,9 @@ impl SkyMaterial {
 /// channel's band, and one wavelength can't stand for it; nor can three numbers for ozone's
 /// Chappuis band, which colours twilight.
 const SPECTRAL_BINS: usize = 15;
+
+/// How far below the ground the air is sampled at most, metres (`SkyMaterial::above_floor`).
+const AIR_FLOOR: f64 = 1000.;
 const SPECTRAL_SETS: usize = SPECTRAL_BINS / 3;
 
 /// The wavelength of spectral bin `k`, nm.
@@ -737,7 +750,7 @@ impl<'a> Air<'a> {
         let mut depth = Depths::default();
         let (mut rayleigh, mut mie, mut multiple) = (Vector3::zeros(), Vector3::zeros(), Vector3::zeros());
         for (t, step) in self.sky.span_samples(&r, start, end, steps) {
-            let p = origin + d * t;
+            let p = self.sky.above_floor(origin + d * t);
             let height = (p - self.sky.earth.center).norm() - self.sky.earth.radius;
             let here = self.sky.depths(height, step);
             // To the middle of this step.
@@ -769,7 +782,7 @@ impl<'a> Air<'a> {
         let scale = self.sky.brightness * SKY_CALIBRATION;
         let mut depth = Depths::default();
         self.sky.span_samples(&r, start, end, self.steps(start, end)).into_iter().map(|(t, step)| {
-            let p = origin + d * t;
+            let p = self.sky.above_floor(origin + d * t);
             let here = self.sky.depths((p - self.sky.earth.center).norm() - self.sky.earth.radius, step);
             depth = depth + here * 0.5;
             let lit = self.c.transmittance(depth + self.sky.sun_depths_at(&p));
@@ -1841,6 +1854,22 @@ mod tests {
         // From 5 km up the sun is still above the horizon (the dip of the horizon there is about
         // 0.04 radians).
         assert!(after_sunset.optical_depth_to_sun(Vector3::new(0., 5000., 0.)).is_some());
+    }
+
+    #[test]
+    fn test_air_from_just_below_the_ground_is_finite() {
+        // A path leaving a wave's trough starts a little below sea level, inside the planet's
+        // radius: the air between it and what it meets is still the air at the ground.
+        let sky = test_sky(Vector3::new(0.5, 0.35, 0.6));
+        let below = Vector3::new(0., -0.3, 0.);
+        for d in [Vector3::new(1., 0.1, 0.), Vector3::new(0.3, 0.9, 0.2), Vector3::new(1., -0.01, 0.4)] {
+            let (t, i) = sky.segment(&below, &d.normalize(), 500.);
+            assert!(t.iter().chain(i.iter()).all(|v| v.is_finite()), "{:?} {:?} along {:?}", t, i, d);
+        }
+        // And a path through the planet (which a ray from under the sea's surface once took, to
+        // the far side) gets no light through, not NaN.
+        let (t, i) = sky.segment(&below, &Vector3::new(0.05, -1., 0.).normalize(), 12.7e6);
+        assert!(t.iter().chain(i.iter()).all(|v| v.is_finite()), "{:?} {:?}", t, i);
     }
 
     fn test_sky(sun: Vector3<f64>) -> SkyMaterial {

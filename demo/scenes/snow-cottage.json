@@ -28,7 +28,7 @@
   "objects": [
     {"type": "skysphere", "sun_direction": [0.45, -0.05, -1]},
     {"type": "plane", "y": 0, "material": "SNOW", "normal": {"pattern": "bumps", "amount": 0.25, "scale": 1.5}},
-    {"type": "cottage", "location": [0, 0, 0], "yaw": -18, "seed": 3},
+    {"type": "cottage", "style": "stone", "location": [0, 0, 0], "yaw": -18, "snow": 0.22, "seed": 3},
     {"type": "tree", "species": "norway-spruce", "seed": 31, "location": [-9.5, 0, 7.5], "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"], "params": {"scale": 4.2, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},
     {"type": "tree", "species": "balsam-fir", "seed": 32, "location": [7.5, 0, 2.5], "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"], "params": {"scale": 5.5, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},
     {"type": "tree", "species": "norway-spruce", "seed": 33, "location": [5.2, 0, 9.5], "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"], "params": {"scale": 2.2, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},

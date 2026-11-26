@@ -4195,25 +4195,34 @@ impl SceneFile {
         }
     }
 
-    /// `{"type": "cottage", "location": [x, y, z], "yaw": degrees, "seed": 0}`: a log cottage
-    /// standing on the ground at `location` (`procedural::building`), its door facing +z
-    /// turned by `yaw`. Its size and weather: `"width"` (along the ridge, 7), `"depth"` (5),
-    /// `"wall_height"` (2.5), `"pitch"` (degrees, 38), `"overhang"` (0.6) and
-    /// `"gable_overhang"` (0.5), `"log_radius"` (0.13), `"plinth"` (0.4), `"snow"` (its depth on
-    /// the roof, 0.3), `"icicles"` (0 to 1, 0.5), `"chimney"` and `"wreath"` (true). Each part
-    /// has a material of its own, replaced by a name or a definition in `"materials"`: `logs`,
-    /// `stone`, `mortar`, `roof`, `trim`, `door`, `iron`, `snow`, `icicles`, `wreath`, `ribbon`,
-    /// `log_ends`, and `window`: by default glass over a lamplit room, `"light"` (4) bright at
-    /// `"light_temperature"` (2700 K); `"lit": false` for dark glass.
+    /// `{"type": "cottage", "style": "log" | "stone", "location": [x, y, z], "yaw": degrees,
+    /// "seed": 0}`: a cottage standing on the ground at `location` (`procedural::building`), its
+    /// door facing +z turned by `yaw`: of logs, or of rubble stone with a slate roof and a
+    /// chimney on each gable. Its size and weather (defaults for logs, then stone):
+    /// `"width"` (along the ridge, 7, 7.5), `"depth"` (5), `"wall_height"` (2.5, 2.4),
+    /// `"pitch"` (degrees, 38, 40), `"overhang"` (0.6, 0.2) and `"gable_overhang"` (0.5, 0.06),
+    /// `"log_radius"` (0.13), `"wall_thickness"` (stone, 0.55), `"plinth"` (0.4, 0), `"snow"`
+    /// (its depth on the roof, 0.3), `"icicles"` (0 to 1, 0.5), `"chimney"` and `"wreath"`
+    /// (true). Each part has a material of its own, replaced by a name or a definition in
+    /// `"materials"`: `logs`, `log_ends`, `chinking`, `stone` (and for rubble `stone_2`,
+    /// `stone_3`), `dressed_stone`, `mortar`, `pots`, `roof`, `trim`, `door`, `iron`, `snow`,
+    /// `icicles`, `wreath`, `ribbon`, and `window`: by default glass over a lamplit room,
+    /// `"light"` (4) bright at `"light_temperature"` (2700 K); `"lit": false` for dark glass.
     pub fn parse_cottage(o: &Value, materials: &Map<String, Value>) -> Vec<Arc<SceneObject>> {
-        use crate::procedural::building::{Cottage, Part};
-        let d = Cottage::default();
+        use crate::procedural::building::{Cottage, Part, Style};
+        let d = match o["style"].as_str().unwrap_or("log") {
+            "log" => Cottage::default(),
+            "stone" => Cottage::stone(),
+            x => panic!("Unknown cottage style '{}': expected log or stone", x),
+        };
+        let stone = d.style == Style::Stone;
         let n = |k: &str, v: f64| SceneFile::parse_number(&o[k], v);
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let cottage = Cottage {
+            style: d.style, wall_thickness: n("wall_thickness", d.wall_thickness).clamp(0.2, 1.2),
             width: n("width", d.width).max(2.), depth: n("depth", d.depth).max(2.),
             wall_height: n("wall_height", d.wall_height).max(1.), pitch: n("pitch", d.pitch).clamp(5., 70.),
-            overhang: n("overhang", d.overhang).max(0.), gable_overhang: n("gable_overhang", d.gable_overhang).max(0.2),
+            overhang: n("overhang", d.overhang).max(0.), gable_overhang: n("gable_overhang", d.gable_overhang).max(if stone { 0. } else { 0.2 }),
             log_radius: n("log_radius", d.log_radius).clamp(0.05, 0.4), plinth: n("plinth", d.plinth).max(0.),
             snow: n("snow", d.snow).max(0.), icicles: n("icicles", d.icicles).clamp(0., 1.),
             chimney: o["chimney"].as_bool().unwrap_or(d.chimney), wreath: o["wreath"].as_bool().unwrap_or(d.wreath),
@@ -4269,9 +4278,22 @@ impl SceneFile {
                 Part::LogsAlongZ => logs([1., 1., 16.]),
                 Part::LogEnds => json!({"type": "lambertian", "albedo": {"pattern": {"node": "fractal", "scale": 0.05, "seed": seed + 14},
                     "color_map": [[-0.5, [0.1, 0.09, 0.075]], [0.5, [0.2, 0.17, 0.14]]]}}),
-                Part::Stone => json!({"type": "snow_cover", "cover": 0.22, "drift": 0.1, "seed": seed + 6,
+                Part::Stone => json!({"type": "snow_cover", "cover": if stone { 0.12 } else { 0.22 }, "drift": 0.1, "seed": seed + 6,
                     "snow": {"preset": "fresh"}, "material": {"type": "rock", "preset": "granite", "lichen": 0.2, "seed": seed}}),
+                // Rubble of the stones about: greys and buffs, lichened, catching a little
+                // snow on their ledges.
+                Part::Stone2 | Part::Stone3 => {
+                    let (preset, colour) = if part == Part::Stone2 { ("basalt", [0.24, 0.23, 0.22]) } else { ("granite", [0.4, 0.38, 0.35]) };
+                    json!({"type": "snow_cover", "cover": 0.12, "drift": 0.08, "seed": seed + 7,
+                        "snow": {"preset": "fresh"}, "material": {"type": "rock", "preset": preset, "color": colour, "lichen": 0.15, "seed": seed + 1}})
+                },
+                Part::Dressed => json!({"type": "snow_cover", "cover": 0.12, "drift": 0.08, "seed": seed + 8,
+                    "snow": {"preset": "fresh"}, "material": {"type": "rock", "preset": "limestone", "color": [0.47, 0.45, 0.41], "lichen": 0.08, "seed": seed + 2}}),
+                Part::Pots => json!({"type": "library", "name": "terracotta", "seed": seed}),
+                Part::Mortar if stone => json!({"type": "lambertian", "albedo": {"pattern": {"node": "fractal", "scale": 0.1, "seed": seed + 22},
+                    "color_map": [[-0.5, [0.24, 0.23, 0.21]], [0.5, [0.36, 0.35, 0.32]]]}}),
                 Part::Mortar => json!({"type": "lambertian", "albedo": [0.3, 0.29, 0.27]}),
+                Part::Roof if stone => json!({"type": "plastic", "albedo": [0.06, 0.065, 0.075], "roughness": 0.35}),
                 Part::Roof => json!({"type": "lambertian", "albedo": [0.1, 0.075, 0.06]}),
                 // Paint that has seen some winters: matt, uneven, greyed.
                 Part::Trim => paint([0.53, 0.52, 0.48], [0.68, 0.67, 0.62], seed + 16),

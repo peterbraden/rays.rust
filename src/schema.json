@@ -8376,6 +8376,7 @@
       "doc": "A log cottage standing on the ground, its door facing +z: walls of logs crossing at the corners, a stone plinth and chimney, lit windows, a wreath on the door, snow on the roof and icicles along the eaves. Each part takes its own material from \"materials\".",
       "example": {"type": "cottage", "location": [0, 0, 0], "yaw": -20, "snow": 0.3},
       "fields": [
+        {"name": "style", "kind": "enum", "default": "log", "doc": "What its walls are built of: logs on a stone plinth, or rubble stone with a slate roof and gable chimneys (which changes the defaults below).", "options": ["log", "stone"]},
         {"name": "location", "kind": "vec3", "default": [0, 0, 0], "doc": "The middle of its footprint, on the ground."},
         {"name": "yaw", "kind": "number", "default": 0, "doc": "Its heading, degrees about the vertical."},
         {"name": "width", "kind": "number", "default": 7, "doc": "Along the ridge, between the walls' centres, m.", "min": 2},
@@ -8383,8 +8384,9 @@
         {"name": "wall_height", "kind": "number", "default": 2.5, "doc": "The walls' height above the plinth, to the eaves, m.", "min": 1},
         {"name": "pitch", "kind": "number", "default": 38, "doc": "The roof's pitch, degrees.", "min": 5, "max": 70},
         {"name": "overhang", "kind": "number", "default": 0.6, "doc": "How far the roof reaches past the walls at the eaves, m.", "min": 0},
-        {"name": "gable_overhang", "kind": "number", "default": 0.5, "doc": "How far the roof reaches past the gable walls, m.", "min": 0.2},
+        {"name": "gable_overhang", "kind": "number", "default": 0.5, "doc": "How far the roof reaches past the gable walls, m.", "min": 0},
         {"name": "log_radius", "kind": "number", "default": 0.13, "doc": "The logs' radius, m.", "min": 0.05, "max": 0.4},
+        {"name": "wall_thickness", "kind": "number", "default": 0.55, "doc": "The thickness of stone walls, m.", "min": 0.2, "max": 1.2},
         {"name": "plinth", "kind": "number", "default": 0.4, "doc": "How high the stone plinth stands out of the ground, m.", "min": 0},
         {"name": "snow", "kind": "number", "default": 0.3, "doc": "The depth of snow on the roof, m (0 for none).", "min": 0},
         {"name": "icicles", "kind": "number", "default": 0.5, "doc": "Icicles along the eaves, from 0 (none) to 1 (many).", "min": 0, "max": 1},
@@ -8393,7 +8395,7 @@
         {"name": "lit", "kind": "boolean", "default": true, "doc": "Whether the windows are lit from within; dark glass otherwise."},
         {"name": "light", "kind": "number", "default": 4, "doc": "How bright the rooms are behind the windows.", "min": 0},
         {"name": "light_temperature", "kind": "number", "default": 2700, "doc": "The colour temperature of the rooms' lamps, K.", "min": 1000},
-        {"name": "materials", "kind": "json", "default": {}, "doc": "Materials for its parts, by name or definition: logs, log_ends, stone, mortar, roof, trim, door, iron, snow, icicles, wreath, ribbon, and window (in place of glass over a lit room)."},
+        {"name": "materials", "kind": "json", "default": {}, "doc": "Materials for its parts, by name or definition: logs, log_ends, chinking, stone (and stone_2, stone_3 for rubble), dressed_stone, mortar, pots, roof, trim, door, iron, snow, icicles, wreath, ribbon, and window (in place of glass over a lit room)."},
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Random seed."}
       ]
     },

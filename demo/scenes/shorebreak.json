@@ -1,0 +1,22 @@
+{
+  "width": 640,
+  "height": 427,
+  "supersamples": 64,
+  "max_depth": 12,
+  "path_termination": "russian_roulette",
+  "output": {"tonemap": "filmic", "exposure": 1.2},
+  "variables": {
+    "wave": {"type": "breaker", "center": [0, 0, 0], "height": 2, "depth": 2, "width": 60, "stage": 0.95, "peel": 0.6, "seed": 3}
+  },
+  "camera": {"location": [-9, -0.3, -5.5], "lookat": [2, 0.4, 0], "up": [0, 1, 0], "angle": 1.0},
+  "sun": {"intensity": 4.9},
+  "materials": {
+    "SAND": {"type": "library", "name": "beach_sand", "waterline": 1e9}
+  },
+  "objects": [
+    {"type": "skysphere", "sun_direction": [0.2, 0.33, 0.92]},
+    {"type": "plane", "y": -2, "material": "SAND"},
+    {"type": "breaker", "center": [0, 0, 0], "height": 2, "depth": 2, "width": 60, "stage": 0.95, "peel": 0.6, "seed": 3},
+    {"type": "volume", "shape": "$wave", "sigma_a": [0.45, 0.08, 0.14], "sigma_s": [0.25, 0.25, 0.25], "g": 0.9}
+  ]
+}

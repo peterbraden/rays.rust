@@ -892,6 +892,22 @@
       ],
       "example": {"type": "disc", "center": [0, 1, 0], "normal": [0, 0.5, 1], "radius": 1.5, "material": "M"}
     },
+    "breaker": {
+      "label": "Breaking wave",
+      "group": "Shapes",
+      "doc": "A plunging breaker close up: a wave at a shore throwing its lip forward over a tube of air (procedural::breaker), travelling towards -z with its crest along x, a closed body of water. As an object, its surface is water's dielectric and lets shadow rays through; give a volume the same shape for the water inside.",
+      "fields": [
+        {"name": "center", "kind": "vec3", "default": [0, 0, 0], "doc": "The still water's level under the middle of the crest."},
+        {"name": "height", "kind": "number", "default": 2, "doc": "Trough to crest, m.", "min": 0.05},
+        {"name": "depth", "kind": "number", "default": 2, "doc": "Still water to the bed under the crest, m.", "min": 0.05},
+        {"name": "width", "kind": "number", "default": 40, "doc": "The crest's length along x, m.", "min": 0.1},
+        {"name": "stage", "kind": "number", "default": 0.9, "doc": "How far the lip has thrown at the crest's middle, 0 (a steep face) to 1 (about to land).", "min": 0, "max": 1},
+        {"name": "peel", "kind": "number", "default": 0.8, "doc": "How much the stage changes from one end of the crest to the other (the wave peeling)."},
+        {"name": "resolution", "kind": "vec2", "default": [240, 120], "doc": "Points around a cross-section, and sections along the crest."},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Varies the height along the crest."}
+      ],
+      "example": {"type": "breaker", "height": 2, "depth": 2, "width": 40, "stage": 0.9}
+    },
     "torus": {
       "label": "Torus",
       "group": "Shapes",

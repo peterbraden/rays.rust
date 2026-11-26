@@ -1207,6 +1207,18 @@ impl SceneFile {
             };
             return Some(Arc::new(SceneObject { geometry: Box::new(geometry), medium }));
         }
+        if t == "breaker" {
+            // A plunging wave close up (`procedural::breaker`): its surface lets shadow rays
+            // through; by default water's own dielectric. Give a volume the same shape for the
+            // water inside.
+            let breaker = crate::procedural::breaker::Breaker::parse(&o);
+            let medium: Box<dyn Medium + Sync + Send> = if o.get("material").is_some() || o.get("medium").is_some() {
+                SceneFile::parse_object_medium(&o, materials, media)
+            } else {
+                Box::new(Solid { m: Box::new(crate::procedural::breaker::BreakerWater) })
+            };
+            return Some(Arc::new(SceneObject { geometry: Box::new(crate::procedural::breaker::BreakerSurface { mesh: breaker.geometry() }), medium }));
+        }
         if t == "iceberg" || t == "ice_floes" {
             return Some(Arc::new(SceneFile::parse_ice_object(&o, materials, media)));
         }

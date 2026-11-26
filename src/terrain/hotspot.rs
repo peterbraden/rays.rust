@@ -220,12 +220,12 @@ impl Shield {
         let t = d - self.dir * self.dir.dot(d);
         let theta = t.dot(&self.north).atan2(t.dot(&self.east));
         let stretch = 1. + 0.4 * self.rifts.iter().map(|&a| (theta - a).cos().max(0.).powi(6)).sum::<f64>();
-        // Its old shoreline: about a quarter of the way out.
-        let ring = 0.25 * self.radius * stretch;
+        // Its old shoreline: about a fifth of the way out.
+        let ring = 0.2 * self.radius * stretch;
         if r > ring + 4000. { return None; }
-        // The reef's crest, a few hundred metres wide, awash in places and standing in islets
-        // (motus) in others.
-        let width = 400.;
+        // The reef flat, most of a kilometre wide (as a Pacific atoll's are, 300 m to 1 km),
+        // awash in places and standing in islets (motus) in others.
+        let width = 800.;
         let islets = (3. * theta + self.phase).sin() + 0.6 * (7. * theta + 2. * self.phase).sin() + 0.3 * (17. * theta).sin();
         let crest = if islets > 0.2 { 2.5 } else { -1. };
         let off = (r - ring).abs();
@@ -475,7 +475,7 @@ mod tests {
             assert!(middle >= -LAGOON - 1. && middle < 0., "its middle at {}", middle);
             let crest = (0..72).map(|k| {
                 let a = k as f64 * 5f64.to_radians();
-                let rim = 0.25 * s.radius;
+                let rim = 0.2 * s.radius;
                 (0..9).map(|j| field.elevation(&(s.dir * R + (s.east * a.cos() + s.north * a.sin()) * (rim * (0.8 + 0.05 * j as f64))).normalize(), floor).0)
                     .fold(f64::NEG_INFINITY, f64::max)
             }).fold(f64::NEG_INFINITY, f64::max);

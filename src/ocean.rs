@@ -1593,12 +1593,16 @@ impl Surf {
             // grows out to sea) the foam it left as it passed, as old as the phase since its
             // crest over ω, fading as the whitecaps' does (`FOAM_DECAY`); so the inner surf
             // zone, where every wave breaks, stays about half white between them.
-            let u = (phase / std::f64::consts::TAU).rem_euclid(1.);
+            let steep = height / (BREAKING_INDEX * d);
+            let broken = broken(steep);
+            let held = BREAKING_INDEX * d * steep.tanh();
+            // Where the water at `p` came from in the wave (`lagrangian`), so the foam rides the
+            // surface as drawn.
+            let u = lagrangian(phase, shallow_wavenumber(self.trains[k].omega, d) * (height + (held - height) * broken), steep.min(1.), broken);
             let age = u * std::f64::consts::TAU / self.trains[k].omega;
             // The roller rides the front face, the last few hundredths of the cycle before the
             // crest.
             let roller = crate::math::smoothstep(1. - 2. * BORE_FRONT, 1. - 0.5 * BORE_FRONT, u);
-            let broken = broken(height / (BREAKING_INDEX * d));
             (broken * roller, broken * (-age / FOAM_DECAY).exp())
         }).fold((0f64, 0f64), |a, b| (a.0.max(b.0), a.1.max(b.1)));
         (fresh, residual, breaking)
@@ -1645,11 +1649,12 @@ impl Surf {
             let height = self.wave_height(p, k, h, phase);
             let steep = height / (BREAKING_INDEX * d);
             let broken = broken(steep);
-            let u = (phase / std::f64::consts::TAU).rem_euclid(1.);
             // Broken, as high as the water holds at most, approached smoothly (so a broken
             // stretch still varies along its crest, not a level shelf).
             let held = BREAKING_INDEX * d * steep.tanh();
-            (height + (held - height) * broken) * breaker(u, steep.min(1.), broken)
+            let height = height + (held - height) * broken;
+            let u = lagrangian(phase, shallow_wavenumber(self.trains[k].omega, d) * height, steep.min(1.), broken);
+            height * breaker(u, steep.min(1.), broken)
         }).sum::<f64>();
         Some((eta, surf))
     }
@@ -1707,6 +1712,53 @@ const BORE_BACK: f64 = 0.25;
 /// spread about it, so that along a crest whose height varies the breaking sets in gradually.
 fn broken(steep: f64) -> f64 {
     crate::math::smoothstep(0.85, 1.15, steep)
+}
+
+/// The wavenumber (rad/m) of waves of angular frequency `omega` in water `d` deep, closely
+/// enough for where they break: the shallow-water √(g d) speed, no shorter than in deep water.
+fn shallow_wavenumber(omega: f64, d: f64) -> f64 {
+    (omega / (9.81 * d.max(1e-3)).sqrt()).min(omega * omega / 9.81 * 50.).max(omega * omega / 9.81)
+}
+
+/// How far a shoaling wave's water is carried forward under its crest (Gerstner's: the crest
+/// narrowed, the troughs widened) as a fraction of the wavelength over 2π, at its steepest.
+const GERSTNER: f64 = 0.6;
+/// How far a wave about to break leans its crest shoreward over its front, metres forward per
+/// metre up, at most (Fournier and Reeves's tilted orbits, "A simple model of ocean waves",
+/// SIGGRAPH 1986).
+const LEAN: f64 = 0.8;
+
+/// Where in its cycle (0 to 1 from the crest, seaward, as `breaker` takes it) the water drawn
+/// at `phase` came from, the wave's water moved as particles rather than its shape only: carried
+/// shoreward under the crest and back under the troughs (Gerstner's trochoid, by `steep`), and,
+/// as it nears breaking, its upper part carried further forward than its lower, so the crest
+/// leans over its front (`LEAN`; less once broken, a bore). `kh` is the wavenumber times the
+/// wave's height, turning a lean in metres into phase. The map is kept short of folding (a
+/// height field can't overhang: its front stands at most near vertical) and inverted by
+/// bisection, as the open sea's choppy crests are (`WaveField::source`).
+pub fn lagrangian(phase: f64, kh: f64, steep: f64, broken: f64) -> f64 {
+    use std::f64::consts::TAU;
+    let steep = steep.clamp(0., 1.);
+    let q = GERSTNER * steep * (1. - 0.5 * broken);
+    // The steepest rise of the elevation over the phase (`breaker`'s front), by which the lean
+    // is kept short of a fold: q + lean's slope under 0.9.
+    let wf = 0.3 * (1. - 0.6 * steep);
+    let rise = (0.858 / wf * (1. - broken) + 0.858 / BORE_FRONT * broken) / TAU;
+    let lean = (LEAN * kh * crate::math::smoothstep(0.7, 1., steep) * (1. - 0.6 * broken)).min((0.9 - q).max(0.) / rise);
+    if q <= 0. && lean <= 0. { return (phase / TAU).rem_euclid(1.); }
+    // Phase from the nearest crest, and the map from where water started to where it is
+    // drawn: forward (to smaller phase, towards the shore) by q sin θ and the lean times its
+    // elevation. Increasing, and 2π periodic beyond its offset, so bisected over a cycle each
+    // way.
+    let crest = (phase / TAU).round() * TAU;
+    let theta = phase - crest;
+    let drawn = |t: f64| t - q * t.sin() - lean * breaker((t / TAU).rem_euclid(1.), steep, broken);
+    let (mut lo, mut hi) = (theta - TAU, theta + TAU);
+    for _ in 0..16 {
+        let mid = 0.5 * (lo + hi);
+        if drawn(mid) < theta { lo = mid } else { hi = mid }
+    }
+    (0.5 * (lo + hi) / TAU).rem_euclid(1.)
 }
 
 /// A wave in the surf's elevation, in units of its height, about its mean (so the sea's mean
@@ -2724,6 +2776,36 @@ mod curved_tests {
             let between = v.iter().filter(|&&c| c > 0.1 && c < 0.9).count() as f64 / v.len() as f64;
             assert!(between < 0.3, "{} between for {}", between, r);
         }
+    }
+
+    #[test]
+    fn test_a_wave_about_to_break_leans_over_its_front() {
+        use std::f64::consts::TAU;
+        // A calm wave is as it was.
+        assert!((lagrangian(1.3, 0.1, 0., 0.) - 1.3 / TAU).abs() < 1e-12);
+        // The elevation along a cycle, drawn through the map: the water never folds (each point
+        // drawn from one place, the source moving on with the phase).
+        let n = 4000;
+        let profile = |kh: f64, steep: f64| -> Vec<f64> {
+            let mut last: Option<f64> = None;
+            (0..n).map(|i| {
+                let phase = -TAU / 2. + TAU * i as f64 / n as f64;
+                let u = lagrangian(phase, kh, steep, 0.);
+                if let Some(l) = last {
+                    let step = (u - l + 0.5).rem_euclid(1.) - 0.5;
+                    assert!(step >= -1e-6, "folds at {}", phase);
+                }
+                last = Some(u);
+                breaker(u, steep, 0.)
+            }).collect()
+        };
+        let (plain, leaning) = ((0..n).map(|i| breaker((-0.5 + i as f64 / n as f64).rem_euclid(1.), 0.95, 0.)).collect::<Vec<f64>>(), profile(0.6, 0.95));
+        // Narrower at the crest: less of the cycle above half its height.
+        let above = |v: &Vec<f64>| v.iter().filter(|&&e| e > 0.5 * v.iter().cloned().fold(f64::MIN, f64::max)).count();
+        assert!(above(&leaning) < above(&plain), "{} {}", above(&leaning), above(&plain));
+        // And steeper in front (the first half of the cycle, shoreward of the crest).
+        let steepest = |v: &Vec<f64>| v.windows(2).take(n / 2).map(|w| w[1] - w[0]).fold(0., f64::max);
+        assert!(steepest(&leaning) > 1.5 * steepest(&plain), "{} {}", steepest(&leaning), steepest(&plain));
     }
 
     #[test]

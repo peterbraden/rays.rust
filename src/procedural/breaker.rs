@@ -173,25 +173,53 @@ impl Breaker {
     }
 
     /// The closed mesh, its vertices shared between faces.
+    /// The wave's section at `x` along the crest: its own height, lip and throw (`variation`),
+    /// its stage, and how far its crest's line is bent seaward (m).
+    fn at(&self, x: f64) -> (Breaker, f64, f64) {
+        let (varied, stage, bend, _) = self.at_raw(x);
+        (varied, stage, bend)
+    }
+
+    /// As `at`, with the stage as it would be unclamped (beyond 1 where the lip landed earlier).
+    fn at_raw(&self, x: f64) -> (Breaker, f64, f64, f64) {
+        let noise = crate::noise::PerlinNoise::shuffled(self.seed.wrapping_add(0xb7ea));
+        let t = x / self.width;
+        // Along the crest: the stage peeling, and wandering a little; the wave higher where
+        // it has thrown further (the peak, the shoulder lower); the lip thicker or thinner,
+        // throwing further or less; and the crest's line bending, metres in tens.
+        let v = self.variation;
+        let wander = |scale: f64, seed: f64| noise.noise(x / scale, seed, 0.5);
+        let raw = self.stage + self.peel * t + 0.08 * v * wander(7., 2.3);
+        let stage = raw.clamp(0., 1.);
+        let varied = Breaker {
+            height: self.height * (1. + v * (0.25 * (stage - self.stage) + 0.1 * wander(9., 1.7))),
+            lip: 1. + 0.35 * v * wander(5., 3.1),
+            throw: 1. + 0.08 * v * wander(6., 4.9),
+            ..self.clone()
+        };
+        let bend = v * (1.0 * wander(20., 6.7) + 0.15 * x * x / self.width.max(1.));
+        (varied, stage, bend, raw)
+    }
+
+    /// At `x` along the crest, the scene points of the tube's middle (the cavity's centre) and
+    /// of the lip's tip, and how far the lip has thrown there (beyond 1 where it landed earlier,
+    /// the more so the earlier): for placing a camera in the tube or the water the lip throws up
+    /// as it lands.
+    pub fn tube(&self, x: f64) -> (Vector3<f64>, Vector3<f64>, f64) {
+        let (varied, _, bend, stage) = self.at_raw(x);
+        let stage = stage.max(0.);
+        let (c, _, _) = varied.cavity();
+        let (_, top) = varied.extremes();
+        let (tip, _) = varied.on_cavity(top + THROW * varied.throw.clamp(0.5, 1.1) * stage.min(1.));
+        let place = |p: Vector2<f64>| self.center + Vector3::new(x, p.y, p.x + bend);
+        (place(c), place(tip), stage)
+    }
+
     fn closed(&self) -> IndexedMesh {
         let (count, along) = self.resolution;
-        let noise = crate::noise::PerlinNoise::shuffled(self.seed.wrapping_add(0xb7ea));
         let sections: Vec<Vec<Vector3<f64>>> = (0..=along).map(|j| {
-            let t = j as f64 / along as f64 - 0.5;
-            let x = t * self.width;
-            // Along the crest: the stage peeling, and wandering a little; the wave higher where
-            // it has thrown further (the peak, the shoulder lower); the lip thicker or thinner,
-            // throwing further or less; and the crest's line bending, metres in tens.
-            let v = self.variation;
-            let wander = |scale: f64, seed: f64| noise.noise(x / scale, seed, 0.5);
-            let stage = (self.stage + self.peel * t + 0.08 * v * wander(7., 2.3)).clamp(0., 1.);
-            let varied = Breaker {
-                height: self.height * (1. + v * (0.25 * (stage - self.stage) + 0.1 * wander(9., 1.7))),
-                lip: 1. + 0.35 * v * wander(5., 3.1),
-                throw: 1. + 0.08 * v * wander(6., 4.9),
-                ..self.clone()
-            };
-            let bend = v * (1.0 * wander(20., 6.7) + 0.15 * x * x / self.width.max(1.));
+            let x = (j as f64 / along as f64 - 0.5) * self.width;
+            let (varied, stage, bend) = self.at(x);
             varied.section(stage, count).iter()
                 .map(|p| self.center + Vector3::new(x, p.y, p.x + bend))
                 .collect()
@@ -359,6 +387,63 @@ impl crate::material::model::MaterialModel for BreakerWater {
         }
         out
     }
+}
+
+/// The white water a breaker throws up where its lip lands, as a density (0 to 1) for a
+/// volume: about the tip of the lip wherever it has thrown fully (stage near 1), a mass of
+/// water and air churned below and about it, and the splash it throws up ahead of it (the
+/// "splash-up" of a plunging breaker), thinning as it rises, broken into lumps and wisps. The
+/// lip's tips along the crest are found once, every ten centimetres (`Breaker::tube`).
+pub struct Whitewater {
+    /// The first section's x, the spacing, and each section's tip (y, z) and stage.
+    start: f64,
+    step: f64,
+    tips: Vec<(f64, f64, f64)>,
+    height: f64,
+    noise: crate::noise::PerlinNoise,
+}
+
+impl Whitewater {
+    pub fn new(breaker: &Breaker) -> Whitewater {
+        let step = 0.1;
+        let start = breaker.center.x - 0.5 * breaker.width;
+        let n = (breaker.width / step).ceil() as usize + 1;
+        let tips = (0..n).map(|i| {
+            let (_, tip, stage) = breaker.tube(start + i as f64 * step - breaker.center.x);
+            (tip.y, tip.z, stage)
+        }).collect();
+        Whitewater { start, step, tips, height: breaker.height, noise: crate::noise::PerlinNoise::shuffled(breaker.seed.wrapping_add(0x3a11)) }
+    }
+}
+
+impl crate::volume::DensityField for Whitewater {
+    fn density(&self, p: &Vector3<f64>) -> f64 {
+        let f = (p.x - self.start) / self.step;
+        if !(f >= 0.) || f >= (self.tips.len() - 1) as f64 { return 0.; }
+        let (i, a) = (f.floor() as usize, f.fract());
+        let (y0, z0, s0) = self.tips[i];
+        let (y1, z1, s1) = self.tips[i + 1];
+        let (ty, tz, stage) = (y0 + (y1 - y0) * a, z0 + (z1 - z0) * a, s0 + (s1 - s0) * a);
+        let landed = crate::math::smoothstep(0.96, 1.0, stage);
+        if landed <= 0. { return 0.; }
+        let h = self.height;
+        // How long ago it landed, by how far the stage has run beyond 1: fresh, the churned mass
+        // about the tip and the splash it throws up ahead; then settling into a lower bore of
+        // foam at the trough's level, thinning.
+        let age = ((stage - 1.) / 0.08).max(0.);
+        let fresh = (-age * age).exp();
+        let settle = (age * 0.35 * h).min(0.3 * h);
+        let (dy, dz) = (p.y - ty + settle, p.z - tz);
+        let mass = (-(dy + 0.1 * h).powi(2) / (0.25 * h).powi(2) - dz.powi(2) / (0.4 * h * (1. + 0.5 * age.min(2.))).powi(2)).exp();
+        let rise = (dy / (0.9 * h)).clamp(0., 1.);
+        let ahead = (-(dz + 0.35 * h + 0.3 * h * rise).powi(2) / (0.3 * h).powi(2)).exp();
+        let splash = if dy > 0. { fresh * ahead * (1. - rise).powi(2) } else { 0. };
+        let thinning = 0.25 + 0.75 * (-0.5 * age).exp();
+        let lumps = 0.5 + 0.5 * self.noise.noise(p.x / 0.25, p.y / 0.25, p.z / 0.25) + 0.3 * self.noise.noise(p.x / 0.08 + 9.1, p.y / 0.08, p.z / 0.08);
+        (landed * (mass * thinning).max(splash) * (1.6 * lumps - 0.3)).clamp(0., 1.)
+    }
+
+    fn majorant(&self) -> f64 { 1. }
 }
 
 /// Twice the signed area of a loop (positive anticlockwise).

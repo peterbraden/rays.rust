@@ -5951,6 +5951,12 @@
           "doc": "The medium fills only the inside of this shape (eg. the same as a glass object's)."
         },
         {
+          "name": "whitewater",
+          "kind": "json",
+          "default": null,
+          "doc": "Density from the white water a breaker's lip throws up where it lands: a breaker's fields (procedural::breaker::Whitewater); give min and max."
+        },
+        {
           "name": "albedo",
           "kind": "color",
           "default": [1, 1, 1],

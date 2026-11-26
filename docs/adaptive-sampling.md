@@ -49,8 +49,9 @@ alone (`RenderContext::next_pass`). Waiting passes are taken lowest layer first,
 fills in evenly. Sample k of a pixel is always the same sample, so:
 
 - the image depends only on the seed, not on threads or scheduling;
-- an interrupted render resumes exactly (`.accum`, now format `RAYSACC3` with the sums of
-  squares; states from earlier versions start afresh);
+- an interrupted render resumes exactly (`.accum`, now format `RAYSACC4`: the sums of
+  squares, and the render's report, `src/report.rs`; `RAYSACC3` states resume without a report,
+  earlier ones start afresh);
 - the threshold isn't part of the saved state's key, so a render can be carried on with a new
   threshold or more samples. The result then differs a little from a render made with those
   settings from the start, because pixels that stopped under the old settings changed their

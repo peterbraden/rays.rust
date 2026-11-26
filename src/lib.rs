@@ -125,6 +125,7 @@ pub mod ocean;
 pub mod camera;
 pub mod trace;
 pub mod rendercontext;
+pub mod report;
 pub mod paint;
 pub mod output;
 #[cfg(feature = "cli")]

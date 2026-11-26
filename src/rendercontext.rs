@@ -35,13 +35,20 @@ pub struct RenderContext {
     pub output_filename: String,
     /// Samples carried over from a saved state (see `load_state`).
     pub resumed_samples: u64,
+    /// The runs before this one that made the samples resumed, from the saved state.
+    pub report: crate::report::Report,
+    /// This run, added to `report` when the state is saved.
+    pub run: crate::report::Run,
 }
 
 /// A render's saved state begins with this, then the key of what it is a render of, its width
 /// and height, then each pixel's summed colour and summed squares (three f64s each) and number
-/// of samples (a u64), all little-endian. The sums are kept exactly, so a resumed render is the
-/// same, bit for bit, as one that ran straight through.
-const STATE_MAGIC: &[u8; 8] = b"RAYSACC3";
+/// of samples (a u64), all little-endian; then the render's report (`crate::report`): its
+/// length in bytes (a u64) and the report. The sums are kept exactly, so a resumed render is
+/// the same, bit for bit, as one that ran straight through.
+const STATE_MAGIC: &[u8; 8] = b"RAYSACC4";
+/// The state before reports: the same, without one.
+const STATE_MAGIC_WITHOUT_REPORT: &[u8; 8] = b"RAYSACC3";
 
 /// The bytes of a saved state's header, and of each pixel.
 const STATE_HEADER: usize = 32;
@@ -170,6 +177,8 @@ impl RenderContext {
             samples_rendered: 0,
             output_filename,
             resumed_samples: 0,
+            report: Default::default(),
+            run: crate::report::Run::starting(),
         }
     }
 
@@ -210,9 +219,21 @@ impl RenderContext {
         &self.times
     }
 
-    /// The accumulated samples, encoded as a state file for a render identified by `key`.
+    /// The report as it stands: the runs before this one, and this one so far.
+    pub fn report_so_far(&self) -> crate::report::Report {
+        let mut report = self.report.clone();
+        let mut run = self.run.clone();
+        run.seconds = self.start_time.elapsed().as_secs_f64();
+        run.samples_after = self.samples.iter().map(|&n| n as u64).sum();
+        report.runs.push(run);
+        report
+    }
+
+    /// The accumulated samples, encoded as a state file for a render identified by `key`, with
+    /// the render's report so far.
     pub fn encode_state(&self, key: u64) -> Vec<u8> {
-        let mut out = Vec::with_capacity(STATE_HEADER + self.image.len() * STATE_PIXEL);
+        let report = self.report_so_far().encode();
+        let mut out = Vec::with_capacity(STATE_HEADER + self.image.len() * STATE_PIXEL + 8 + report.len());
         out.extend_from_slice(STATE_MAGIC);
         for v in [key, self.width as u64, self.height as u64] {
             out.extend_from_slice(&v.to_le_bytes());
@@ -223,19 +244,33 @@ impl RenderContext {
             }
             out.extend_from_slice(&(*n as u64).to_le_bytes());
         }
+        out.extend_from_slice(&(report.len() as u64).to_le_bytes());
+        out.extend_from_slice(&report);
         out
     }
 
-    /// Carry on from a saved state, if it is of this render (`key`, and the same size).
+    /// Carry on from a saved state, if it is of this render (`key`, and the same size), and
+    /// from its report. A state saved before reports has none; one whose report can't be read
+    /// is resumed without it, rather than losing its samples.
     pub fn load_state(&mut self, path: &str, key: u64) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {}", path, e))?;
         let pixels = self.width * self.height;
-        if bytes.len() < 8 || &bytes[..8] != STATE_MAGIC {
+        let with_report = bytes.len() >= 8 && &bytes[..8] == STATE_MAGIC;
+        if !with_report && (bytes.len() < 8 || &bytes[..8] != STATE_MAGIC_WITHOUT_REPORT) {
             return Err(format!("{} is not a saved render, or is from an older version", path));
         }
-        if bytes.len() != STATE_HEADER + pixels * STATE_PIXEL {
+        let end = STATE_HEADER + pixels * STATE_PIXEL;
+        let report = if with_report {
+            let length = bytes.get(end..end + 8).map(|b| u64::from_le_bytes(b.try_into().unwrap()) as usize);
+            match length {
+                Some(n) if bytes.len() == end + 8 + n => Some(&bytes[end + 8..]),
+                _ => return Err(format!("{} is not a saved render of this size", path)),
+            }
+        } else if bytes.len() != end {
             return Err(format!("{} is not a saved render of this size", path));
-        }
+        } else {
+            None
+        };
         let u64_at = |i: usize| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
         let f64_at = |i: usize| f64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
         if u64_at(8) != key || u64_at(16) != self.width as u64 || u64_at(24) != self.height as u64 {
@@ -248,6 +283,8 @@ impl RenderContext {
             self.samples[i] = u64_at(o + 48) as usize;
         }
         self.resumed_samples = self.samples.iter().map(|n| *n as u64).sum();
+        self.report = report.and_then(|r| crate::report::Report::decode(r).ok()).unwrap_or_default();
+        self.run.samples_before = self.resumed_samples;
         Ok(())
     }
 
@@ -788,6 +825,67 @@ mod tests {
         let mut smaller = RenderContext::new(12, 16, false, "test.json");
         assert!(smaller.load_state(path.to_str().unwrap(), 7).is_err());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    /// A state loaded into a new render of the test scene's size, as `render_from` does.
+    fn loaded(state: &[u8], name: &str) -> Result<RenderContext, String> {
+        let path = std::env::temp_dir().join(format!("rays-test-{}-{}.accum", name, std::process::id()));
+        std::fs::write(&path, state).unwrap();
+        let mut rc = RenderContext::new(24, 16, false, "test.json");
+        let loaded = rc.load_state(path.to_str().unwrap(), 7);
+        std::fs::remove_file(&path).unwrap();
+        loaded.map(|()| rc)
+    }
+
+    /// The end of a state's pixels: where its report begins.
+    const PIXELS_END: usize = STATE_HEADER + 24 * 16 * STATE_PIXEL;
+
+    #[test]
+    fn test_a_resumed_render_adds_its_run_to_the_report() {
+        let pixels = 24 * 16;
+        let first = render_from(3, 12, None);
+        let second = render_from(3, 32, Some(&first.encode_state(7)));
+        // The run before, as saved; and this one, from the samples it resumed.
+        assert_eq!(second.report.runs.len(), 1);
+        let before = &second.report.runs[0];
+        assert_eq!((before.samples_before, before.samples_after), (0, 12 * pixels));
+        let report = second.report_so_far();
+        assert_eq!(report.runs.len(), 2);
+        assert_eq!(report.runs[0], *before);
+        assert_eq!((report.runs[1].samples_before, report.runs[1].samples_after), (12 * pixels, 32 * pixels));
+        // And a third run keeps both (the second's time is as of its save, not of `report`).
+        let third = render_from(3, 40, Some(&second.encode_state(7)));
+        let all_but_time = |runs: &[crate::report::Run]| runs.iter().map(|r| (r.started, r.samples_before, r.samples_after)).collect::<Vec<_>>();
+        assert_eq!(all_but_time(&third.report.runs), all_but_time(&report.runs));
+    }
+
+    #[test]
+    fn test_a_state_saved_before_reports_still_resumes() {
+        let part = render_from(3, 12, None);
+        let mut old = part.encode_state(7)[.. PIXELS_END].to_vec();
+        old[..8].copy_from_slice(STATE_MAGIC_WITHOUT_REPORT);
+        let rc = loaded(&old, "old").unwrap();
+        assert_eq!(rc.resumed_samples, 12 * 24 * 16);
+        assert_eq!(rc.snapshot().pixels, part.snapshot().pixels);
+        assert!(rc.report.runs.is_empty());
+        // Saved again, it has a report: of this run alone, the runs before unknown.
+        assert_eq!(rc.report_so_far().runs.len(), 1);
+        // Without a report, a state with one's magic is truncated: refused.
+        let mut cut = part.encode_state(7);
+        cut.truncate(PIXELS_END + 4);
+        assert!(loaded(&cut, "cut").is_err());
+    }
+
+    #[test]
+    fn test_a_state_with_an_unreadable_report_keeps_its_samples() {
+        let part = render_from(3, 12, None);
+        let mut state = part.encode_state(7);
+        for b in &mut state[PIXELS_END + 8 ..] {
+            *b = b'#';
+        }
+        let rc = loaded(&state, "unreadable").unwrap();
+        assert_eq!(rc.resumed_samples, 12 * 24 * 16);
+        assert!(rc.report.runs.is_empty());
     }
 
     #[test]

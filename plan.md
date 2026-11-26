@@ -2766,24 +2766,33 @@ samples (`rays report`), cross-checked against the full-quality runs in
 heavily. Ranked by what fixing each would recover. Each item separates what was measured from
 what is supposed.
 
-### 1. Landscapes have fallen off the GPU
+### 1. Landscapes: rendered right only on the CPU's side
 
-Measured. On 22 November (render-all run B) `terrain-alpine` and `landscape` rendered on the
-GPU with no host stage: 8 s and 7 s at 64 samples. Since the master of 25 November (its
-landscape detail and ground materials; which change exactly isn't pinned down):
+Measured, and a correction. On 22 November (render-all run B) `terrain-alpine` and `landscape`
+rendered on the GPU in 8 s and 7 s at 64 samples, with no host stage; but as water. The
+kernels took a host material for their water if it was water at the scene's origin
+(`host_kernels`: `material_at(Vector3::zeros()).water()`), and a landscape's medium is water
+where its origin is in a river or a lake, ground elsewhere: run B's `terrain-alpine` is a
+dark, glinting sea between its mountains (`target/render-all/terrain-alpine-before-master.png`,
+main checkout). Fixed: only a medium that is one material throughout (`Medium::uniform`,
+`Solid`) can be the kernels' water. So those times were of the wrong picture, and the cost of
+landscapes now is their real cost:
 
-- `terrain-alpine`'s ground is a `Group` (`objects[0] (Group)`) the kernels can't intersect, so
-  it renders with the wavefront on the CPU: 13.4 s at 8 samples, about 13 times as slow a
-  sample. `alpine-layers`, `terrain-coast`, `terrain-volcanic` and `moonlit-alpine` are refused
-  for the same reason.
-- `landscape` stays on the GPU, but 89% of its stages' time is the host shading the ground's
-  materials (`objects[0] (SmoothMesh)`, 15 us a vertex), while the device waits (0.8 s of the
-  device's time against 5.2 s of the stages').
+- `terrain-alpine`'s ground is a `Group`, the clipmap's mesh and the displaced patches about the
+  camera (`terrain::object`, its own detail within 2 km of the ground); the kernels can't
+  intersect it, so it renders with the wavefront on the CPU (13.4 s at 8 samples), its ground
+  intersected (3.3 us a ray) and shaded (20 us a vertex) by the host. `alpine-layers`,
+  `terrain-coast`, `terrain-volcanic` and `moonlit-alpine` likewise.
+- `landscape` (no displacement: its camera is high) stays on the GPU, but 89% of its stages'
+  time is the host shading the ground (`LandscapeMedium`: snow, ice and the library's natural
+  materials on bare ground, `scenery::Bare`, at 15 us a vertex) while the device waits.
 
-Supposed: the `Group` is the clipmap's surface and the displaced nest about the camera
-(`scenery::Clipmap`, `displaced::Nest`); the surface alone is triangles the kernels could take,
-leaving only the displaced nest to the host. The ground's materials are the library's natural
-ones (`scenery::Bare`, `"ground_materials"`), procedural graphs the kernels have no code for.
+Supposed: the clipmap's mesh is triangles the kernels could take if a `Group` gave up its
+flat parts (`Geometry::flatten` is all or nothing), leaving the displaced patches to the host
+on the CPU; on the GPU those patches would have to become triangles too (diced for the
+camera, as they are lazily now), since a kernel can't stop for the host mid shadow-ray. The
+ground's shading would need a kernel of its own: the ground cover's choice of snow, ice or
+bare ground is data, the library's materials are graphs.
 
 ### 2. The atmosphere on the CPU
 
@@ -2843,5 +2852,6 @@ seconds from the world's cache.
 
 ### Next
 
-Item 1 first: the largest loss, across at least six demo scenes. Find which part of the
-`Group` the kernels can take, and what the ground's materials need.
+Item 1, reframed: what the landscape scenes cost is their own (the host's intersection and
+shading), not a regression; the first step is a `Group` giving its mesh to the kernels on the
+CPU, measured on `terrain-alpine`.

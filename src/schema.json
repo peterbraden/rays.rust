@@ -8390,6 +8390,7 @@
         {"name": "plinth", "kind": "number", "default": 0.4, "doc": "How high the stone plinth stands out of the ground, m.", "min": 0},
         {"name": "snow", "kind": "number", "default": 0.3, "doc": "The depth of snow on the roof, m (0 for none).", "min": 0},
         {"name": "icicles", "kind": "number", "default": 0.5, "doc": "Icicles along the eaves, from 0 (none) to 1 (many).", "min": 0, "max": 1},
+        {"name": "melt", "kind": "number", "default": 0.2, "doc": "How far the house's warmth has melted the snow on its roof, in patches near the ridge and about the chimneys, from 0 (none) to 1.", "min": 0, "max": 1},
         {"name": "chimney", "kind": "boolean", "default": true, "doc": "A stone chimney through the roof."},
         {"name": "wreath", "kind": "boolean", "default": true, "doc": "A wreath on the door."},
         {"name": "lit", "kind": "boolean", "default": true, "doc": "Whether the windows are lit from within; dark glass otherwise."},

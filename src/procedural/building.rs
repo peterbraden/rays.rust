@@ -414,6 +414,124 @@ fn cuboid_in(m: &mut IndexedMesh, f: &Frame, lo: V, hi: V) {
     cuboid(m, f.at(c.x, c.y, c.z), f.u * h.x, f.v * h.y, f.n * h.z);
 }
 
+/// Snow lying on a roof slope: the frame's origin on the ridge line, `v` down the slope to
+/// `length` at the eaves, `n` out of it, `u` along the ridge over `u0` to `u1`. Unlike a
+/// cushion (`snow_pad`) it is irregular as roof snow is:
+///
+/// - **depth** `depth` give or take a third, blending to `ridge_depth` at the ridge, where its
+///   top rises straight up (`up`) to meet the other side's;
+/// - **verges** scoured back by the wind a varying few centimetres to a quarter metre, so
+///   the edge slates show, the snow's edge rounded and wandering;
+/// - **melt**: where the house's warmth reaches through the roof, most near the ridge and
+///   about whatever `warm` says (chimney stacks), patches thin out to bare roof, the snow
+///   rounding off at their edges; `melt` from 0 (none) to 1;
+/// - **the cornice** over the eaves, reaching `lip` give or take, sagging further where it
+///   reaches further, and in stretches broken off short where it fell.
+#[allow(clippy::too_many_arguments)]
+pub fn roof_snow(frame: &Frame, (u0, u1): (f64, f64), length: f64, depth: f64, ridge_depth: f64, lip: f64, up: V,
+                 melt: f64, warm: &dyn Fn(&V) -> f64, noise: &PerlinNoise) -> IndexedMesh {
+    let spacing = 0.03;
+    let nu = ((u1 - u0) / spacing).ceil() as usize;
+    let most = lip * 1.8;
+    let nv = ((length + most) / spacing).ceil() as usize;
+    let rounded = |d: f64, radius: f64| -> f64 {
+        if d <= 0. { return 0.; }
+        let x = (d / radius).min(1.);
+        (1. - (1. - x) * (1. - x)).sqrt()
+    };
+    // Noise, scaled to about one either side of zero (fBm's spread is narrow).
+    let n1 = |x: f64, seed: f64| (noise.fbm(x, seed, seed * 0.37, 3, 0.5, 2.) - 0.5) / 0.12;
+    let n3 = |p: V| (noise.fbm(p.x, p.y, p.z, 3, 0.5, 2.) - 0.5) / 0.12;
+    let mut m = empty();
+    let mut grid = |top: bool| {
+        let k = m.positions.len();
+        for j in 0 ..= nv {
+            let v = (length + most) * j as f64 / nv as f64;
+            for i in 0 ..= nu {
+                let u = u0 + (u1 - u0) * i as f64 / nu as f64;
+                let p = frame.at(u, v.min(length), 0.);
+                let t = (v / 1.).clamp(0., 1.);
+                let base = ridge_depth + (depth - ridge_depth) * t * t * (3. - 2. * t);
+                let (w, x) = (p * 0.6, p * 4.);
+                // Uneven over metres where the wind laid it, rippled over half metres.
+                let deep = base * (1. + 0.12 * n3(w) + 0.04 * n3(p * 2. + V::repeat(17.)) + 0.015 * n3(x + V::repeat(31.)));
+                // The verges, scoured back (the same at the ridge from either side).
+                let vv = v.min(length);
+                let scour = |seed: f64| 0.02 + 0.08 * (n1(vv * 1.3, seed) + 0.5).max(0.) * (0.6 + 0.8 * (vv / 2.).min(1.));
+                let across = rounded(u - (u0 + scour(11.)), 0.5 * depth) * rounded((u1 - scour(23.)) - u, 0.5 * depth);
+                // Melted through, near the ridge and about anything warm.
+                let near_ridge = (1. - vv / length).max(0.).powi(2);
+                let warmth = melt * 0.9 * near_ridge + warm(&p) + 0.22 * (0.35 + 0.65 * near_ridge) * n3(p * 0.4 + V::new(5., 0., 0.));
+                let cover = ((0.45 - warmth) / 0.1).clamp(0., 1.).sqrt();
+                // The cornice: its reach along the eaves, broken short in stretches.
+                let broken = n1(u * 0.7, 50.) > 1.;
+                let reach = lip * (1. + 0.6 * n1(u * 1.2, 41.)).max(0.25) * if broken { 0.15 } else { 1. };
+                let droop = 0.25 * depth * (reach / lip.max(1e-9));
+                let thick = deep * across * cover * if broken { 0.8 } else { 1. };
+                let (hi, lo) = if v <= length {
+                    (thick, 0.)
+                } else {
+                    let s = ((v - length) / reach.max(1e-6)).min(1.);
+                    let curl = droop * s * s;
+                    (thick * (1. - s * s).max(0.).sqrt() - curl, -curl - 0.15 * thick * (PI * s).sin())
+                };
+                let h = if top { hi } else { lo };
+                let q = frame.at(u, v, 0.);
+                m.positions.push(if j == 0 && top { q + up * (h / up.dot(&frame.n)) } else { q + frame.n * h });
+            }
+        }
+        k
+    };
+    let top = grid(true);
+    let bottom = grid(false);
+    let at = |base: usize, i: usize, j: usize| base + j * (nu + 1) + i;
+    for j in 0 .. nv {
+        for i in 0 .. nu {
+            for (base, out) in [(top, frame.n), (bottom, -frame.n)] {
+                facing(&mut m, at(base, i, j), at(base, i + 1, j), at(base, i + 1, j + 1), &out);
+                facing(&mut m, at(base, i, j), at(base, i + 1, j + 1), at(base, i, j + 1), &out);
+            }
+        }
+    }
+    m.normals = vertex_normals(&m.positions, &m.triangles);
+    for i in 0 .. nu {
+        let corners = [(top, i), (top, i + 1), (bottom, i + 1), (bottom, i)].map(|(base, i)| m.positions[at(base, i, 0)]);
+        quad(&mut m, corners, -frame.v);
+    }
+    m
+}
+
+/// Slates on a roof slope (`frame` as `roof_snow`'s, on the boards' top): courses laid from
+/// the eaves up, each slate overlapping the course below so a gauge of it shows, joints
+/// broken course by course, each slate its own width, a little skew and tilted up at its
+/// tail by the slates under it.
+fn slates(m: &mut IndexedMesh, frame: &Frame, (u0, u1): (f64, f64), length: f64, rng: &mut Pcg32) {
+    let (gauge, long, thick): (f64, f64, f64) = (0.2, 0.42, 0.008);
+    let tilt = (2. * thick / long).atan();
+    let mut tail = length + 0.04;
+    let mut course = 0;
+    while tail > 0.02 {
+        let head = (tail - long).max(0.);
+        let mut u = u0 - if course % 2 == 0 { 0. } else { 0.14 };
+        while u < u1 {
+            let w = 0.24 + rng.next_f64() * 0.1;
+            let (a, b) = (u.max(u0), (u + w).min(u1));
+            if b - a > 0.04 {
+                let skew = (rng.next_f64() - 0.5) * 0.012;
+                let r = Rotation3::from_axis_angle(&crate::na::Unit::new_normalize(frame.n), skew)
+                    * Rotation3::from_axis_angle(&crate::na::Unit::new_normalize(frame.u), -tilt);
+                let slide = (rng.next_f64() - 0.5) * 0.01;
+                let mid = (head + tail) / 2. + slide;
+                let centre = frame.at((a + b) / 2., mid, thick * 1.5);
+                bevelled(m, centre, r * frame.u * ((b - a) / 2. - 0.003), r * frame.v * ((tail - head) / 2.), r * frame.n * (thick / 2.), 0.002);
+            }
+            u += w;
+        }
+        tail -= gauge;
+        course += 1;
+    }
+}
+
 /// Snow lying on a rectangle (`u0` to `u1` by `v0` to `v1` of `frame`, `n` up out of it), as
 /// deep as `depth`, give or take a fifth, and rounded over its edges; along the `v1` edge
 /// curling `lip` beyond it and drooping, a cornice. With `ridge`, the `v0` edge is a ridge: the
@@ -610,6 +728,8 @@ pub struct Cottage {
     pub snow: f64,
     /// Icicles along the eaves: 0 none, 1 many.
     pub icicles: f64,
+    /// How much the house's warmth has melted the snow on its roof, 0 to 1.
+    pub melt: f64,
     pub chimney: bool,
     pub wreath: bool,
     pub seed: u64,
@@ -620,7 +740,7 @@ impl Default for Cottage {
         Cottage {
             style: Style::Log, wall_thickness: 0.55,
             width: 7., depth: 5., wall_height: 2.5, pitch: 38., overhang: 0.6, gable_overhang: 0.5,
-            log_radius: 0.13, plinth: 0.4, snow: 0.3, icicles: 0.5, chimney: true, wreath: true, seed: 0,
+            log_radius: 0.13, plinth: 0.4, snow: 0.3, icicles: 0.5, melt: 0.2, chimney: true, wreath: true, seed: 0,
         }
     }
 }
@@ -756,22 +876,32 @@ impl Cottage {
                 let centre = ridge + down * (slope / 2.) + up * (thick / 2. - 0.03) + V::x() * (end * (half + 0.015));
                 bevelled(&mut roof, centre, V::x() * 0.015, down * (slope / 2. + 0.01), up * (thick / 2. + 0.06), 0.006);
             }
-            if self.snow > 0. {
-                let frame = Frame { origin: crest, u: V::x(), v: down, n: up };
-                // The wind scours the windward side (the back) and drops it in the lee; the two
-                // sides meet at the ridge at their mean.
-                let deep = self.snow * if side > 0. { 1.12 } else { 0.85 };
-                snow.append_mesh(snow_pad(&frame, (-half - 0.03, half + 0.03), (0., slope + thick * tan), deep,
-                    0.15, 0.35 * deep, Some((V::y(), self.snow)), &noise, 0.03));
+            // On stone, slates; and on them the snow.
+            let length = slope + thick * tan;
+            let on = Frame { origin: crest, u: V::x(), v: down, n: up };
+            let mut lies = on;
+            if self.style == Style::Stone {
+                slates(&mut roof, &on, (-half, half), length, &mut rng);
+                lies.origin += up * 0.022;
             }
-            // Icicles along the eave: from under the snow's cornice, where it curls over the
-            // edge, or with no snow from under the edge itself.
+            if self.snow > 0. {
+                // The wind scours the windward side (the back) and drops it in the lee; the two
+                // sides meet at the ridge at their mean. The house's warmth melts it in patches,
+                // most about the chimney stacks.
+                let deep = self.snow * if side > 0. { 1.12 } else { 0.85 };
+                let stacks: Vec<f64> = if self.chimney && self.style == Style::Stone {
+                    [1., -1.].iter().map(|e| e * (self.width / 2. + self.outer() - 0.3)).collect()
+                } else { vec![] };
+                let warm = |p: &V| stacks.iter().map(|&x| {
+                    let d = ((p.x - x).abs() - 0.3).max(0.).hypot((p.z.abs() - 0.42).max(0.));
+                    0.5 * (0.6 + self.melt) * (-(d / 0.4).powi(2)).exp()
+                }).sum::<f64>();
+                snow.append_mesh(roof_snow(&lies, (-half - 0.03, half + 0.03), length, deep, self.snow, 0.35 * deep,
+                    V::y(), self.melt, &warm, &noise));
+            }
+            // Icicles along the eave, hanging from its edge where meltwater drips and freezes.
             if self.icicles > 0. {
-                let from = if self.snow > 0. {
-                    eave_top + down * (0.5 * 0.35 * self.snow) - up * (0.12 * self.snow)
-                } else {
-                    eave - down * 0.04 + up * 0.02
-                };
+                let from = eave_top + down * 0.03 - up * 0.02;
                 let mut u = -half + 0.1;
                 loop {
                     u += (0.03 + rng.next_f64() * 0.25) / self.icicles.clamp(0.05, 1.);
@@ -783,6 +913,18 @@ impl Cottage {
             }
         }
         parts.add(Part::Roof, roof);
+        // Half-round ridge tiles along a slate roof's crest.
+        if self.style == Style::Stone {
+            let mut ridge = empty();
+            let y = self.ridge() + thick / cos + 0.01;
+            let mut x = -half;
+            while x < half - 0.01 {
+                let next = (x + 0.45).min(half);
+                tube(&mut ridge, V::new(x + 0.004, y, 0.), V::new(next - 0.004, y, 0.), 16, 2, |_, _| 0.09);
+                x = next;
+            }
+            parts.add(Part::Pots, ridge);
+        }
 
         // The chimney: on a stone cottage a stack on each gable, else through the back of the
         // roof near one gable.

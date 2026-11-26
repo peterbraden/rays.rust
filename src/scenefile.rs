@@ -4202,7 +4202,8 @@ impl SceneFile {
     /// `"width"` (along the ridge, 7, 7.5), `"depth"` (5), `"wall_height"` (2.5, 2.4),
     /// `"pitch"` (degrees, 38, 40), `"overhang"` (0.6, 0.2) and `"gable_overhang"` (0.5, 0.06),
     /// `"log_radius"` (0.13), `"wall_thickness"` (stone, 0.55), `"plinth"` (0.4, 0), `"snow"`
-    /// (its depth on the roof, 0.3), `"icicles"` (0 to 1, 0.5), `"chimney"` and `"wreath"`
+    /// (its depth on the roof, 0.3), `"icicles"` (0 to 1, 0.5), `"melt"` (how far the house's warmth
+    /// has melted the roof's snow, 0 to 1, 0.2), `"chimney"` and `"wreath"`
     /// (true). Each part has a material of its own, replaced by a name or a definition in
     /// `"materials"`: `logs`, `log_ends`, `chinking`, `stone` (and for rubble `stone_2`,
     /// `stone_3`), `dressed_stone`, `mortar`, `pots`, `roof`, `trim`, `door`, `iron`, `snow`,
@@ -4224,7 +4225,7 @@ impl SceneFile {
             wall_height: n("wall_height", d.wall_height).max(1.), pitch: n("pitch", d.pitch).clamp(5., 70.),
             overhang: n("overhang", d.overhang).max(0.), gable_overhang: n("gable_overhang", d.gable_overhang).max(if stone { 0. } else { 0.2 }),
             log_radius: n("log_radius", d.log_radius).clamp(0.05, 0.4), plinth: n("plinth", d.plinth).max(0.),
-            snow: n("snow", d.snow).max(0.), icicles: n("icicles", d.icicles).clamp(0., 1.),
+            snow: n("snow", d.snow).max(0.), icicles: n("icicles", d.icicles).clamp(0., 1.), melt: n("melt", d.melt).clamp(0., 1.),
             chimney: o["chimney"].as_bool().unwrap_or(d.chimney), wreath: o["wreath"].as_bool().unwrap_or(d.wreath),
             seed,
         };
@@ -4293,7 +4294,11 @@ impl SceneFile {
                 Part::Mortar if stone => json!({"type": "lambertian", "albedo": {"pattern": {"node": "fractal", "scale": 0.1, "seed": seed + 22},
                     "color_map": [[-0.5, [0.24, 0.23, 0.21]], [0.5, [0.36, 0.35, 0.32]]]}}),
                 Part::Mortar => json!({"type": "lambertian", "albedo": [0.3, 0.29, 0.27]}),
-                Part::Roof if stone => json!({"type": "plastic", "albedo": [0.06, 0.065, 0.075], "roughness": 0.35}),
+                // Slate, blue-grey, each a little different, dull where weathered.
+                Part::Roof if stone => json!({"type": "plastic", "roughness": 0.4, "albedo": {"pattern": {"node": "add", "inputs": [
+                    {"node": "cells", "style": "id", "scale": 0.15, "seed": seed + 23},
+                    {"node": "multiply", "inputs": [0.5, {"node": "fractal", "scale": 0.3, "seed": seed + 24}]}]},
+                    "color_map": [[0.0, [0.04, 0.045, 0.055]], [0.6, [0.07, 0.075, 0.085]], [1.2, [0.1, 0.1, 0.105]]]}}),
                 Part::Roof => json!({"type": "lambertian", "albedo": [0.1, 0.075, 0.06]}),
                 // Paint that has seen some winters: matt, uneven, greyed.
                 Part::Trim => paint([0.53, 0.52, 0.48], [0.68, 0.67, 0.62], seed + 16),

@@ -43,6 +43,8 @@ pub enum Part {
     /// gable walls): apart so that a wood's grain can follow each.
     LogsAlongX,
     LogsAlongZ,
+    /// The logs' sawn ends.
+    LogEnds,
     Stone,
     Mortar,
     Roof,
@@ -57,13 +59,14 @@ pub enum Part {
 }
 
 impl Part {
-    pub const ALL: [Part; 12] = [Part::LogsAlongX, Part::LogsAlongZ, Part::Stone, Part::Mortar, Part::Roof,
+    pub const ALL: [Part; 13] = [Part::LogsAlongX, Part::LogsAlongZ, Part::LogEnds, Part::Stone, Part::Mortar, Part::Roof,
         Part::Trim, Part::Door, Part::Iron, Part::Snow, Part::Icicles, Part::Wreath, Part::Ribbon];
 
     /// Its name in a scene's `"materials"`.
     pub fn name(&self) -> &'static str {
         match self {
             Part::LogsAlongX | Part::LogsAlongZ => "logs",
+            Part::LogEnds => "log_ends",
             Part::Stone => "stone",
             Part::Mortar => "mortar",
             Part::Roof => "roof",
@@ -164,12 +167,21 @@ fn perpendiculars(d: &V) -> (V, V) {
 /// A tube from `a` to `b`, its radius `radius(s, angle)` at `s` from 0 to 1 along it; closed
 /// by flat caps where the radius isn't zero.
 fn tube(m: &mut IndexedMesh, a: V, b: V, around: usize, along: usize, radius: impl Fn(f64, f64) -> f64) {
+    tube_into(m, None, a, b, around, along, V::zeros(), radius)
+}
+
+/// As `tube`, its axis bowed by `bow` at its middle (and less towards its ends), and its caps,
+/// if `caps`, put in a mesh of their own (a log's sawn ends, in end grain).
+#[allow(clippy::too_many_arguments)]
+fn tube_into(m: &mut IndexedMesh, caps: Option<&mut IndexedMesh>, a: V, b: V, around: usize, along: usize, bow: V,
+             radius: impl Fn(f64, f64) -> f64) {
     let d = (b - a).normalize();
     let (p, q) = perpendiculars(&d);
+    let axis = |s: f64| a + (b - a) * s + bow * (PI * s).sin();
     let k = m.positions.len();
     for j in 0 ..= along {
         let s = j as f64 / along as f64;
-        let centre = a + (b - a) * s;
+        let centre = axis(s);
         for i in 0 .. around {
             let t = i as f64 / around as f64 * TAU;
             let r = radius(s, t);
@@ -181,27 +193,29 @@ fn tube(m: &mut IndexedMesh, a: V, b: V, around: usize, along: usize, radius: im
     for j in 0 .. along {
         for i in 0 .. around {
             let (i1, r0, r1) = ((i + 1) % around, k + j * around, k + (j + 1) * around);
-            let out = m.positions[r0 + i] - (a + (b - a) * (j as f64 / along as f64));
-            let out = out - d * out.dot(&d);
+            let out = m.normals[r0 + i];
             facing(m, r0 + i, r0 + i1, r1 + i1, &out);
             facing(m, r0 + i, r1 + i1, r1 + i, &out);
         }
     }
+    let mut ends = empty();
     for (j, outward) in [(0, -d), (along, d)] {
         if radius(j as f64 / along as f64, 0.) <= 1e-9 { continue; }
-        let centre = a + (b - a) * (j as f64 / along as f64);
-        let c = m.positions.len();
-        m.positions.push(centre);
-        m.normals.push(outward);
-        let ring = m.positions.len();
+        let centre = axis(j as f64 / along as f64);
+        let c = ends.positions.len();
+        ends.positions.push(centre);
+        ends.normals.push(outward);
         for i in 0 .. around {
-            let p = m.positions[k + j * around + i];
-            m.positions.push(p);
-            m.normals.push(outward);
+            ends.positions.push(m.positions[k + j * around + i]);
+            ends.normals.push(outward);
         }
         for i in 0 .. around {
-            facing(m, c, ring + i, ring + (i + 1) % around, &outward);
+            facing(&mut ends, c, c + 1 + i, c + 1 + (i + 1) % around, &outward);
         }
+    }
+    match caps {
+        Some(caps) => caps.append_mesh(ends),
+        None => m.append_mesh(ends),
     }
 }
 
@@ -309,18 +323,18 @@ fn masonry(parts: &mut Parts, lo: V, hi: V, course: f64, rng: &mut Pcg32, noise:
 /// snow runs right to it, and its top there rises straight up (along `up`) to meet the snow
 /// on the roof's other side.
 #[allow(clippy::too_many_arguments)]
-pub fn snow_pad(frame: &Frame, (u0, u1): (f64, f64), (v0, v1): (f64, f64), depth: f64, lip: f64,
+pub fn snow_pad(frame: &Frame, (u0, u1): (f64, f64), (v0, v1): (f64, f64), depth: f64, round: f64, lip: f64,
                 ridge: Option<V>, noise: &PerlinNoise, spacing: f64) -> IndexedMesh {
     let nu = ((u1 - u0) / spacing).ceil().max(2.) as usize;
     let length = v1 + lip - v0;
     let nv = (length / spacing).ceil().max(2.) as usize;
-    let radius = depth * 1.3;
+    let radius = depth * round;
     let edge = |d: f64| -> f64 {
         if d <= 0. { return 0.; }
         let x = (d / radius).min(1.);
         (1. - (1. - x) * (1. - x)).sqrt()
     };
-    let droop = 0.5 * depth;
+    let droop = 0.3 * depth;
     let mut m = empty();
     let mut grid = |top: bool| {
         let k = m.positions.len();
@@ -329,8 +343,10 @@ pub fn snow_pad(frame: &Frame, (u0, u1): (f64, f64), (v0, v1): (f64, f64), depth
             for i in 0 ..= nu {
                 let u = u0 + (u1 - u0) * i as f64 / nu as f64;
                 let p = frame.at(u, v, 0.);
-                let w = p * 1.1;
-                let deep = depth * (1. + 0.4 * (noise.fbm(w.x, w.y, w.z, 3, 0.5, 2.) - 0.5));
+                // Uneven over metres where the wind laid it, and a little over decimetres.
+                let (w, x) = (p * 0.6, p * 4.);
+                let deep = depth * (1. + 0.35 * (noise.fbm(w.x, w.y, w.z, 3, 0.5, 2.) - 0.5)
+                    + 0.06 * (noise.fbm(x.x + 31., x.y, x.z, 2, 0.5, 2.) - 0.5));
                 let across = edge(u - u0) * edge(u1 - u);
                 let from = if ridge.is_some() { 1. } else { edge(v - v0) };
                 let (hi, lo) = if v <= v1 || lip <= 0. {
@@ -340,7 +356,7 @@ pub fn snow_pad(frame: &Frame, (u0, u1): (f64, f64), (v0, v1): (f64, f64), depth
                     let t = ((v - v1) / lip).min(1.);
                     let curl = droop * t * t;
                     (deep * across * (1. - t * t).max(0.).sqrt() - curl,
-                     -curl - 0.3 * deep * across * (PI * t).sin())
+                     -curl - 0.15 * deep * across * (PI * t).sin())
                 };
                 let h = if top { hi } else { lo };
                 m.positions.push(match (ridge, j) {
@@ -370,6 +386,51 @@ pub fn snow_pad(frame: &Frame, (u0, u1): (f64, f64), (v0, v1): (f64, f64), depth
             quad(&mut m, corners, -frame.v);
         }
     }
+    m
+}
+
+/// Snow drifted on the ground (y = 0 in `frame`, `n` up): a surface as high as `depth` times
+/// `profile(u, v)` (0 to 1) over `u0` to `u1` by `v0` to `v1`, its height and its line
+/// wandering with noise, its ends tapering irregularly, and nothing in `gap` along u (a
+/// doorway cleared). The ground beneath closes it.
+fn drift(frame: &Frame, (u0, u1): (f64, f64), gap: Option<(f64, f64)>, profile: impl Fn(f64, f64) -> f64,
+         depth: f64, (v0, v1): (f64, f64), noise: &PerlinNoise) -> IndexedMesh {
+    let spacing = 0.05;
+    let nu = ((u1 - u0) / spacing).ceil() as usize;
+    let nv = ((v1 - v0) / spacing).ceil() as usize;
+    let mut m = empty();
+    let smooth = |x: f64| { let x = x.clamp(0., 1.); x * x * (3. - 2. * x) };
+    for j in 0 ..= nv {
+        let v = v0 + (v1 - v0) * j as f64 / nv as f64;
+        for i in 0 ..= nu {
+            let u = u0 + (u1 - u0) * i as f64 / nu as f64;
+            let p = frame.at(u, 0., 0.);
+            let (a, b) = (p * 0.5, p * 3.);
+            // The line wanders, and the height varies along it.
+            let shift = 0.35 * (noise.fbm(a.x + 7., a.y, a.z, 3, 0.5, 2.) - 0.5);
+            let height = 0.6 + 0.8 * noise.fbm(a.x, a.y + 13., a.z, 3, 0.5, 2.);
+            let ripple = 1. + 0.08 * (noise.fbm(b.x + v * 3., b.y, b.z - v * 3., 2, 0.5, 2.) - 0.5);
+            // Tapering at the ends and at the doorway, over a metre or so, irregularly.
+            let ragged = 0.5 + 1.2 * noise.fbm(a.x - 5., a.y, a.z + 3., 2, 0.5, 2.);
+            let mut taper = smooth((u - u0) / ragged) * smooth((u1 - u) / ragged);
+            if let Some((g0, g1)) = gap {
+                let into = (g0 - u).max(u - g1);
+                taper *= smooth(into / (0.25 + 0.3 * ragged));
+            }
+            // Nothing at the grid's own edges, so the drift meets the ground.
+            let rim = smooth((v - v0) / 0.15) * smooth((v1 - v) / 0.3);
+            let h = depth * height * ripple * taper * rim * profile(u, v - shift);
+            m.positions.push(frame.at(u, v, h - 0.03));
+        }
+    }
+    let at = |i: usize, j: usize| j * (nu + 1) + i;
+    for j in 0 .. nv {
+        for i in 0 .. nu {
+            facing(&mut m, at(i, j), at(i + 1, j), at(i + 1, j + 1), &frame.n);
+            facing(&mut m, at(i, j), at(i + 1, j + 1), at(i, j + 1), &frame.n);
+        }
+    }
+    m.normals = vertex_normals(&m.positions, &m.triangles);
     m
 }
 
@@ -522,6 +583,7 @@ impl Cottage {
         // The walls.
         let mut logs_x = empty();
         let mut logs_z = empty();
+        let mut log_ends = empty();
         for mut wall in self.walls() {
             let f = wall.frame;
             let mut courses = vec![];
@@ -554,16 +616,32 @@ impl Cottage {
                         }).filter(|(p, q)| q - p > 0.1).collect();
                     }
                 }
-                for (p, q) in pieces {
+                for (mut p, mut q) in pieces {
+                    // Ends past the corners aren't sawn to a line: each a little longer or shorter.
+                    // (Those cut to the roof's line only shorter.)
+                    let past = half >= wall.half + e - 1e-9;
+                    let jitter = |x: f64| if past { (x - 0.4) * 0.12 } else { -x * 0.06 };
+                    if p <= -half + 1e-9 { p -= jitter(rng.next_f64()); }
+                    if q >= half - 1e-9 { q += jitter(rng.next_f64()); }
                     let thick = r * (1. + (rng.next_f64() - 0.5) * 0.14);
                     let taper = (rng.next_f64() - 0.5) * 0.1;
                     let oval = rng.next_f64() * TAU;
                     let phase = rng.next_f64() * TAU;
                     let length = q - p;
+                    // No log is straight: each bows a little in or out of the wall, swells at
+                    // knots, and was hewn out of round.
+                    let bow = f.n * ((rng.next_f64() - 0.5) * 0.025 * (length / 4.).min(1.));
+                    let knots: Vec<(f64, f64, f64)> = (0 .. (length * 0.8) as usize + 1)
+                        .map(|_| (rng.next_f64(), rng.next_f64() * TAU, 0.03 + rng.next_f64() * 0.05)).collect();
                     let mesh = if f.u.x.abs() > 0.5 { &mut logs_x } else { &mut logs_z };
-                    tube(mesh, f.at(p, y, 0.), f.at(q, y, 0.), 16, ((length / 0.35).ceil() as usize).max(1), |t, a| {
-                        thick * (1. + taper * (t - 0.5)) * (1. + 0.035 * (2. * (a - oval)).cos())
-                            * (1. + 0.02 * (t * length * 2.3 + phase).sin())
+                    tube_into(mesh, Some(&mut log_ends), f.at(p, y, 0.), f.at(q, y, 0.), 20, ((length / 0.12).ceil() as usize).max(2), bow, |t, a| {
+                        let knot: f64 = knots.iter().map(|&(at, round, size)| {
+                            let along = (t - at) * length / 0.07;
+                            let angle = (a - round + PI).rem_euclid(TAU) - PI;
+                            size * (-(along * along) - angle * angle * 2.5).exp()
+                        }).sum();
+                        thick * (1. + taper * (t - 0.5)) * (1. + 0.04 * (2. * (a - oval)).cos() + 0.012 * (3. * a + phase).sin())
+                            * (1. + 0.015 * (t * length * 2.3 + phase).sin() + knot)
                     });
                 }
             }
@@ -576,21 +654,23 @@ impl Cottage {
         let reach = self.width / 2. + self.gable_overhang - 0.05;
         for z in [-self.depth / 4., 0., self.depth / 4.] {
             let y = self.under_roof(z) - r * 0.9 / cos;
-            tube(&mut logs_x, V::new(-reach, y, z), V::new(reach, y, z), 16, 12, |_, _| r * 0.9);
+            tube_into(&mut logs_x, Some(&mut log_ends), V::new(-reach, y, z), V::new(reach, y, z), 20, 40, V::zeros(),
+                |_, a| r * 0.9 * (1. + 0.03 * (2. * a).cos()));
         }
         parts.add(Part::LogsAlongX, logs_x);
         parts.add(Part::LogsAlongZ, logs_z);
+        parts.add(Part::LogEnds, log_ends);
 
         // The plinth.
         masonry(&mut parts, V::new(-self.width / 2. - r * 1.2, -0.3, -self.depth / 2. - r * 1.2),
             V::new(self.width / 2. + r * 1.2, self.plinth, self.depth / 2. + r * 1.2), 0.23, &mut rng, &noise);
 
         // The roof: a slab each side, mitred at the ridge.
-        let thick = 0.12;
+        // Boards on rafters: the roof's edge shows under the snow.
+        let thick = 0.2;
         let slope = (self.depth / 2. + self.overhang) / cos;
         let half = self.width / 2. + self.gable_overhang;
         let mut roof = empty();
-        let mut trim = empty();
         let mut snow = empty();
         let mut icicles = empty();
         for side in [1., -1.] {
@@ -613,18 +693,18 @@ impl Cottage {
             // Bargeboards along the gables' edges.
             for end in [-1., 1.] {
                 let centre = ridge + down * (slope / 2.) + up * (thick / 2. - 0.03) + V::x() * (end * (half + 0.015));
-                cuboid(&mut trim, centre, V::x() * 0.015, down * (slope / 2. + 0.01), up * (thick / 2. + 0.06));
+                cuboid(&mut roof, centre, V::x() * 0.015, down * (slope / 2. + 0.01), up * (thick / 2. + 0.06));
             }
             if self.snow > 0. {
                 let frame = Frame { origin: crest, u: V::x(), v: down, n: up };
-                snow.append_mesh(snow_pad(&frame, (-half - 0.04, half + 0.04), (0., slope + thick * tan), self.snow,
-                    0.8 * self.snow, Some(V::y()), &noise, 0.07));
+                snow.append_mesh(snow_pad(&frame, (-half + 0.01, half - 0.01), (0., slope + thick * tan), self.snow,
+                    0.35, 0.35 * self.snow, Some(V::y()), &noise, 0.05));
             }
             // Icicles along the eave: from under the snow's cornice, where it curls over the
             // edge, or with no snow from under the edge itself.
             if self.icicles > 0. {
                 let from = if self.snow > 0. {
-                    eave_top + down * (0.5 * 0.8 * self.snow) - up * (0.3 * self.snow)
+                    eave_top + down * (0.5 * 0.35 * self.snow) - up * (0.12 * self.snow)
                 } else {
                     eave - down * 0.04 + up * 0.02
                 };
@@ -633,7 +713,7 @@ impl Cottage {
                     u += (0.03 + rng.next_f64() * 0.25) / self.icicles.clamp(0.05, 1.);
                     if u >= half - 0.1 { break; }
                     let length = 0.05 + 0.7 * rng.next_f64().powf(2.5) * (0.4 + self.icicles);
-                    let radius = (length * (0.1 + 0.06 * rng.next_f64())).clamp(0.006, 0.04);
+                    let radius = (length * (0.06 + 0.04 * rng.next_f64())).clamp(0.005, 0.03);
                     icicle(&mut icicles, from + V::x() * u, length, radius, &mut rng);
                 }
             }
@@ -651,47 +731,41 @@ impl Cottage {
             parts.add(Part::Stone, slab);
             if self.snow > 0. {
                 let frame = Frame { origin: cap + V::y() * 0.04, u: V::x(), v: V::z(), n: V::y() };
-                snow.append_mesh(snow_pad(&frame, (-w - 0.08, w + 0.08), (-w - 0.08, w + 0.08), self.snow * 0.6, 0., None, &noise, 0.04));
+                snow.append_mesh(snow_pad(&frame, (-w - 0.08, w + 0.08), (-w - 0.08, w + 0.08), self.snow * 0.6, 0.5, 0., None, &noise, 0.03));
             }
         }
         if self.snow > 0. {
             self.drifts(&mut snow, &noise);
         }
-        parts.add(Part::Trim, trim);
         parts.add(Part::Snow, snow);
         parts.add(Part::Icicles, icicles);
         Built { parts, windows }
     }
 
     /// Snow heaped on the ground: in a bank along each eave's drip line, where what slides off
-    /// the roof lands, and a little against the foot of every wall; cleared from the doorway.
+    /// the roof lands, and banked against the foot of every wall; cleared from the doorway.
     fn drifts(&self, snow: &mut IndexedMesh, noise: &PerlinNoise) {
         let r = self.log_radius;
         let (w, d) = (self.width / 2., self.depth / 2.);
-        let ground = -0.02;
-        let door = 0.75;
+        let door = 0.6;
+        let reach = w + self.gable_overhang + 0.6;
         for side in [1., -1.] {
-            // Under the eave: as long as the roof, out where its edge drips.
-            let frame = Frame { origin: V::new(0., ground, side * (d + self.overhang + r)), u: V::x(), v: V::z() * side, n: V::y() };
-            let reach = w + self.gable_overhang;
-            let spans: Vec<(f64, f64)> = if side > 0. { vec![(-reach, -door), (door, reach)] } else { vec![(-reach, reach)] };
-            for span in spans {
-                snow.append_mesh(snow_pad(&frame, span, (-0.55, 0.55), self.snow * 1.3, 0., None, noise, 0.06));
-            }
+            // Under the eave, out where its edge drips; the bank and the snow against the wall
+            // run together.
+            let frame = Frame { origin: V::new(0., 0., side * (d + r)), u: V::x(), v: V::z() * side, n: V::y() };
+            let line = self.overhang + 0.05;
+            let gap = (side > 0.).then_some((-door, door));
+            snow.append_mesh(drift(&frame, (-reach, reach), gap, |_, v| {
+                let bank = (-((v - line) / 0.5).powi(2)).exp();
+                let foot = (-(v / 0.4).powi(2)).exp() * 0.75;
+                bank.max(foot)
+            }, self.snow * 1.6, (-0.1, line + 1.5), noise));
         }
-        // At the foot of each wall, over the plinth's lowest course.
-        let foot = 0.45;
-        for (origin, u, v, half, doorway) in [
-            (V::new(0., ground, d + r), V::x(), V::z(), w + r, true),
-            (V::new(0., ground, -d - r), V::x(), -V::z(), w + r, false),
-            (V::new(w + r, ground, 0.), V::z(), V::x(), d + r + foot, false),
-            (V::new(-w - r, ground, 0.), V::z(), -V::x(), d + r + foot, false),
-        ] {
-            let frame = Frame { origin, u, v, n: V::y() };
-            let spans: Vec<(f64, f64)> = if doorway { vec![(-half, -door), (door, half)] } else { vec![(-half, half)] };
-            for span in spans {
-                snow.append_mesh(snow_pad(&frame, span, (-0.2, foot), self.snow * 0.8, 0., None, noise, 0.06));
-            }
+        for side in [1., -1.] {
+            // The gables: no roof drips there, only snow blown against the wall.
+            let frame = Frame { origin: V::new(side * (w + r), 0., 0.), u: V::z(), v: V::x() * side, n: V::y() };
+            snow.append_mesh(drift(&frame, (-d - 0.9, d + 0.9), None, |_, v| (-(v / 0.5).powi(2)).exp(),
+                self.snow * 1.2, (-0.1, 1.4), noise));
         }
     }
 
@@ -721,7 +795,7 @@ impl Cottage {
                 let top = Frame { origin: f.at(o.centre, y0, (back + sill.z) / 2.), u: f.u, v: f.n, n: V::y() };
                 let half = (sill.z - back) / 2.;
                 parts.add(Part::Snow, snow_pad(&top, (-o.width / 2. - board - 0.05, o.width / 2. + board + 0.05),
-                    (-half, half + 0.01), (self.snow * 0.25).min(0.08), 0., None, noise, 0.02));
+                    (-half, half + 0.01), (self.snow * 0.25).min(0.08), 0.6, 0., None, noise, 0.02));
             }
         }
         if door {
@@ -802,6 +876,97 @@ impl Cottage {
     }
 }
 
+/// A window seen from outside: a pane of glass over a lit room. The glass reflects by
+/// Fresnel's equations (4% straight on, nearly everything at a glancing angle), so by day a
+/// window shows the sky and its surroundings and is dark beyond; what it doesn't reflect is
+/// the room's light, coming through. The room is drawn on the pane's texture coordinates:
+/// curtains drawn back to either side, their folds letting some light through, and the room
+/// brightest about a lamp low down, dimmer up towards the ceiling. As an emitter its light is
+/// sampled like any area light, so it spills out onto the snow.
+pub struct WindowPane {
+    pub emission: crate::spectrum::Emission,
+    pub intensity: f64,
+    /// Each window's own room: where its lamp stands, how far its curtains are drawn, and its
+    /// curtains' colour.
+    lamp: (f64, f64),
+    curtains: f64,
+    curtain: crate::color::Color,
+    folds: f64,
+}
+
+impl WindowPane {
+    pub fn new(emission: crate::spectrum::Emission, intensity: f64, seed: u64) -> WindowPane {
+        let mut rng = Pcg32::new(seed, 0x0f1);
+        let colours = [[0.55, 0.12, 0.08], [0.7, 0.62, 0.45], [0.3, 0.38, 0.22], [0.75, 0.7, 0.62]];
+        let c = colours[(rng.next_f64() * colours.len() as f64) as usize % colours.len()];
+        WindowPane {
+            emission, intensity,
+            lamp: (0.2 + rng.next_f64() * 0.6, 0.15 + rng.next_f64() * 0.3),
+            curtains: 0.12 + rng.next_f64() * 0.12,
+            curtain: crate::color::Color::new(c[0], c[1], c[2]),
+            folds: 9. + rng.next_f64() * 6.,
+        }
+    }
+
+    /// The room's light through the pane at (u, v), relative to its mean.
+    fn room(&self, uv: Option<crate::na::Vector2<f64>>) -> crate::color::Color {
+        use crate::color::Color;
+        let Some(uv) = uv else { return Color::new(0.8, 0.8, 0.8) };
+        let (u, v) = (uv.x.clamp(0., 1.), uv.y.clamp(0., 1.));
+        let (du, dv) = (u - self.lamp.0, (v - self.lamp.1) * 1.4);
+        let glow = 0.35 + 1.4 * (-(du * du + dv * dv) / 0.09).exp();
+        let ceiling = 1. - 0.45 * v * v;
+        let room = glow * ceiling;
+        // Curtains, hanging in folds, lit from behind.
+        let edge = u.min(1. - u);
+        let drawn = self.curtains * (1. - 0.35 * v);
+        if edge < drawn {
+            let fold = 0.55 + 0.45 * (std::f64::consts::TAU * self.folds * u).cos();
+            return self.curtain * (room * 0.35 * fold);
+        }
+        Color::new(room, room, room)
+    }
+
+    fn transmitted(&self, normal: &V, towards: &V, uv: Option<crate::na::Vector2<f64>>) -> crate::color::Color {
+        let cos = towards.dot(normal);
+        if cos <= 0. {
+            return crate::color::Color::black();
+        }
+        let f = crate::material::functions::schlick(cos, 1.5);
+        self.emission.radiance() * self.intensity * self.room(uv).as_unbounded() * (1. - f)
+    }
+}
+
+impl crate::material::model::MaterialModel for WindowPane {
+    fn is_emitter(&self) -> bool { true }
+
+    fn emitted(&self, normal: &V, towards: &V) -> crate::color::Color {
+        self.transmitted(normal, towards, None)
+    }
+
+    fn emitted_at(&self, normal: &V, towards: &V, uv: Option<crate::na::Vector2<f64>>) -> crate::color::Color {
+        self.transmitted(normal, towards, uv)
+    }
+
+    fn scatter(&self, r: &crate::ray::Ray, intersection: &crate::intersection::Intersection, _s: &crate::scene::Scene) -> crate::material::model::ScatteredRay {
+        use crate::material::model::{LightSampling, ScatteredRay};
+        let wo = -r.rd.normalize();
+        let n = intersection.normal;
+        let cos = wo.dot(&n);
+        if cos <= 0. {
+            // From inside: nothing to see.
+            return ScatteredRay { ray: None, attenuate: crate::color::Color::black(), emit: crate::color::Color::black(), light_sampling: LightSampling::None };
+        }
+        let f = crate::material::functions::schlick(cos, 1.5);
+        ScatteredRay {
+            ray: Some(crate::ray::Ray { ro: intersection.point, rd: crate::material::functions::reflect(r.rd.normalize(), n) }),
+            attenuate: crate::color::Color::new(f, f, f),
+            emit: self.transmitted(&n, &wo, intersection.uv()),
+            light_sampling: LightSampling::None,
+        }
+    }
+}
+
 /// Appending one mesh to another.
 pub trait AppendMesh {
     fn append_mesh(&mut self, other: IndexedMesh);
@@ -850,7 +1015,8 @@ mod tests {
         }
     }
 
-    /// No log reaches through the roof: every vertex of the walls is under its underside.
+    /// No log reaches through the roof: every vertex of the walls is under its underside, or
+    /// (where a knot or a bow swells a top log) hidden a little way into the roof's boards.
     #[test]
     fn test_logs_stay_under_the_roof() {
         let c = Cottage::default();
@@ -858,7 +1024,7 @@ mod tests {
         for part in [Part::LogsAlongX, Part::LogsAlongZ] {
             for m in &built.parts.meshes[&part] {
                 for p in &m.positions {
-                    assert!(p.y <= c.under_roof(p.z) + 0.02, "{:?} above the roof's {}", p, c.under_roof(p.z));
+                    assert!(p.y <= c.under_roof(p.z) + 0.05, "{:?} above the roof's {}", p, c.under_roof(p.z));
                 }
             }
         }
@@ -879,7 +1045,7 @@ mod tests {
     #[test]
     fn test_snow_pad_is_watertight_at_its_edges() {
         let frame = Frame { origin: V::zeros(), u: V::x(), v: V::z(), n: V::y() };
-        let pad = snow_pad(&frame, (-1., 1.), (-0.5, 0.5), 0.1, 0., None, &PerlinNoise::shuffled(1), 0.05);
+        let pad = snow_pad(&frame, (-1., 1.), (-0.5, 0.5), 0.1, 1.3, 0., None, &PerlinNoise::shuffled(1), 0.05);
         // Top and bottom grids meet along the boundary: the first row of each is the same.
         let row = pad.positions.len() / 2;
         for i in 0 .. 10 {

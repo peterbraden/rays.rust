@@ -4203,7 +4203,8 @@ impl SceneFile {
     /// the roof, 0.3), `"icicles"` (0 to 1, 0.5), `"chimney"` and `"wreath"` (true). Each part
     /// has a material of its own, replaced by a name or a definition in `"materials"`: `logs`,
     /// `stone`, `mortar`, `roof`, `trim`, `door`, `iron`, `snow`, `icicles`, `wreath`, `ribbon`,
-    /// and `window`, the light of the windows (warm lamplight; `"lit": false` for dark glass).
+    /// `log_ends`, and `window`: by default glass over a lamplit room, `"light"` (4) bright at
+    /// `"light_temperature"` (2700 K); `"lit": false` for dark glass.
     pub fn parse_cottage(o: &Value, materials: &Map<String, Value>) -> Vec<Arc<SceneObject>> {
         use crate::procedural::building::{Cottage, Part};
         let d = Cottage::default();
@@ -4229,22 +4230,32 @@ impl SceneFile {
                 None => SceneFile::parse_material_definition(&default, &format!("cottage {}", name), materials),
             }
         };
-        // Wood's grain along each log: noise stretched along it.
+        // Logs left out for years: silvered grey-brown, the grain standing up, split by checks
+        // along it; noise and cells stretched along each log.
         let logs = |along: [f64; 3]| -> Value {
-            let grain = serde_json::json!({"node": "transform", "scale": along,
-                "input": {"node": "fractal", "scale": 0.06, "smallest": 0.002, "seed": seed + 11}});
-            serde_json::json!({"type": "snow_cover", "cover": 0.3, "drift": 0.12, "seed": seed + 5,
-                "snow": {"preset": "fresh"},
-                "material": {"type": "lambertian", "albedo": {"pattern": {"node": "add", "inputs": [grain,
-                    {"node": "multiply", "inputs": [0.6, {"node": "fractal", "scale": 0.7, "seed": seed + 12}]}]},
-                    "color_map": [[-0.6, [0.1, 0.068, 0.045]], [0.0, [0.2, 0.14, 0.09]], [0.6, [0.32, 0.24, 0.16]]]},
-                    "normal": {"graph": {"node": "multiply", "inputs": [0.002, grain]}, "amount": 1}}})
+            use serde_json::json;
+            let stretch = |by: f64, input: Value| json!({"node": "transform", "scale": along.map(|a| if a > 1. { by } else { 1. }), "input": input});
+            let grain = stretch(20., json!({"node": "fractal", "scale": 0.05, "smallest": 0.002, "seed": seed + 11}));
+            let checks = json!({"node": "smoothstep", "from": 0.06, "to": 0.0,
+                "input": stretch(14., json!({"node": "cells", "style": "edges", "scale": 0.05, "seed": seed + 13}))});
+            // Weathering over the wall, and each log its own shade.
+            let weather = json!({"node": "add", "inputs": [{"node": "fractal", "scale": 0.8, "seed": seed + 12},
+                {"node": "multiply", "inputs": [0.8, {"node": "add", "inputs": [-0.5,
+                    stretch(25., json!({"node": "cells", "style": "id", "scale": 0.2, "seed": seed + 15}))]}]}]});
+            json!({"type": "lambertian", "albedo": {"pattern": checks.clone(), "color_map": [
+                    [0, {"pattern": {"node": "add", "inputs": [grain.clone(), {"node": "multiply", "inputs": [0.7, weather]}]},
+                         "color_map": [[-0.6, [0.13, 0.11, 0.09]], [0.0, [0.23, 0.2, 0.17]], [0.6, [0.34, 0.31, 0.27]]]}],
+                    [1, [0.03, 0.025, 0.02]]]},
+                "normal": {"graph": {"node": "add", "inputs": [{"node": "multiply", "inputs": [0.0015, grain]},
+                    {"node": "multiply", "inputs": [-0.004, checks]}]}, "amount": 1}})
         };
         let defaults = |part: Part| -> Value {
             use serde_json::json;
             match part {
                 Part::LogsAlongX => logs([16., 1., 1.]),
                 Part::LogsAlongZ => logs([1., 1., 16.]),
+                Part::LogEnds => json!({"type": "lambertian", "albedo": {"pattern": {"node": "fractal", "scale": 0.05, "seed": seed + 14},
+                    "color_map": [[-0.5, [0.14, 0.12, 0.1]], [0.5, [0.27, 0.23, 0.18]]]}}),
                 Part::Stone => json!({"type": "snow_cover", "cover": 0.38, "drift": 0.1, "seed": seed + 6,
                     "snow": {"preset": "fresh"}, "material": {"type": "rock", "preset": "granite", "lichen": 0.2, "seed": seed}}),
                 Part::Mortar => json!({"type": "lambertian", "albedo": [0.3, 0.29, 0.27]}),
@@ -4253,7 +4264,7 @@ impl SceneFile {
                 Part::Door => json!({"type": "plastic", "albedo": [0.36, 0.06, 0.04], "roughness": 0.5}),
                 Part::Iron => json!({"type": "plastic", "albedo": [0.03, 0.03, 0.03], "roughness": 0.35}),
                 Part::Snow => json!({"type": "snow", "preset": "fresh", "sparkle": 0.05, "seed": seed}),
-                Part::Icicles => json!({"type": "ice", "preset": "glacier"}),
+                Part::Icicles => json!({"type": "ice", "preset": "white"}),
                 Part::Wreath => json!({"type": "lambertian", "albedo": [0.025, 0.07, 0.03]}),
                 Part::Ribbon => json!({"type": "plastic", "albedo": [0.55, 0.03, 0.03], "roughness": 0.25}),
             }
@@ -4264,9 +4275,13 @@ impl SceneFile {
             Arc::new(SceneObject { geometry: Box::new(geometry), medium: Box::new(Solid { m }) })
         }).collect();
         let lit = o["lit"].as_bool().unwrap_or(true);
-        for w in built.windows {
-            let m = if lit {
-                material("window", serde_json::json!({"type": "diffuse-light", "temperature": 2700, "intensity": 4}))
+        for (i, w) in built.windows.into_iter().enumerate() {
+            let m: Box<dyn MaterialModel + Sync + Send> = if lit && given.get("window").is_none() {
+                // Glass over a lamplit room (`building::WindowPane`).
+                Box::new(crate::procedural::building::WindowPane::new(Emission::blackbody(n("light_temperature", 2700.)),
+                    n("light", 4.), seed.wrapping_mul(31).wrapping_add(i as u64)))
+            } else if lit {
+                material("window", Value::Null)
             } else {
                 material("window", serde_json::json!({"type": "plastic", "albedo": [0.01, 0.01, 0.012], "roughness": 0.02}))
             };

@@ -10,7 +10,7 @@
   "filter": "mitchell",
   "adaptive": {"threshold": 0.015, "min_samples": 32},
   "output": {"exposure": 4, "tonemap": "filmic", "glare": true},
-  "camera": {"location": [-7.5, 1.55, 13.5], "lookat": [0.4, 2.1, 0], "up": [0, 1, 0], "angle": 0.62, "aperture": 0.02},
+  "camera": {"location": [-6.3, 1.5, 11], "lookat": [0.4, 2.1, 0], "up": [0, 1, 0], "angle": 0.62, "aperture": 0.02},
   "materials": {
     "SNOW": {"type": "snow", "preset": "fresh", "sparkle": 0.08, "seed": 1},
     "SPRUCE_NEEDLE_1": {"type": "leaf", "reflectance": [0.03, 0.08, 0.04], "transmittance": [0.01, 0.04, 0.015], "roughness": 0.2},

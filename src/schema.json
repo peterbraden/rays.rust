@@ -8391,7 +8391,9 @@
         {"name": "chimney", "kind": "boolean", "default": true, "doc": "A stone chimney through the roof."},
         {"name": "wreath", "kind": "boolean", "default": true, "doc": "A wreath on the door."},
         {"name": "lit", "kind": "boolean", "default": true, "doc": "Whether the windows are lit from within; dark glass otherwise."},
-        {"name": "materials", "kind": "json", "default": {}, "doc": "Materials for its parts, by name or definition: logs, stone, mortar, roof, trim, door, iron, snow, icicles, wreath, ribbon, and window (the windows' light)."},
+        {"name": "light", "kind": "number", "default": 4, "doc": "How bright the rooms are behind the windows.", "min": 0},
+        {"name": "light_temperature", "kind": "number", "default": 2700, "doc": "The colour temperature of the rooms' lamps, K.", "min": 1000},
+        {"name": "materials", "kind": "json", "default": {}, "doc": "Materials for its parts, by name or definition: logs, log_ends, stone, mortar, roof, trim, door, iron, snow, icicles, wreath, ribbon, and window (in place of glass over a lit room)."},
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Random seed."}
       ]
     },

@@ -1,22 +1,159 @@
 {
-  "width": 640,
-  "height": 427,
-  "supersamples": 64,
-  "max_depth": 12,
-  "path_termination": "russian_roulette",
-  "output": {"tonemap": "filmic", "exposure": 1.2},
-  "variables": {
-    "wave": {"type": "breaker", "center": [0, 0, 0], "height": 2, "depth": 2, "width": 60, "stage": 0.95, "peel": 0.6, "seed": 3}
+ "width": 640,
+ "height": 427,
+ "supersamples": 64,
+ "max_depth": 12,
+ "path_termination": "russian_roulette",
+ "output": {
+  "tonemap": "filmic",
+  "exposure": 1.2
+ },
+ "variables": {
+  "wave": {
+   "type": "breaker",
+   "center": [
+    0,
+    0,
+    0
+   ],
+   "height": 2,
+   "depth": 2,
+   "width": 60,
+   "stage": 0.95,
+   "peel": 0.6,
+   "seed": 3
+  }
+ },
+ "camera": {
+  "location": [
+   -1.5,
+   -0.4,
+   -4.2
+  ],
+  "lookat": [
+   0.5,
+   0.5,
+   0
+  ],
+  "up": [
+   0,
+   1,
+   0
+  ],
+  "angle": 0.75
+ },
+ "sun": {
+  "intensity": 4.9
+ },
+ "materials": {
+  "SAND": {
+   "type": "library",
+   "name": "beach_sand",
+   "waterline": 1000000000.0
+  }
+ },
+ "objects": [
+  {
+   "type": "skysphere",
+   "sun_direction": [
+    0.2,
+    0.33,
+    0.92
+   ]
   },
-  "camera": {"location": [-1.5, -0.4, -4.2], "lookat": [0.5, 0.5, 0], "up": [0, 1, 0], "angle": 0.75},
-  "sun": {"intensity": 4.9},
-  "materials": {
-    "SAND": {"type": "library", "name": "beach_sand", "waterline": 1e9}
+  {
+   "type": "plane",
+   "y": -2,
+   "material": "SAND"
   },
-  "objects": [
-    {"type": "skysphere", "sun_direction": [0.2, 0.33, 0.92]},
-    {"type": "plane", "y": -2, "material": "SAND"},
-    {"type": "breaker", "center": [0, 0, 0], "height": 2, "depth": 2, "width": 60, "stage": 0.95, "peel": 0.6, "seed": 3},
-    {"type": "volume", "shape": "$wave", "sigma_a": [0.45, 0.08, 0.14], "sigma_s": [0.25, 0.25, 0.25], "g": 0.9}
-  ]
+  {
+   "type": "breaker",
+   "center": [
+    0,
+    0,
+    0
+   ],
+   "height": 2,
+   "depth": 2,
+   "width": 60,
+   "stage": 0.95,
+   "peel": 0.6,
+   "seed": 3
+  },
+  {
+   "type": "volume",
+   "shape": "$wave",
+   "sigma_a": [
+    0.45,
+    0.08,
+    0.14
+   ],
+   "sigma_s": [
+    0.25,
+    0.25,
+    0.25
+   ],
+   "g": 0.9
+  },
+  {
+   "type": "volume",
+   "shape": "$wave",
+   "density": {
+    "node": "expr",
+    "expr": "min(max((-0.5 - y) / 0.7 + 0.6 * n, 0), 1)",
+    "inputs": {
+     "n": {
+      "node": "fractal",
+      "scale": 0.7,
+      "seed": 5
+     }
+    },
+    "range": [
+     0,
+     1
+    ]
+   },
+   "sigma_a": [
+    0.25,
+    0.45,
+    0.9
+   ],
+   "sigma_s": [
+    3,
+    3,
+    3
+   ],
+   "g": 0.8
+  },
+  {
+   "type": "volume",
+   "shape": "$wave",
+   "density": {
+    "node": "expr",
+    "expr": "min(max((y - 1.2) / 0.15 + 1.2 * n - 0.4, 0), 1)",
+    "inputs": {
+     "n": {
+      "node": "fractal",
+      "scale": 0.3,
+      "seed": 6
+     }
+    },
+    "range": [
+     0,
+     1
+    ]
+   },
+   "sigma_a": [
+    0,
+    0,
+    0
+   ],
+   "sigma_s": [
+    2.5,
+    2.5,
+    2.5
+   ],
+   "g": 0.6
+  }
+ ]
 }

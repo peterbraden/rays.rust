@@ -1310,7 +1310,7 @@ impl Ground {
         let age = |h: f64| 1. - smoothstep(snowline, snowline + 800., h + (n(300., 0.35) - 0.5) * 300.);
         // Lava flowed in the landscape's time: bare where it is young, weathering, and grown
         // over in its turn (at the end).
-        let lava = if class == LAVA { self.lava(p, &d, h, &n) } else { None };
+        let lava = self.lava(&d, h, &n);
         if class == ICE {
             // Snow over the glacier's accumulation zone, bare ice below the snowline.
             let snow = smoothstep(snowline - 300., snowline + 100., h + (n(700., 0.2) - 0.5) * 300.);
@@ -1521,33 +1521,57 @@ impl Ground {
         Cover { ground, snow, snow_age: age(h), ice: 0., blue: 0., surface: shares.pick() }
     }
 
-    /// Lava at scene point `p` (`d`, `h` metres up): its colour from afar, its kinds close up,
-    /// and how much of the ground it holds bare, 0 to 1. Fresh pāhoehoe or ʻaʻā (`Field::Aa`)
-    /// loses its glassy skin and weathers browner over decades, lichen settling on it where it
-    /// is wet; then plants take it over, in a few centuries in a rain forest (Hawaii's wet
-    /// windward flows carry forest within 300-400 years) and over tens of thousands where it
-    /// is dry (its dry leeward flows stand bare for millennia): about 500 years at 2,000 mm of
-    /// rain a year, as the rain to the -1.5. None where no lava has flowed.
-    fn lava(&self, p: &Vector3<f64>, d: &Vector3<f64>, h: f64, n: &dyn Fn(f64, f64) -> f64) -> Option<(Color, Shares, f64)> {
-        use crate::graph::{Fields, Field, LAVA_NEVER};
-        let age = self.field(Field::LavaAge, p)?;
-        if age >= LAVA_NEVER { return None; }
-        let aa = self.field(Field::Aa, p).unwrap_or(1.);
+    /// Lava at direction `d`, `h` metres up: its colour from afar, its kinds close up, and how
+    /// much of the ground it holds bare, 0 to 1. Fresh pāhoehoe or ʻaʻā (`Field::Aa`) loses its
+    /// glassy skin and weathers browner over decades, lichen settling on it where it is wet;
+    /// then plants take it over, in a few centuries in a rain forest (Hawaii's wet windward
+    /// flows carry forest within 300-400 years) and over tens of thousands where it is dry (its
+    /// dry leeward flows stand bare for millennia): about 500 years at 2,000 mm of rain a year,
+    /// as the rain to the -1.5. Each layer's lava blended into the coarser ones' as their
+    /// surfaces are (their flows took their own ways), read at a point jittered within a cell
+    /// and warped, so the flows' edges are ragged rather than the cells' squares. None where
+    /// no lava has flowed.
+    fn lava(&self, d: &Vector3<f64>, h: f64, n: &dyn Fn(f64, f64) -> f64) -> Option<(Color, Shares, f64)> {
+        use crate::graph::{Field, LAVA_NEVER};
         let rain = self.wandering_climate(d, h, 0.).map_or(1000., |c| c.precipitation).max(50.);
         let regrowth = (500. * (2000. / rain).powf(1.5)).clamp(200., 50_000.);
         // Patchy: plants take the cracks and the hollows first.
         let patches = n(30., 0.47) - 0.5;
-        let grown = smoothstep(0.3, 1.2, age / regrowth + 0.5 * patches);
-        if grown >= 1. { return None; }
-        let weathered = smoothstep(0., 0.15, age / regrowth + 0.05 * patches);
-        let fresh = mix_colour(colour(PAHOEHOE), colour(AA), aa);
         let lichen = smoothstep(500., 2000., rain) * smoothstep(0.6, 0.75, n(4., 0.91));
-        let old = mix_colour(colour(OLD_LAVA), Color::new(0.26, 0.26, 0.24), 0.3 * lichen);
-        let colour = mix_colour(fresh, old, weathered) * (0.85 + 0.3 * n(80., 0.13));
-        let mut kinds = Shares::of(Bare::Pahoehoe);
-        kinds.mix(Shares::of(Bare::Aa), aa);
-        kinds.mix(Shares::of(Bare::OldLava), weathered);
-        Some((colour, kinds, 1. - grown))
+        let (t1, t2) = Relief::tangents(d);
+        let r = self.frame.radius;
+        let (mut bare, mut sum, mut most) = (0., Color::new(0., 0., 0.), (0., None));
+        let mut rest = 1.;
+        for l in self.layers.iter() {
+            let w = l.weight(d) * rest;
+            if w <= 0. { continue; }
+            rest -= w;
+            let cell = l.spacing;
+            let warp = |o: f64| cell * (1.2 * (n(2. * cell, o) - 0.5) + 0.75 * (rand() - 0.5));
+            let j = (d + (t1 * warp(0.29) + t2 * warp(0.53)) / r).normalize();
+            if l.class_at(&j) != LAVA { continue; }
+            let age = l.fields.at(&l.domain, Field::LavaAge, &j, h).unwrap_or(LAVA_NEVER);
+            if age >= LAVA_NEVER { continue; }
+            let aa = l.fields.at(&l.domain, Field::Aa, &j, h).unwrap_or(1.);
+            let grown = smoothstep(0.3, 1.2, age / regrowth + 0.5 * patches);
+            if grown >= 1. { continue; }
+            let weathered = smoothstep(0., 0.15, age / regrowth + 0.05 * patches);
+            let fresh = mix_colour(colour(PAHOEHOE), colour(AA), aa);
+            let old = mix_colour(colour(OLD_LAVA), Color::new(0.26, 0.26, 0.24), 0.3 * lichen);
+            let c = mix_colour(fresh, old, weathered) * (0.85 + 0.3 * n(80., 0.13));
+            let b = w * (1. - grown);
+            bare += b;
+            sum = sum + c * b;
+            if b > most.0 {
+                let mut kinds = Shares::of(Bare::Pahoehoe);
+                kinds.mix(Shares::of(Bare::Aa), aa);
+                kinds.mix(Shares::of(Bare::OldLava), weathered);
+                most = (b, Some(kinds));
+            }
+            if rest <= 0. { break; }
+        }
+        let kinds = most.1?;
+        Some((sum * (1. / bare), kinds, bare))
     }
 }
 

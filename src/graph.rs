@@ -156,7 +156,16 @@ pub enum Field {
     /// ecosystem. A displacement reading it must only scale towards zero (as the landscape's
     /// own detail does), its bounds being found before any trees are planted.
     Canopy,
+    /// How long ago lava last flowed over the ground, years (`terrain::volcano::erupt`):
+    /// `LAVA_NEVER` where none has in the landscape's time, or it has worn away.
+    LavaAge,
+    /// How much of that lava is ʻaʻā, rubble of clinker, rather than pāhoehoe, its smooth,
+    /// ropy skin unbroken, 0 to 1.
+    Aa,
 }
+
+/// The `lava_age` field where no lava has flowed, years.
+pub const LAVA_NEVER: f64 = 1e6;
 
 impl Field {
     pub fn parse(s: &str) -> Result<Field, String> {
@@ -179,7 +188,9 @@ impl Field {
             "sand" => Field::Sand,
             "bedrock" => Field::Bedrock,
             "canopy" => Field::Canopy,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, bedrock, hardness, playa, till, sand or canopy", s)),
+            "lava_age" => Field::LavaAge,
+            "aa" => Field::Aa,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, lava_age, aa, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, bedrock, hardness, playa, till, sand or canopy", s)),
         })
     }
 }

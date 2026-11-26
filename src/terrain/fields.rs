@@ -11,7 +11,7 @@
 //! own height, so the boundaries between beds are sharp lines across the slopes, as far below
 //! a cell as the ray's hit is precise.
 
-use crate::graph::Field;
+use crate::graph::{Field, LAVA_NEVER};
 use crate::na::Vector3;
 use crate::terrain::domain::Domain;
 use crate::terrain::glacier::{slope_squared, GlacierParams};
@@ -41,6 +41,10 @@ pub struct SimFields {
     /// Glacial sediment and wind-blown sand, m.
     till: Vec<f64>,
     sand: Vec<f64>,
+    /// How long ago lava last flowed over the ground (the youngest of the cells about each
+    /// corner, years, at most `LAVA_NEVER`), and how much of it is ʻaʻā.
+    lava_age: Vec<f64>,
+    aa: Vec<f64>,
     /// The bedrock's structure (`Structure::to_array`) and exhumation.
     structure: [Vec<f64>; 10],
     exhumed: Vec<f64>,
@@ -108,6 +112,11 @@ impl SimFields {
             salt_lake: average(&|c| if basins.salt_lake(c) { basins.water[c] } else { 0. }),
             till: average(&|c| t.till.get(c).copied().unwrap_or(0.)),
             sand: average(&|c| t.sand.get(c).copied().unwrap_or(0.)),
+            lava_age: d.corner_cells.iter().map(|cells| cells.iter().map(|&c| t.lava_age(c)).fold(LAVA_NEVER, f64::min)).collect(),
+            aa: d.corner_cells.iter().map(|cells| {
+                let fresh: Vec<usize> = cells.iter().copied().filter(|&c| t.lava_age(c).is_finite()).collect();
+                if fresh.is_empty() { 0. } else { fresh.iter().map(|&c| t.lava_aa[c]).sum::<f64>() / fresh.len() as f64 }
+            }).collect(),
             exhumed: average(&|c| t.exhumed[c]),
             column: t.planet.column.clone(),
         }
@@ -177,6 +186,8 @@ impl SimFields {
             Field::Playa => s(&self.playa).clamp(0., 1.),
             Field::Till => s(&self.till).max(0.),
             Field::Sand => s(&self.sand).max(0.),
+            Field::LavaAge => s(&self.lava_age).clamp(0., LAVA_NEVER),
+            Field::Aa => s(&self.aa).clamp(0., 1.),
             Field::Temperature | Field::Canopy => return None,
         })
     }

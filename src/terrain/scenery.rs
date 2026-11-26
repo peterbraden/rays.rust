@@ -924,15 +924,19 @@ pub enum Bare {
     /// Woods seen from afar, beyond the trees planted about the camera: a canopy of crowns,
     /// broadleaved and conifers (`flora::Regions::woods`).
     Woods, Conifers,
+    /// Lava flowed in the landscape's time (`lava_material`): fresh pāhoehoe, black with a
+    /// glassy skin, in lobes with ropy folds; fresh ʻaʻā, rubble of clinker, rusty where it
+    /// oxidised; and old lava of either, its skin weathered off, browner, spotted with lichen.
+    Pahoehoe, Aa, OldLava,
     Rock(Rock),
 }
 
 impl Bare {
     /// The kinds that aren't a rock of their own, in the order of their indices.
-    const LOOSE: [Bare; 17] = [
+    const LOOSE: [Bare; 20] = [
         Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel, Bare::Pebbles, Bare::Shingle, Bare::Rubble,
         Bare::Laterite, Bare::Dirt, Bare::Crust, Bare::Bedded, Bare::Foliated, Bare::Mossy, Bare::Lichened,
-        Bare::Floor, Bare::Woods, Bare::Conifers,
+        Bare::Floor, Bare::Woods, Bare::Conifers, Bare::Pahoehoe, Bare::Aa, Bare::OldLava,
     ];
     const COUNT: usize = Bare::LOOSE.len() + 9;
 
@@ -965,7 +969,7 @@ impl Bare {
             Bare::Foliated => "foliated_rock",
             Bare::Mossy => "mossy_slab",
             Bare::Lichened => "lichened_ironstone",
-            Bare::Floor | Bare::Woods | Bare::Conifers => return None,
+            Bare::Floor | Bare::Woods | Bare::Conifers | Bare::Pahoehoe | Bare::Aa | Bare::OldLava => return None,
             Bare::Rock(r) => match r {
                 Rock::Sediment => "scree",
                 Rock::Shale => "slate",
@@ -1051,6 +1055,52 @@ fn canopy_material(spacing: f64, gap: [f64; 3], mid: [f64; 3], top: [f64; 3], se
         "albedo": {"pattern": crowns, "color_map": [[0, gap], [0.3, mid], [1, top]], "interpolation": "smooth"},
         "normal": {"graph": crowns, "amount": 4}})
 }
+/// Lava's materials, close up (`Bare::Pahoehoe`, `Aa`, `OldLava`).
+///
+/// - Pāhoehoe: flowed in lobes a few metres across that swell and stack, its skin black
+///   basaltic glass with a faint silvery sheen, folded into ropes a decimetre apart where the
+///   crust was dragged by the lava beneath; plastic, for the glass's gloss.
+/// - ʻAʻā: a rubble of clinker, angular, spiny fragments from centimetres to a metre, dull
+///   dark brown-black, rusty red where it oxidised hot.
+/// - Old lava: its glassy skin spalled off within decades and the rock weathered brown-grey,
+///   spotted with pale lichen (Stereocaulon, the first to settle on Hawaii's flows).
+fn lava_material(kind: Bare, seed: u64) -> serde_json::Value {
+    let seed = seed % 100_000;
+    match kind {
+        Bare::Pahoehoe => {
+            let lobes = serde_json::json!({"node": "cells", "style": "stones", "plan": true, "scale": 5, "seed": seed});
+            let ropes = serde_json::json!({"node": "phasor", "wavelength": 0.12, "plan": true, "seed": seed + 1});
+            let grain = serde_json::json!({"node": "fractal", "scale": 0.5, "smallest": 0.01, "seed": seed + 2});
+            serde_json::json!({"type": "plastic", "refractive_index": 1.55, "roughness": 0.25,
+                "albedo": {"pattern": {"node": "fractal", "scale": 3, "smallest": 0.05, "seed": seed + 3}, "interpolation": "smooth",
+                    "color_map": [[0, [0.028, 0.028, 0.032]], [0.5, [0.04, 0.04, 0.045]], [1, [0.07, 0.07, 0.08]]]},
+                "normal": {"graph": {"node": "add", "inputs": [
+                    {"node": "multiply", "inputs": [0.6, lobes]},
+                    {"node": "multiply", "inputs": [0.03, ropes]},
+                    {"node": "multiply", "inputs": [0.015, grain]}]}, "amount": 1}})
+        }
+        Bare::Aa => {
+            let clinker = serde_json::json!({"node": "cells", "style": "stones", "scale": 0.35, "seed": seed});
+            serde_json::json!({"type": "lambertian",
+                "albedo": {"pattern": {"node": "fractal", "scale": 1.5, "smallest": 0.03, "seed": seed + 1}, "interpolation": "smooth",
+                    "color_map": [[0, [0.028, 0.026, 0.025]], [0.55, [0.045, 0.039, 0.034]], [0.8, [0.07, 0.045, 0.034]], [1, [0.1, 0.05, 0.03]]]},
+                "normal": {"graph": {"node": "add", "inputs": [
+                    {"node": "multiply", "inputs": [0.3, clinker]},
+                    {"node": "multiply", "inputs": [0.05, {"node": "fractal", "scale": 0.1, "smallest": 0.005, "seed": seed + 2}]}]}, "amount": 1}})
+        }
+        _ => {
+            serde_json::json!({"type": "lambertian",
+                "albedo": {"pattern": {"node": "fractal", "scale": 0.8, "smallest": 0.02, "seed": seed}, "interpolation": "smooth",
+                    "color_map": [[0, [0.06, 0.052, 0.045]], [0.5, [0.09, 0.078, 0.066]], [0.68, [0.11, 0.1, 0.09]], [0.75, [0.24, 0.24, 0.22]], [1, [0.3, 0.3, 0.28]]]},
+                "normal": {"graph": {"node": "cells", "style": "stones", "plan": true, "scale": 2, "seed": seed + 1}, "amount": 0.3}})
+        }
+    }
+}
+/// Fresh lava's albedos, seen from afar: pāhoehoe, ʻaʻā, and old lava, weathered and lichened.
+const PAHOEHOE: [f64; 3] = [0.04, 0.04, 0.045];
+const AA: [f64; 3] = [0.05, 0.042, 0.036];
+const OLD_LAVA: [f64; 3] = [0.11, 0.1, 0.09];
+
 const FIELDS: [f64; 3] = [0.13, 0.13, 0.07];
 const GRAVEL: [f64; 3] = [0.24, 0.23, 0.21];
 const SAND: [f64; 3] = [0.32, 0.28, 0.21];
@@ -1064,6 +1114,8 @@ const DUNE_SAND: [f64; 3] = [0.46, 0.37, 0.24];
 const RED_SAND: [f64; 3] = [0.45, 0.25, 0.12];
 
 fn colour(c: [f64; 3]) -> Color { Color::new(c[0], c[1], c[2]) }
+
+fn mix_colour(a: Color, b: Color, t: f64) -> Color { let t = t.clamp(0., 1.); a * (1. - t) + b * t }
 
 impl Ground {
     pub fn new(layers: Arc<Vec<Layer>>, climate: Option<Arc<Climate>>, glaciers: GlacierParams, time: f64, seed: u64, frame: Frame, p: &SceneryParams) -> Ground {
@@ -1081,6 +1133,7 @@ impl Ground {
                     Bare::Floor => (serde_json::json!({"type": "soil", "preset": "forest_floor", "seed": salt}), "forest_floor"),
                     Bare::Woods => (canopy_material(8., [0.017, 0.028, 0.011], [0.042, 0.07, 0.028], [0.105, 0.17, 0.056], salt), "woods"),
                     Bare::Conifers => (canopy_material(5., [0.011, 0.017, 0.01], [0.028, 0.045, 0.022], [0.063, 0.1, 0.05], salt), "conifers"),
+                    Bare::Pahoehoe | Bare::Aa | Bare::OldLava => (lava_material(s, salt), "lava"),
                     s => { let name = s.library()?; (serde_json::json!({"type": "library", "name": name, "seed": salt}), name) },
                 };
                 Some(crate::scenefile::SceneFile::parse_material_definition(&definition, name, &serde_json::Map::new()))
@@ -1253,10 +1306,11 @@ impl Ground {
         let mix = |a: Color, b: Color, t: f64| { let t = t.clamp(0., 1.); a * (1. - t) + b * t };
         let snowline = self.snowline(&d);
         let treeline = self.treeline(&d);
-        let bare = |ground: Color| Cover { ground, snow: 0., snow_age: 0., ice: 0., blue: 0., surface: Bare::Plain };
         // Snow ages towards the snowline: coarser, dustier, turning to firn.
         let age = |h: f64| 1. - smoothstep(snowline, snowline + 800., h + (n(300., 0.35) - 0.5) * 300.);
-        if class == LAVA { return Cover { surface: Bare::Rock(Rock::Basalt), ..bare(colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain) }; }
+        // Lava flowed in the landscape's time: bare where it is young, weathering, and grown
+        // over in its turn (at the end).
+        let lava = if class == LAVA { self.lava(p, &d, h, &n) } else { None };
         if class == ICE {
             // Snow over the glacier's accumulation zone, bare ice below the snowline.
             let snow = smoothstep(snowline - 300., snowline + 100., h + (n(700., 0.2) - 0.5) * 300.);
@@ -1460,7 +1514,40 @@ impl Ground {
         // lower in sheltered places.
         let line = snowline + (n(900., 0.1) - 0.5) * 500.;
         let snow = smoothstep(line - 150., line + 150., h) * smoothstep(0.72, 0.88, flat + 0.15 * (n(120., 0.3) - 0.5));
+        if let Some((colour, kinds, bare)) = lava {
+            ground = mix(ground, colour * grain, bare);
+            shares.mix(kinds, bare);
+        }
         Cover { ground, snow, snow_age: age(h), ice: 0., blue: 0., surface: shares.pick() }
+    }
+
+    /// Lava at scene point `p` (`d`, `h` metres up): its colour from afar, its kinds close up,
+    /// and how much of the ground it holds bare, 0 to 1. Fresh pāhoehoe or ʻaʻā (`Field::Aa`)
+    /// loses its glassy skin and weathers browner over decades, lichen settling on it where it
+    /// is wet; then plants take it over, in a few centuries in a rain forest (Hawaii's wet
+    /// windward flows carry forest within 300-400 years) and over tens of thousands where it
+    /// is dry (its dry leeward flows stand bare for millennia): about 500 years at 2,000 mm of
+    /// rain a year, as the rain to the -1.5. None where no lava has flowed.
+    fn lava(&self, p: &Vector3<f64>, d: &Vector3<f64>, h: f64, n: &dyn Fn(f64, f64) -> f64) -> Option<(Color, Shares, f64)> {
+        use crate::graph::{Fields, Field, LAVA_NEVER};
+        let age = self.field(Field::LavaAge, p)?;
+        if age >= LAVA_NEVER { return None; }
+        let aa = self.field(Field::Aa, p).unwrap_or(1.);
+        let rain = self.wandering_climate(d, h, 0.).map_or(1000., |c| c.precipitation).max(50.);
+        let regrowth = (500. * (2000. / rain).powf(1.5)).clamp(200., 50_000.);
+        // Patchy: plants take the cracks and the hollows first.
+        let patches = n(30., 0.47) - 0.5;
+        let grown = smoothstep(0.3, 1.2, age / regrowth + 0.5 * patches);
+        if grown >= 1. { return None; }
+        let weathered = smoothstep(0., 0.15, age / regrowth + 0.05 * patches);
+        let fresh = mix_colour(colour(PAHOEHOE), colour(AA), aa);
+        let lichen = smoothstep(500., 2000., rain) * smoothstep(0.6, 0.75, n(4., 0.91));
+        let old = mix_colour(colour(OLD_LAVA), Color::new(0.26, 0.26, 0.24), 0.3 * lichen);
+        let colour = mix_colour(fresh, old, weathered) * (0.85 + 0.3 * n(80., 0.13));
+        let mut kinds = Shares::of(Bare::Pahoehoe);
+        kinds.mix(Shares::of(Bare::Aa), aa);
+        kinds.mix(Shares::of(Bare::OldLava), weathered);
+        Some((colour, kinds, 1. - grown))
     }
 }
 

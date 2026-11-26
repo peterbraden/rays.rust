@@ -25,6 +25,9 @@
 //! - **Sand**: smooth, drifted over the ground beneath (dunes are drawn larger, `scenery`).
 //! - **Playas**: flat lake beds, cracked into polygons.
 //! - **Glacier ice**: smooth, gently undulating.
+//! - **Lava** flowed in the landscape's time (`lava_age`): pāhoehoe in lobes a few metres
+//!   across, swollen into tumuli here and there; ʻaʻā (`aa`) a rubble of clinker heaped in
+//!   pressure ridges. Over whatever lay there, lasting long after plants take it over.
 //!
 //! Each is blended by how much of it the fields say is there, so the ground changes as
 //! gradually as the simulation does, and detail finer than the context's filter (the spacing
@@ -39,7 +42,7 @@ use crate::terrain::geology::Rock;
 pub const REACH: f64 = 4.;
 
 /// How much of each kind of ground there is at a point.
-struct Kinds { ice: f64, bare: f64, scree: f64, glacial: f64, alluvium: f64, blown: f64, pan: f64 }
+struct Kinds { ice: f64, bare: f64, scree: f64, glacial: f64, alluvium: f64, blown: f64, pan: f64, lava: f64, aa: f64 }
 
 impl Kinds {
     fn at(c: &Context, f: &dyn crate::graph::Fields, slope: f64) -> Kinds {
@@ -66,7 +69,13 @@ impl Kinds {
         let blown = smoothstep(0.5, 3., field(Field::Sand));
         let scree = steep(22., 32.) * (1. - glacial) * (1. - blown);
         let alluvium = ((1. - glacial) * (1. - blown) * (1. - pan) - scree).max(0.);
-        Kinds { ice, bare, scree, glacial, alluvium, blown, pan }
+        // Lava flowed in the landscape's time, over whatever was there: its lobes and rubble
+        // outlast the plants that take it over, worn down only over tens of thousands of
+        // years.
+        let age = f.field(Field::LavaAge, &c.p).unwrap_or(crate::graph::LAVA_NEVER);
+        let lava = (1. - smoothstep(2e4, 1e5, age)) * smoothstep(0.5, 2., field(Field::Lava)) * (1. - ice);
+        let aa = field(Field::Aa).clamp(0., 1.);
+        Kinds { ice, bare, scree, glacial, alluvium, blown, pan, lava, aa }
     }
 }
 
@@ -81,7 +90,7 @@ pub fn bound(c: &Context, slope: f64, amplitude: f64) -> f64 {
     // The most each kind gives (ledges and granite's blocks for rock).
     let rock = 0.7 * 1.5 + 1.2 + 1.0 * 0.6 + 0.25;
     let loose = k.scree * 0.5 + k.glacial * (1.5 + 0.9) + k.alluvium * 0.34 + k.blown * 0.15 + k.pan * 0.05 + 0.03;
-    let h = (k.bare * rock + (1. - k.bare) * loose).min(REACH);
+    let h = (k.bare * rock + (1. - k.bare) * loose + k.lava * 5.).min(REACH);
     amplitude.abs() * ((1. - k.ice) * h + k.ice * 0.4) * 1.25 + 0.02
 }
 
@@ -169,6 +178,9 @@ pub fn local_bound(c: &Context, slope: f64, half: f64, heights: (f64, f64), nois
             + pan * 0.05
             + 0.03 * lip(Perlin, 0.5, 0.01, 0.6));
     }
+    // Lava's lobes and tumuli, or its clinker and ridges.
+    let lava = most(k0.lava, k1.lava);
+    change += lava * (1.5 * lip(Billow, 6., 0.3, 0.5) + 0.5 + 1.2 + 1.2 + 0.5 + 0.8 * lip(Ridged, 8., 0.5, 0.5));
     let change = amplitude.abs() * (1.25 * change.min(2. * REACH) + 0.02);
     (centre - change, centre + change)
 }
@@ -199,7 +211,7 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
         if k <= 0. { 0. } else { k * cells(seed ^ salt, CellStyle::Stones, scale, false, Metric::Manhattan, 1., c) }
     };
 
-    let Kinds { ice, bare, scree, glacial, alluvium, blown, pan } = Kinds::at(c, f, slope);
+    let Kinds { ice, bare, scree, glacial, alluvium, blown, pan, lava, aa } = Kinds::at(c, f, slope);
     let glacier = 0.4 * fbm(FractalStyle::Perlin, 30., 2., 0.5);
     if ice >= 1. {
         return amplitude * glacier;
@@ -283,6 +295,14 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
         s += 0.03 * fbm(FractalStyle::Perlin, 0.5, 0.01, 0.6);
         h += loose * s;
     }
+    if lava > 0. {
+        // Pāhoehoe in lobes a few metres across, swollen here and there into tumuli; ʻaʻā a
+        // rubble of clinker heaped in pressure ridges. (Its ropes are the material's.)
+        let tumuli = smoothstep(0.45, 0.6, fbm(FractalStyle::Perlin, 60., 20., 0.5)) * stones(CellStyle::Stones, 15., 0xd1);
+        let pahoehoe = 1.5 * fbm(FractalStyle::Billow, 6., 0.3, 0.5) + 0.5 * stones(CellStyle::Stones, 3., 0xd7) + 1.2 * tumuli;
+        let clinker = 1.2 * blocks(0.8, 0xd3) + 0.5 * blocks(0.3, 0xd5) + 0.8 * fbm(FractalStyle::Ridged, 8., 0.5, 0.5);
+        h = (1. - lava) * h + lava * ((1. - aa) * pahoehoe + aa * clinker);
+    }
     // Under trees (`terrain::canopy`) soil and litter bury the rock's relief and the scree's
     // stones, to a fifth, but on cliffs. Scaled towards zero, never more than without the trees,
     // and every displaced cell's bounds include zero (`DisplacedTerrain::tighten`), so the
@@ -349,7 +369,7 @@ mod tests {
 
     /// Fields the same everywhere.
     #[derive(Debug)]
-    struct Uniform { sediment: f64, rock: Rock, ice: f64, till: f64, sand: f64, playa: f64 }
+    struct Uniform { sediment: f64, rock: Rock, ice: f64, till: f64, sand: f64, playa: f64, lava: f64, lava_age: f64, aa: f64 }
 
     impl crate::graph::Fields for Uniform {
         fn field(&self, f: Field, _p: &Vector3<f64>) -> Option<f64> {
@@ -359,6 +379,9 @@ mod tests {
                 Field::Till => self.till,
                 Field::Sand => self.sand,
                 Field::Playa => self.playa,
+                Field::Lava => self.lava,
+                Field::LavaAge => self.lava_age,
+                Field::Aa => self.aa,
                 Field::Rock => self.rock.index() as f64,
                 Field::Hardness => -self.rock.scores().0,
                 _ => 0.,
@@ -366,7 +389,10 @@ mod tests {
         }
     }
 
-    fn bare(rock: Rock) -> Uniform { Uniform { sediment: 0., rock, ice: 0., till: 0., sand: 0., playa: 0. } }
+    fn bare(rock: Rock) -> Uniform { Uniform { sediment: 0., rock, ice: 0., till: 0., sand: 0., playa: 0., lava: 0., lava_age: crate::graph::LAVA_NEVER, aa: 0. } }
+
+    /// Lava flowed `age` years ago, `aa` of it ʻaʻā.
+    fn flow(age: f64, aa: f64) -> Uniform { Uniform { lava: 10., lava_age: age, aa, ..bare(Rock::Basalt) } }
 
     /// The spread (standard deviation) of the detail over a patch of ground with this normal.
     fn spread(f: &Uniform, normal: Vector3<f64>, filter: f64) -> f64 {
@@ -392,6 +418,8 @@ mod tests {
         grounds.push(Uniform { sediment: 5., playa: 1., ..bare(Rock::Sediment) });
         grounds.push(Uniform { sediment: 5., ..bare(Rock::Sediment) });
         grounds.push(Uniform { ice: 3., ..bare(Rock::Granite) });
+        grounds.push(flow(10., 0.));
+        grounds.push(flow(10., 1.));
         let mut rng = crate::geometry::Pcg32::new(5, 1);
         let mut worst: f64 = 0.;
         for f in &grounds {
@@ -436,8 +464,16 @@ mod tests {
         assert!(spread(&bare(Rock::Shale), steep, 5.) < 0.2 * spread(&bare(Rock::Shale), steep, 0.));
         // Glaciers are smooth; nothing is beyond the bound.
         assert!(spread(&Uniform { ice: 50., ..bare(Rock::Granite) }, level, 0.) < 0.2);
-        for f in [bare(Rock::Granite), Uniform { till: 10., sediment: 10., ..bare(Rock::Sediment) }, Uniform { playa: 1., sediment: 5., ..bare(Rock::Sediment) }] {
+        for f in [bare(Rock::Granite), Uniform { till: 10., sediment: 10., ..bare(Rock::Sediment) }, Uniform { playa: 1., sediment: 5., ..bare(Rock::Sediment) }, flow(10., 0.), flow(10., 1.)] {
             assert!(spread(&f, steep, 0.) <= REACH);
         }
+        // Fresh lava has relief of its own, over the alluvium it covers: pāhoehoe's lobes,
+        // ʻaʻā's clinker, rougher at the scale of a step; and lava a hundred thousand years
+        // old has worn back to the ground beneath.
+        let lava = |age: f64, aa: f64| Uniform { sediment: 5., ..flow(age, aa) };
+        assert!(spread(&lava(10., 0.), level, 0.) > 2. * flat, "pāhoehoe {} alluvium {}", spread(&lava(10., 0.), level, 0.), flat);
+        let fine = |f: &Uniform| spread(f, level, 0.) - spread(f, level, 1.);
+        assert!(fine(&lava(10., 1.)) > fine(&lava(10., 0.)), "ʻaʻā {} pāhoehoe {}", fine(&lava(10., 1.)), fine(&lava(10., 0.)));
+        assert!((spread(&lava(2e5, 0.), level, 0.) - flat).abs() < 1e-9);
     }
 }

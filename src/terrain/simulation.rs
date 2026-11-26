@@ -227,6 +227,10 @@ pub struct Terrain {
     /// (`hotspot`), old basalt weathered and grown over like any rock; the rest erupted in its
     /// time (`fresh_lava`).
     pub shield: Vec<f64>,
+    /// When lava last flowed over each cell, years of the landscape's time (`NO_LAVA` if
+    /// never), and how much of it was ʻaʻā rather than pāhoehoe, 0 to 1 (`volcano::erupt`).
+    pub lava_time: Vec<f64>,
+    pub lava_aa: Vec<f64>,
     /// Sediment flux leaving each cell in rivers at the last step, m³/yr.
     pub sediment_flux: Vec<f64>,
     /// Ice thickness, metres.
@@ -332,6 +336,7 @@ impl Terrain {
         // The hotspots' shields are basalt (`hotspot`).
         let lava: Vec<f64> = domain.dirs.par_iter().map(|d| planet.shield_thickness(d, finest)).collect();
         let shield = lava.clone();
+        let (lava_time, lava_aa) = (vec![NO_LAVA; domain.len()], vec![0.; domain.len()]);
         let vents = match &params.volcano { Some(v) => vents(&planet, &domain, v), None => vec![] };
         let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
         let ela = climate.as_ref().map(|climate| domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect());
@@ -347,7 +352,7 @@ impl Terrain {
         let mut t = Terrain {
             precipitation: base_precipitation.clone(), base_precipitation, wind, temperature,
             domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], channel: vec![], latitude, sea, vents, rivers: Rivers::default(),
-            sediment: vec![0.; n], till: vec![0.; n], sand: vec![0.; n], settled: vec![], lava, shield, sediment_flux: vec![0.; n],
+            sediment: vec![0.; n], till: vec![0.; n], sand: vec![0.; n], settled: vec![], lava, shield, lava_time, lava_aa, sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         // The noise topography may stand steeper than its rock can: it is cut down to what the
@@ -421,6 +426,12 @@ impl Terrain {
     /// with (the hotspots' old shields): fresh, bare rock where no sediment covers it.
     pub fn fresh_lava(&self, i: usize) -> f64 {
         (self.lava[i] - self.shield[i]).max(0.)
+    }
+
+    /// How long ago lava last flowed over cell `i`, years (`f64::INFINITY` if never, or none
+    /// of it is left).
+    pub fn lava_age(&self, i: usize) -> f64 {
+        if self.fresh_lava(i) <= 0. || self.lava_time[i] <= NO_LAVA { f64::INFINITY } else { (self.time - self.lava_time[i]).max(0.) }
     }
 
     /// Elevation of the top of the bedrock, beneath sediment and lava, metres.
@@ -783,7 +794,7 @@ impl Terrain {
         self.rain();
 
         if let Some(v) = &self.params.volcano {
-            erupt(&self.domain, &self.vents, v, self.time, dt, &mut self.bed, &mut self.lava, &fixed);
+            erupt(&self.domain, &self.vents, v, self.time, dt, &mut self.bed, &mut self.lava, &fixed, Some((&mut self.lava_time, &mut self.lava_aa)));
         }
 
         // Sediment glaciers erode is carried off by their meltwater, into the rivers.
@@ -966,7 +977,7 @@ impl Terrain {
             if fixed[k] { return k; }
             ((j - dy).clamp(0, n - 1) * n + (i - dx).clamp(0, n - 1)) as usize
         }).collect();
-        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.sand, &mut self.settled, &mut self.lava, &mut self.shield, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
+        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.sand, &mut self.settled, &mut self.lava, &mut self.shield, &mut self.lava_time, &mut self.lava_aa, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
             if f.len() != source.len() { continue; }
             let old = f.clone();
             for (k, &s) in source.iter().enumerate() { f[k] = old[s]; }
@@ -1126,6 +1137,9 @@ impl Basins {
     }
 }
 
+/// `Terrain::lava_time` where no lava has flowed.
+pub const NO_LAVA: f64 = -1e30;
+
 /// The evolving state of a `Terrain`, to save and restore: everything that changes with time
 /// (the domain, planet and vents are rebuilt from the parameters).
 #[derive(serde_derive::Serialize, serde_derive::Deserialize)]
@@ -1158,6 +1172,10 @@ pub struct Snapshot {
     #[serde(default)]
     till: Vec<f64>,
     #[serde(default)]
+    lava_time: Vec<f64>,
+    #[serde(default)]
+    lava_aa: Vec<f64>,
+    #[serde(default)]
     sand: Vec<f64>,
     #[serde(default)]
     settled: Vec<f64>,
@@ -1184,7 +1202,7 @@ impl Terrain {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
             drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(), rebound: self.rebound.clone(),
-            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(), till: self.till.clone(), sand: self.sand.clone(), settled: self.settled.clone(),
+            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(), till: self.till.clone(), lava_time: self.lava_time.clone(), lava_aa: self.lava_aa.clone(), sand: self.sand.clone(), settled: self.settled.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -1211,6 +1229,8 @@ impl Terrain {
         self.channel = s.channel;
         self.till = if s.till.len() == self.domain.len() { s.till } else { vec![0.; self.domain.len()] };
         self.sand = if s.sand.len() == self.domain.len() { s.sand } else { vec![0.; self.domain.len()] };
+        self.lava_time = if s.lava_time.len() == self.domain.len() { s.lava_time } else { vec![NO_LAVA; self.domain.len()] };
+        self.lava_aa = if s.lava_aa.len() == self.domain.len() { s.lava_aa } else { vec![0.; self.domain.len()] };
         self.settled = s.settled;
         self.displacement = s.displacement;
         if s.shifted != self.shifted {

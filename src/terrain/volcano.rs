@@ -59,6 +59,7 @@
 use crate::geometry::Pcg32;
 use crate::na::Vector3;
 use crate::terrain::domain::{sphere_dir, Domain, Layout};
+use crate::procedural::nubis_clouds::smoothstep;
 use crate::terrain::planet::Planet;
 use std::collections::{BTreeSet, VecDeque};
 
@@ -314,15 +315,28 @@ fn place(vent: &mut Vent, domain: &Domain) {
 /// Erupt every vent active between `t` and `t + dt`, adding to `ground` and recording what was
 /// added in `lava`. Cells marked `fixed` (sea, a patch's edge) stop lava flows. Returns the
 /// volume erupted into the domain, cubic metres.
+///
+/// `record`, if given, keeps when lava last covered each cell (the step's end) and how much of
+/// it was ʻaʻā (`Terrain::lava_time`, `lava_aa`). Basalt from a shield pours as pāhoehoe, its
+/// smooth, ropy skin unbroken, near its vent; downstream, as it cools and stiffens, and on
+/// steep slopes where it is torn as it flows, it turns to ʻaʻā, rubble of clinker (Peterson
+/// and Tilling, "Transition of basaltic lava from pahoehoe to aa", JVGR 7, 1980: Kīlauea's
+/// flows turn within a few kilometres, on slopes over about 5°). The more viscous lavas of
+/// stratovolcanoes and cinder cones flow as ʻaʻā (or blockier) from the start.
 #[allow(clippy::too_many_arguments)]
-pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64, ground: &mut [f64], lava: &mut [f64], fixed: &[bool]) -> f64 {
+pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64, ground: &mut [f64], lava: &mut [f64], fixed: &[bool],
+             mut record: Option<(&mut [f64], &mut [f64])>) -> f64 {
+    let mut mark = |c: usize, aa: f64| if let Some((when, kind)) = record.as_mut() {
+        when[c] = t + dt;
+        kind[c] = aa;
+    };
     let mut total = 0.;
     for vent in vents {
         // A volcano that collapses does so as it dies: its summit drops into the emptied
         // magma chamber, a caldera with a level floor and steep walls (not counted as erupted).
         if let Some((r, depth)) = vent.caldera && t < vent.end && vent.end <= t + dt {
             for &(c, d) in &vent.collapse {
-                let drop = depth * (1. - crate::procedural::nubis_clouds::smoothstep(0.85 * r, r, d));
+                let drop = depth * (1. - smoothstep(0.85 * r, r, d));
                 ground[c] -= drop;
                 lava[c] -= drop.min(lava[c]);
             }
@@ -336,11 +350,13 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
         let cone = volume * (1. - vent.lava_fraction);
         let in_domain: f64 = vent.cone.iter().map(|&(c, w)| w * domain.area[c]).sum();
         let weight = in_domain.max(vent.integral);
+        let cone_aa = if vent.form == Form::Shield { 0. } else { 1. };
         for &(c, w) in &vent.cone {
             let h = cone * w / weight;
             ground[c] += h;
             lava[c] += h;
             total += h * domain.area[c];
+            if h > 0.05 { mark(c, cone_aa); }
         }
 
         // Lava flows only from vents in the domain: from the vent, or one of its rift zones.
@@ -350,19 +366,28 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
         let Some(mut c) = start.or(vent.cell) else { continue };
         let mut remaining = volume * vent.lava_fraction;
         total += remaining;
+        let mut run = 0.;
         for _ in 0..domain.len() {
             if remaining <= 0. { break; }
             // The steepest way down over ground perturbed by up to `roughness`.
             let next = domain.links(c).iter()
-                .map(|l| (l.to, (ground[c] - ground[l.to] - p.roughness * rng.next_f64()) / l.dist))
-                .filter(|&(_, s)| s > 0.)
+                .map(|l| (l.to, (ground[c] - ground[l.to] - p.roughness * rng.next_f64()) / l.dist, l.dist))
+                .filter(|&(_, s, _)| s > 0.)
                 .max_by(|a, b| a.1.total_cmp(&b.1));
             let lay = if next.is_none() || fixed[c] { remaining } else { remaining.min(vent.flow_thickness * domain.area[c]) };
             ground[c] += lay / domain.area[c];
             lava[c] += lay / domain.area[c];
             remaining -= lay;
+            let aa = match vent.form {
+                Form::Shield => {
+                    let slope = next.map_or(0., |(_, s, _)| s);
+                    smoothstep(4e3, 12e3, run).max(smoothstep(0.06, 0.14, slope))
+                }
+                _ => 1.,
+            };
+            mark(c, aa);
             match next {
-                Some((to, _)) if !fixed[c] => c = to,
+                Some((to, _, dist)) if !fixed[c] => { c = to; run += dist; }
                 _ => break,
             }
         }
@@ -423,7 +448,7 @@ mod tests {
         let before: f64 = ground.iter().zip(&d.area).map(|(h, a)| h * a).sum();
         let mut erupted = 0.;
         for k in 0..10 {
-            erupted += erupt(&d, &vs, &p, k as f64 * 1000., 1000., &mut ground, &mut lava, &fixed);
+            erupted += erupt(&d, &vs, &p, k as f64 * 1000., 1000., &mut ground, &mut lava, &fixed, None);
         }
         let after: f64 = ground.iter().zip(&d.area).map(|(h, a)| h * a).sum();
         assert!(erupted > 0.);
@@ -437,7 +462,7 @@ mod tests {
         let mut stratos = vents(&planet, &d, &cones);
         stratos.retain(|v| matches!(v.form, Form::Strato { .. }) && v.cell.is_some() && v.caldera.is_none());
         let mut cone = vec![0.; d.len()];
-        erupt(&d, &stratos[..1], &cones, 0., 1000., &mut ground, &mut cone, &fixed);
+        erupt(&d, &stratos[..1], &cones, 0., 1000., &mut ground, &mut cone, &fixed, None);
         let c = stratos[0].cell.unwrap();
         for l in d.links(c) { assert!(cone[c] >= cone[l.to], "{} vs {}", cone[c], cone[l.to]); }
         // About each volcano, a field of cinder cones.
@@ -468,6 +493,33 @@ mod tests {
     }
 
     #[test]
+    fn test_flows_record_when_and_what_lava_they_lay() {
+        let (_, d) = volcanic_patch();
+        let p = VolcanoParams::default();
+        // A shield on a slope gentle near its vent: pāhoehoe there, ʻaʻā far down its flows.
+        let centre = d.len() / 2 + 32;
+        let v = Vent::new(d.dirs[centre], (0., 1e9), 1e7, 3, Form::Shield, 20000., 1., 4., None, &d);
+        let mut ground: Vec<f64> = (0..d.len()).map(|i| 2000. - 0.03 * d.radius * d.dirs[i].angle(&d.dirs[centre])).collect();
+        let mut lava = vec![0.; d.len()];
+        let (mut when, mut aa) = (vec![crate::terrain::simulation::NO_LAVA; d.len()], vec![0.; d.len()]);
+        let fixed = vec![false; d.len()];
+        for k in 0..20 {
+            erupt(&d, std::slice::from_ref(&v), &p, k as f64 * 100., 100., &mut ground, &mut lava, &fixed, Some((&mut when, &mut aa)));
+        }
+        let flowed: Vec<usize> = (0..d.len()).filter(|&i| when[i] > 0.).collect();
+        assert!(!flowed.is_empty());
+        assert!(flowed.iter().all(|&i| when[i] <= 2000. && lava[i] > 0.));
+        let near = |i: usize| d.radius * d.dirs[i].angle(&d.dirs[centre]) < 3000.;
+        assert!(flowed.iter().filter(|&&i| near(i)).all(|&i| aa[i] < 0.5));
+        assert!(flowed.iter().any(|&i| aa[i] > 0.5), "flows turn to ʻaʻā downstream");
+        // A stratovolcano's are ʻaʻā from the start.
+        let s = Vent::new(d.dirs[centre], (0., 1e9), 1e6, 4, Form::Strato { crater: 300. }, 6000., 1., 10., None, &d);
+        let (mut when, mut aa) = (vec![crate::terrain::simulation::NO_LAVA; d.len()], vec![0.; d.len()]);
+        erupt(&d, std::slice::from_ref(&s), &p, 0., 100., &mut ground, &mut lava, &fixed, Some((&mut when, &mut aa)));
+        assert!((0..d.len()).filter(|&i| when[i] > 0.).all(|i| aa[i] == 1.));
+    }
+
+    #[test]
     fn test_a_dying_volcano_collapses_into_a_caldera() {
         let (planet, d) = volcanic_patch();
         let p = VolcanoParams::default();
@@ -476,10 +528,10 @@ mod tests {
         let mut ground = vec![0.; d.len()];
         let mut lava = vec![0.; d.len()];
         let fixed = vec![false; d.len()];
-        erupt(&d, std::slice::from_ref(&v), &p, 0., 1000., &mut ground, &mut lava, &fixed);
+        erupt(&d, std::slice::from_ref(&v), &p, 0., 1000., &mut ground, &mut lava, &fixed, None);
         let c = v.cell.unwrap();
         let built = ground[c];
-        erupt(&d, std::slice::from_ref(&v), &p, 1000., 1000., &mut ground, &mut lava, &fixed);
+        erupt(&d, std::slice::from_ref(&v), &p, 1000., 1000., &mut ground, &mut lava, &fixed, None);
         // Its summit dropped by the caldera's depth, less what the last of it built.
         assert!(ground[c] < built - 400., "{} after {}", ground[c], built);
         // Not beyond the caldera's rim.

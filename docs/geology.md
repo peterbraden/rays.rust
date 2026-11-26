@@ -234,6 +234,23 @@ plains instead, not yet drawn.
 Patches `"near": "hotspot"` are centred on the young shield standing highest above the sea,
 in the tropics if any is; `"hotspot_volcanoes": false` leaves the chains out.
 
+## Lava
+
+Lava erupted in the landscape's time is kept as it flows (`volcano::erupt`): when it last
+covered each cell (`Terrain::lava_time`, a `lava_age` field in years) and of what kind
+(`Terrain::lava_aa`, an `aa` field). A shield's basalt pours as pāhoehoe near its vent, turning
+to ʻaʻā a few kilometres down its flows and on slopes over about 5°, as Kīlauea's do; the
+stiffer lavas of stratovolcanoes and cinder cones flow as ʻaʻā from the start.
+
+Close up (`scenery::Ground::lava`, `terrain::detail`), fresh pāhoehoe is black basaltic glass
+with a faint sheen, in lobes a few metres across swollen here and there into tumuli, its skin
+folded into ropes; ʻaʻā is a rubble of clinker, dull brown-black and rusty where it oxidised hot,
+heaped in pressure ridges. Within decades the glassy skin spalls and the rock weathers browner,
+and lichen settles where it is wet; then plants take it over, patchily, cracks and hollows first,
+at a pace set by the rain: in about 500 years at 2,000 mm a year, as the rain to the -1.5 (Hawaii's
+wet windward flows carry forest within 300-400 years, its dry leeward ones stand bare for
+millennia). The flows' relief outlasts the plants, worn back over tens of thousands of years.
+
 ## Deposits: till, moraines and sand
 
 What erosion takes is laid down again somewhere, and the sediment remembers how. Glaciers

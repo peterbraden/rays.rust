@@ -18,6 +18,11 @@ pub trait Medium : Sync{
     /// The material as data, if the medium is one material throughout and it can be
     /// flattened (`wavefront::flat`).
     fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
+    /// The one material the medium is throughout, if it is one (as `Solid` is): what may be
+    /// judged for the whole object. Not what `material_at` gives at some point, which for a
+    /// medium that varies (a landscape: water in its rivers, ground elsewhere) is only that
+    /// point's.
+    fn uniform(&self) -> Option<&(dyn MaterialModel + Sync + Send)> { None }
     /// What the surface knows about itself at its points, for function graphs' `field` nodes
     /// (`graph::Fields`): a landscape's simulation.
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { None }
@@ -83,6 +88,10 @@ impl Medium for Solid {
 
     fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
         self.m.flat()
+    }
+
+    fn uniform(&self) -> Option<&(dyn MaterialModel + Sync + Send)> {
+        Some(&*self.m)
     }
 }
 

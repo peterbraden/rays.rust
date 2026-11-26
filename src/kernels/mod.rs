@@ -518,10 +518,16 @@ impl Buffers {
 /// has been given. So far the sea's water (`pathtrace::MAT_WATER`), where no moon lights it
 /// (the kernel's glitter is the sun's alone).
 fn host_kernels(s: &Scene, flat: &FlatScene) -> Vec<Option<GpuMaterial>> {
-    flat.hosts.iter().map(|o| {
-        let w = o.medium.material_at(Vector3::zeros()).water().filter(|_| s.moonlight.is_none())?;
-        Some(GpuMaterial { kind: pathtrace::MAT_WATER, c0: c4(&w.body), c1: c4(&w.bubbles), p: Vec4::new(w.radius as f32, w.roughness as f32, 0., 0.), ..GpuMaterial::zeroed() })
-    }).collect()
+    flat.hosts.iter().map(|o| host_kernel(s, &*o.medium)).collect()
+}
+
+/// The kernels' record of a host material, as `host_kernels`: only of a medium that is the
+/// material throughout (`Medium::uniform`). A landscape is water at some points and ground at
+/// others; judged by its material at the scene's origin, a landscape whose origin was wet was
+/// once rendered as water everywhere.
+fn host_kernel(s: &Scene, medium: &(dyn crate::material::texture::Medium + Sync + Send)) -> Option<GpuMaterial> {
+    let w = medium.uniform()?.water().filter(|_| s.moonlight.is_none())?;
+    Some(GpuMaterial { kind: pathtrace::MAT_WATER, c0: c4(&w.body), c1: c4(&w.bubbles), p: Vec4::new(w.radius as f32, w.roughness as f32, 0., 0.), ..GpuMaterial::zeroed() })
 }
 
 impl Buffers {
@@ -1334,5 +1340,40 @@ mod measure {
         time("altocumulus's fraction", &|p| b.fraction(&tables, p.0, p.1, p.2));
         let cloudy = points.iter().filter(|p| b.fraction(&tables, p.0, p.1, p.2) > 0.).count();
         println!("{} of {} points in cloud", cloudy, n);
+    }
+}
+
+#[cfg(test)]
+mod host_kernel_tests {
+    use super::*;
+    use crate::material::texture::{CheckeredYPlane, Medium, Solid};
+    use crate::ocean::PhysicalOcean;
+
+    fn scene() -> Scene {
+        crate::scenefile::SceneFile::from_string(r#"{
+            "width": 4, "height": 4, "background": [0.2, 0.25, 0.3],
+            "camera": { "location": [0, 1, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "objects": [ { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "m" } ],
+            "materials": { "m": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } }
+        }"#.to_string())
+    }
+
+    /// Opaque water, which the kernels have a record of; or water they don't (transparent).
+    fn water(opaque: bool) -> Box<PhysicalOcean> {
+        Box::new(PhysicalOcean { water: crate::color::Color::new(0.01, 0.02, 0.02), roughness: 0.01, center: None,
+            absorption: (!opaque).then(|| crate::color::Color::new(0.1, 0.1, 0.1)), foam: None })
+    }
+
+    #[test]
+    fn test_only_a_medium_of_water_throughout_is_the_kernels_water() {
+        let s = scene();
+        // The sea: water throughout.
+        assert!(host_kernel(&s, &Solid { m: water(true) }).is_some_and(|k| k.kind == pathtrace::MAT_WATER));
+        // Water at the scene's origin but not everywhere (as a landscape whose origin is in a
+        // river): not the kernels' water, though its material there is.
+        let varied = CheckeredYPlane::new(water(true), water(false), 1., 1.);
+        let varied = if varied.material_at(Vector3::zeros()).water().is_some() { varied } else { CheckeredYPlane::new(water(false), water(true), 1., 1.) };
+        assert!(varied.material_at(Vector3::zeros()).water().is_some());
+        assert!(host_kernel(&s, &varied).is_none());
     }
 }

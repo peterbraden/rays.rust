@@ -1547,17 +1547,21 @@ impl Surf {
     /// Where in its cycle train `k` is at `p` at this moment, as a phase: the crests' phase
     /// is laid out from the shore (`arriving`), so without this a crest would stand at every
     /// shoreline, its foam always fresh; each train is caught at its own moment, drifting
-    /// slowly along the shore (waves arrive along a coast at different times).
+    /// slowly along the shore (waves arrive along a coast at different times), and wandering
+    /// over tens of metres, as the crests of waves from a spread of directions do (short-
+    /// crested, not one straight line).
     fn moment(&self, p: &Vector3<f64>, k: usize) -> f64 {
         std::f64::consts::TAU * (0.37 + 0.29 * k as f64) + 1.5 * self.noise.noise(p.x / 80., p.z / 80., 11.3 + 3.1 * k as f64)
+            + 1.2 * self.noise.noise(p.x / 25., p.z / 25., 17.9 + 3.1 * k as f64)
     }
 
     /// A wave's height at `p` in train `k`, of root-mean-square `h` there, at `phase`: varying
-    /// about the root-mean-square from wave to wave (wave groups) and along its crest, smoothly
-    /// with the phase, so that the surface does too.
+    /// about the root-mean-square from wave to wave (wave groups) and along its crest, over
+    /// a couple of dozen metres, so that a wave breaks in sections where it is highest and
+    /// stands unbroken between them; smoothly with the phase, so that the surface does too.
     fn wave_height(&self, p: &Vector3<f64>, k: usize, h: f64, phase: f64) -> f64 {
-        let n = 0.5 + 0.5 * self.noise.noise(p.x / 40., p.z / 40., phase / std::f64::consts::TAU * 0.37 + 7.1 * k as f64);
-        h * (0.4 + 1.2 * n)
+        let n = 0.5 + 0.5 * self.noise.noise(p.x / 20., p.z / 20., phase / std::f64::consts::TAU * 0.37 + 7.1 * k as f64);
+        h * (0.3 + 1.4 * n)
     }
 
     /// The white water at `p`, 0 to 1, and the fraction of waves breaking there. A wave, its

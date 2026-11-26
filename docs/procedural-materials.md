@@ -390,6 +390,26 @@ shows the gloss as white sheets and glints: wet materials need to be fitted with
 uniform scans also make large scores, since the loss is relative to how much the scan varies
 between its own tiles.
 
+So `strip_relief` now draws a `plastic` layer as `lambertian` in its own albedo, as it already
+takes bumps off: the scans are albedo maps, without gloss. Refitted that way, with better scans
+for two of them and a lichen layer for the oak:
+
+| Preset | Scan | Author's, colours solved | Fit | Applied |
+|---|---|---|---|---|
+| beach_sand | damp_beach_sand | 10.7 | 4.04 | yes: the scan's damp tan; its damp patches blotchier than the scan's |
+| dune_sand | ambientCG Ground098 (rippled) | 16.6 | 9.67 | yes: warm tan, ripples 0.18 m apart (in the bump, so unseen by the fit) |
+| mudflat | brown_mud | 42.0 | 1.53 | yes (brown_mud_02, dry crumbly soil, had pulled it towards dry ground) |
+| oak_bark | jolcham_oak_bark_01 | 2.71 | 0.99 | yes: with pale lichen crusts; blotchier than the scan close up, the lichen beige |
+
+A free fit's search leaves the bump out, as the fit doesn't render it; but a stone layer's relief
+is a copy of its albedo's `bombing` node (`height` beside `mask`), and kept its authored cells
+and sizes while the albedo's moved, so the fitted stones were raised on other stones' cells
+(scree's cobbles coloured on cells of 7.5 cm, raised on cells of 4; desert_pavement's relief a
+second set of cracks). A bump's node of the same kind, seed and authored value as an albedo's
+now moves with it, and the applied fits were repaired from the versions they started from.
+scree's cobbles were also set back to 2-5 cm and held, as its fit had grown them into pale spots
+the scan (fine gravel) doesn't have.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

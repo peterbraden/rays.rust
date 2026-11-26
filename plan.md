@@ -2855,3 +2855,71 @@ seconds from the world's cache.
 Item 1, reframed: what the landscape scenes cost is their own (the host's intersection and
 shading), not a regression; the first step is a `Group` giving its mesh to the kernels on the
 CPU, measured on `terrain-alpine`.
+
+
+## 18. The ground's shading in the kernels (November 2026)
+
+Why: with a landscape's displaced patches flattened (section 17, item 1), `terrain-alpine` renders
+on the GPU, and the host shading its ground is 5.3 s of its 6.3 s (8 samples); `landscape` and
+`pebble-beach` likewise wait on the host. A host vertex costs 15 to 20 us on the CPU.
+
+### What the ground's shading is (known, from `terrain::scenery`)
+
+- `Ground::cover(p, normal)`: the simulation's class there (looked up half a cell off at random,
+  so classes blend over samples), the climate's biome with its edges wandering (noise in
+  temperature and rain), forest clearings, till, alluvium, playas (their crust and cracks), sand,
+  beaches, bare rock on steep slopes coloured and textured by its lithology (`stone`: bands,
+  streaks, joints, rust), scree, snow by the snowline and the slope, and on glaciers snow, white
+  and blue ice, debris and crevasses: some 30 calls of 2 to 4 octave Perlin `fbm`, the layers'
+  fields (`class_at`, `rock`, `playa`, `sand`), the climate's `local`.
+- `Land::scatter`: one of snow (two ages, `material::snow`, Kokhanovsky and Breon's reflectance),
+  glacier ice (white or blue, a Fresnel surface over diffused light) or bare ground, chosen by
+  their shares; bare ground either the cover's colour (Lambertian) or one of 13 library
+  materials by kind (`Bare`: scree, dune sand, river gravel, and a rock per lithology), which are
+  procedural graphs (`patterns`, `graph`), many with bump.
+- `LandscapeMedium`: rivers and lakes are `PhysicalOcean` water, terminal lakes brine.
+- Each host vertex also traces its own shadow rays through the scene's own geometry (meshes and
+  displaced patches on the CPU), and evaluates aerial perspective.
+
+Profile (terrain-alpine on the CPU, after the sky's table fix): of the host's work, noise
+(`perlin`) and the fields (`scenery::sample`) about a quarter, shadow rays through the meshes and
+patches about a third, the rest the atmosphere and the BSDFs.
+
+### Options
+
+A. Port it all to `shaders/shared` and the kernels: the cover, the fields (as tables uploaded per
+   layer), the climate, snow and ice BSDFs, and the graph evaluator for the library materials.
+   Exact (but f32), and the only option that also serves a moving camera; weeks of work, and the
+   graph evaluator is open-ended (every node a kernel must hold).
+
+B. Shade at the vertices (REYES, Cook, Carpenter and Catmull 1987): the patches are diced about a
+   pixel apart for the camera (`displaced`), and the clipmap's mesh is spaced by distance, so a
+   vertex's cover is nearly a pixel's. At flattening, evaluate the cover and the library
+   material's parameters at each vertex (albedo, roughness, the shares of snow and ice, the
+   surface kind), store them per vertex, and let a kernel material interpolate them across the
+   triangle and shade: Lambertian or rough (GGX) bare ground, snow and ice by kernel BSDFs.
+   The host then has no part in the landscape: its shadow rays go to the hardware too.
+
+C. Keep the cover on the host but only its colour: a texture of the cover per triangle baked at
+   flattening, the BSDFs ported. Between A and B; no simpler than B in practice.
+
+### Assumptions (unverified)
+
+- That vertex spacing is near enough a pixel for the cover's detail: true of the patches by
+  construction; the clipmap's rings are coarser further out (`scenery::Clipmap`), where pixels are
+  wide too. To measure: the image against the host's shading by FLIP, near and far.
+- That the cover's random jitter (classes blending over samples) can be replaced by averaging
+  several jittered evaluations per vertex, or by the interpolation itself.
+- That snow's angular behaviour (forward scattering, glints) can be had from a kernel BSDF of a
+  few parameters; Kokhanovsky's model is closed-form, so likely.
+- That bump in the library materials matters little at a pixel's scale from a vertex's normal
+  (the dicing's normals already carry the displacement); fine bump would be lost.
+- Memory: a few floats per vertex, on millions of vertices: tens of MB.
+
+### Open questions
+
+- Option B changes the pictures (bump, the jitter, interpolation between vertices): within what
+  FLIP of the host's shading is acceptable?
+- Whether to start with bare ground and the cover's colour (most pixels in most scenes) and leave
+  snow, ice and the library materials on the host for now, as `FlatMaterial` can mix kernel and
+  host materials by point?

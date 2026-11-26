@@ -7834,25 +7834,25 @@
     "variables": {
       "lie": {
         "node": "fractal",
-        "scale": 3,
+        "scale": 6.5303,
         "seed": 701,
-        "smallest": 0.02,
-        "roughness": 0.55
+        "smallest": 0.0274,
+        "roughness": 0.7862
       },
       "cracks": {
         "node": "smoothstep",
-        "from": 0.03,
+        "from": 0.1022,
         "to": 0.0,
         "input": {
           "node": "warp",
-          "amount": 0.015,
-          "scale": 0.05,
+          "amount": 0.0473,
+          "scale": 0.1715,
           "seed": 703,
           "octaves": 2,
           "input": {
             "node": "cells",
             "style": "edges",
-            "scale": 0.08,
+            "scale": 0.0394,
             "seed": 702
           }
         }
@@ -7869,12 +7869,12 @@
             "albedo": {
               "pattern": {
                 "node": "fractal",
-                "scale": 0.5,
+                "scale": 1.1297,
                 "seed": 704
               },
               "color_map": [
                 [
-                  -0.5,
+                  -0.6353,
                   [
                     0.07,
                     0.06,
@@ -7882,11 +7882,11 @@
                   ]
                 ],
                 [
-                  0.5,
+                  0.4728,
                   [
-                    0.12,
-                    0.1,
-                    0.08
+                    0.1199,
+                    0.0999,
+                    0.0799
                   ]
                 ]
               ]
@@ -7922,39 +7922,39 @@
               "pattern": "$cracks",
               "color_map": [
                 [
-                  0,
+                  0.1552,
                   {
                     "pattern": {
                       "node": "fractal",
-                      "scale": 0.3,
+                      "scale": 0.0834,
                       "seed": 706
                     },
                     "color_map": [
                       [
-                        -0.5,
+                        -0.2105,
                         [
-                          0.22,
-                          0.19,
-                          0.15
+                          0.1117,
+                          0.0908,
+                          0.0681
                         ]
                       ],
                       [
-                        0.5,
+                        0.5855,
                         [
-                          0.3,
-                          0.26,
-                          0.2
+                          0.2187,
+                          0.1886,
+                          0.1472
                         ]
                       ]
                     ]
                   }
                 ],
                 [
-                  1,
+                  0.9721,
                   [
-                    0.04,
-                    0.035,
-                    0.03
+                    0.0501,
+                    0.0417,
+                    0.0325
                   ]
                 ]
               ]
@@ -7972,8 +7972,8 @@
           },
           "mask": {
             "node": "smoothstep",
-            "from": 0.2,
-            "to": 0.3,
+            "from": 0.4887,
+            "to": 0.068,
             "input": "$lie"
           }
         },
@@ -7981,17 +7981,17 @@
           "material": {
             "type": "plastic",
             "albedo": [
-              0.02,
-              0.02,
-              0.02
+              0.0251,
+              0.024,
+              0.0216
             ],
             "roughness": 0.0,
             "refractive_index": 1.33
           },
           "mask": {
             "node": "smoothstep",
-            "from": -0.25,
-            "to": -0.3,
+            "from": 0.0468,
+            "to": -0.4639,
             "input": "$lie"
           }
         }
@@ -8080,9 +8080,80 @@
             ],
             "chroma": 0.1
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 1222.018802,
+            "fitted": 10.389106
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 1.532734,
+            "author_solved": 41.952787,
+            "patches": 3,
+            "chosen": "generation 47's best"
+          },
+          "date": "2026-11-26",
+          "applied": true,
+          "values": {
+            "scale": 0.5484,
+            "material.layers.0.material.albedo.color_map.0.1": [
+              0.07,
+              0.06,
+              0.05
+            ],
+            "material.layers.0.material.albedo.color_map.1.1": [
+              0.1199,
+              0.0999,
+              0.0799
+            ],
+            "material.layers.1.material.albedo.color_map.0.1.color_map.0.1": [
+              0.1117,
+              0.0908,
+              0.0681
+            ],
+            "material.layers.1.material.albedo.color_map.0.1.color_map.1.1": [
+              0.2187,
+              0.1886,
+              0.1472
+            ],
+            "material.layers.1.material.albedo.color_map.1.1": [
+              0.0501,
+              0.0417,
+              0.0325
+            ],
+            "material.layers.2.material.albedo": [
+              0.0251,
+              0.024,
+              0.0216
+            ],
+            "variables.lie.scale": 6.5303,
+            "variables.lie.smallest": 0.0274,
+            "variables.lie.roughness": 0.7862,
+            "variables.cracks.from": 0.1022,
+            "variables.cracks.input.amount": 0.0473,
+            "variables.cracks.input.scale": 0.1715,
+            "variables.cracks.input.input.scale": 0.0394,
+            "material.layers.0.material.albedo.pattern.scale": 1.1297,
+            "material.layers.0.material.albedo.color_map.0.0": -0.6353,
+            "material.layers.0.material.albedo.color_map.1.0": 0.4728,
+            "material.layers.1.material.albedo.color_map.0.0": 0.1552,
+            "material.layers.1.material.albedo.color_map.1.0": 0.9721,
+            "material.layers.1.material.albedo.color_map.0.1.pattern.scale": 0.0834,
+            "material.layers.1.material.albedo.color_map.0.1.color_map.0.0": -0.2105,
+            "material.layers.1.material.albedo.color_map.0.1.color_map.1.0": 0.5855,
+            "material.layers.1.mask.from": 0.4887,
+            "material.layers.1.mask.to": 0.068,
+            "material.layers.2.mask.from": 0.0468,
+            "material.layers.2.mask.to": -0.4639
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.5484
   },
   "oak_bark": {
     "show": "bark",

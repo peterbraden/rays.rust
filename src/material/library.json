@@ -652,7 +652,110 @@
         },
         "amount": 1
       }
-    }
+    },
+    "references": [
+      {
+        "source": "polyhaven:concrete",
+        "licence": "CC0",
+        "size": 4.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                0,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                0,
+                1,
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                1,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                1,
+                1,
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                2,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                3,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ],
+        "view": "wall"
+      }
+    ]
   },
   "terrazzo": {
     "doc": "Terrazzo, polished: chips of coloured marble set in a white cement, ground flat.",
@@ -3749,7 +3852,74 @@
         },
         "amount": 1
       }
-    }
+    },
+    "references": [
+      {
+        "source": "polyhaven:asphalt_02",
+        "licence": "CC0",
+        "size": 3.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                2,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                2,
+                1,
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                2,
+                1,
+                "color_map",
+                2,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
   },
   "glazed_tiles": {
     "doc": "Glazed ceramic tiles, 15 cm square, each fired a shade between \"color\" and \"color2\", in pale grout.",
@@ -3916,7 +4086,45 @@
         },
         "amount": 1
       }
-    }
+    },
+    "references": [
+      {
+        "source": "polyhaven:grey_plaster",
+        "licence": "CC0",
+        "size": 1.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ],
+        "view": "wall"
+      }
+    ]
   },
   "weathered_oak": {
     "doc": "Oak left out for years: silvered grey, its soft earlywood worn back so the grain stands up, split by checks along it.",
@@ -5378,7 +5586,108 @@
           "mask": "$pits"
         }
       ]
-    }
+    },
+    "references": [
+      {
+        "source": "polyhaven:rock_face_03",
+        "licence": "CC0",
+        "size": 2.7,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "layers",
+                0,
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "layers",
+                0,
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "layers",
+                0,
+                "material",
+                "albedo",
+                "color_map",
+                2,
+                1
+              ],
+              [
+                "material",
+                "layers",
+                1,
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "layers",
+                1,
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "layers",
+                2,
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "layers",
+                2,
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "layers",
+                3,
+                "material",
+                "albedo"
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ],
+        "view": "wall"
+      }
+    ]
   },
   "gneiss": {
     "show": "landscape",
@@ -5568,7 +5877,91 @@
         },
         "amount": 1
       }
-    }
+    },
+    "references": [
+      {
+        "source": "polyhaven:rock_face_04",
+        "licence": "CC0",
+        "size": 2.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1,
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                2,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                2,
+                1,
+                "color_map",
+                1,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ],
+        "view": "wall"
+      }
+    ]
   },
   "schist": {
     "show": "landscape",

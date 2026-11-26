@@ -1555,7 +1555,9 @@ impl Ground {
             let aa = l.fields.at(&l.domain, Field::Aa, &j, h).unwrap_or(1.);
             let grown = smoothstep(0.3, 1.2, age / regrowth + 0.5 * patches);
             if grown >= 1. { continue; }
-            let weathered = smoothstep(0., 0.15, age / regrowth + 0.05 * patches);
+            // Its glassy skin spalls and the rock oxidises browner over decades to centuries,
+            // whatever the rain (Hawaii's 1859 flow is brown where 1984's is still black).
+            let weathered = smoothstep(20., 400., age * (1. + 0.6 * patches));
             let fresh = mix_colour(colour(PAHOEHOE), colour(AA), aa);
             let old = mix_colour(colour(OLD_LAVA), Color::new(0.26, 0.26, 0.24), 0.3 * lichen);
             let c = mix_colour(fresh, old, weathered) * (0.85 + 0.3 * n(80., 0.13));

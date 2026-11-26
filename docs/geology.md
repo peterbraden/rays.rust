@@ -245,7 +245,7 @@ stiffer lavas of stratovolcanoes and cinder cones flow as ʻaʻā from the start
 Close up (`scenery::Ground::lava`, `terrain::detail`), fresh pāhoehoe is black basaltic glass
 with a faint sheen, in lobes a few metres across swollen here and there into tumuli, its skin
 folded into ropes; ʻaʻā is a rubble of clinker, dull brown-black and rusty where it oxidised hot,
-heaped in pressure ridges. Within decades the glassy skin spalls and the rock weathers browner,
+heaped in pressure ridges. Within decades the glassy skin spalls and the rock weathers browner (over twenty to four hundred years, whatever the rain),
 and lichen settles where it is wet; then plants take it over, patchily, cracks and hollows first,
 at a pace set by the rain: in about 500 years at 2,000 mm a year, as the rain to the -1.5 (Hawaii's
 wet windward flows carry forest within 300-400 years, its dry leeward ones stand bare for

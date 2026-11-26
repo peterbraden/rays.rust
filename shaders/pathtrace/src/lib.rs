@@ -257,10 +257,8 @@ pub const AIR_LUT_ALTITUDES: u32 = 21;
 /// The sun's depth table, multiple scattering's, the sky-view tables, the moon's record.
 pub const AIR_TABLES: u32 = 29;
 pub const AIR_HEADER: u32 = 33;
-/// As `skysphere`'s: the steps of a view ray and of a ray to the sun, the tables' sizes, and the
-/// sky's calibration.
+/// As `skysphere`'s: the steps of a view ray, the tables' sizes, and the sky's calibration.
 pub const SKY_STEPS: u32 = 32;
-pub const SUN_STEPS: u32 = 16;
 pub const SUN_TABLE_ALTITUDES: u32 = 64;
 pub const SUN_TABLE_ANGLES: u32 = 256;
 pub const MS_ALTITUDES: u32 = 32;
@@ -1403,25 +1401,6 @@ fn scattered(a: &Air, d: Vec3) -> Vec3 {
     a.rayleigh * d.x + Vec3::splat(a.mie * d.y)
 }
 
-/// `SkyMaterial::optical_depth_towards` the sun: None if the earth is in the way.
-fn depths_to_sun(a: &Air, p: Vec3) -> Option<Vec3> {
-    if sphere_hit(p, a.sun, a.centre, a.earth_k) >= 0.0 {
-        return None;
-    }
-    let length = sphere_hit(p, a.sun, a.centre, a.top_k);
-    if length < 0.0 {
-        return None;
-    }
-    let mut total = Vec3::ZERO;
-    let mut k = 0;
-    while k < SUN_STEPS {
-        let (t, step) = path_sample(length, SUN_STEPS, k);
-        total += depths(a, altitude(a, p + a.sun * t), step);
-        k += 1;
-    }
-    Some(total)
-}
-
 /// Bilinear in a table of `cols`-wide rows of 3 at `off`, at fractional row u and column v.
 fn bilinear3(s: &Scene, off: u32, rows: u32, cols: u32, u: f32, v: f32) -> Vec3 {
     let (i, j) = ((u as u32).min(rows - 2), (v as u32).min(cols - 2));
@@ -1491,11 +1470,10 @@ fn scattering(s: &Scene, a: &Air, o: Vec3, d: Vec3) -> (Vec3, Vec3, Vec3) {
         let here = depths(a, altitude(a, p), step);
         depth += here * 0.5;
         multiple += transmittance(a, depth) * scattered(a, here) * multiple_at(s, a, p);
-        if let Some(to_sun) = depths_to_sun(a, p) {
-            let lit = transmittance(a, depth + to_sun);
-            rayleigh += lit * here.x;
-            mie += lit * here.y;
-        }
+        // The depths towards the sun from the table, as `Air::scattering` takes them.
+        let lit = transmittance(a, depth + sun_depths_at(s, a, p));
+        rayleigh += lit * here.x;
+        mie += lit * here.y;
         depth += here * 0.5;
         k += 1;
     }

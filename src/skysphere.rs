@@ -691,12 +691,13 @@ impl<'a> Air<'a> {
                 .component_mul(&self.c.scattered(here))
                 .component_mul(&self.multiple_at(&sample_position));
             // Sunlight reaching this sample, none in the earth's shadow, attenuated on its way
-            // in and on its way out to the viewer (Beer-Lambert along the whole path).
-            if let Some(to_sun) = self.sky.optical_depth_to_sun(sample_position) {
-                let attenuation = self.c.transmittance(depth + to_sun);
-                rayleigh_sum += attenuation * here.r;
-                mie_sum += attenuation * here.m;
-            }
+            // in and on its way out to the viewer (Beer-Lambert along the whole path). The
+            // depths towards the sun from the table, as `segment` takes them: integrated here,
+            // 16 steps for each of the view ray's 32, a sky below the horizon (which the
+            // sky-view table doesn't cover) cost 512 of them, 40% of a landscape's shading.
+            let attenuation = self.c.transmittance(depth + self.sky.sun_depths_at(&sample_position));
+            rayleigh_sum += attenuation * here.r;
+            mie_sum += attenuation * here.m;
             // And on through the rest of the step.
             depth = depth + here * 0.5;
         }

@@ -114,7 +114,7 @@ use web_time::Instant;
 
 /// In every key: raise it when a stage's computation changes, so that what was built before
 /// isn't taken for what would be built now.
-pub const FORMAT: u32 = 7;
+pub const FORMAT: u32 = 8;
 /// A running stage saves where it has got to this often, seconds.
 pub const CHECKPOINT: f64 = 30.;
 /// `print` says how far a stage has got when nothing has been printed for this long, seconds.

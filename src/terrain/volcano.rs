@@ -239,10 +239,11 @@ pub fn vents(planet: &Planet, domain: &Domain, p: &VolcanoParams) -> Vec<Vent> {
         let activity = crate::terrain::hotspot::activity(s.age);
         if activity < 0.05 { continue; }
         let rate = HOTSPOT_RATE * s.height / crate::terrain::hotspot::HEIGHT * activity;
-        // Half of what a shield's magma does is intruded into its rift zones and summit, and
-        // its flows stack in lobes metres thick (so that, as Kīlauea's, they cover a few
-        // square kilometres a year).
-        let mut vent = Vent::new(s.dir, (0., f64::INFINITY), rate, 0x6873_0000_0000 ^ k as u64, Form::Shield, 0.5 * s.radius, 0.5, 8., None, domain);
+        // Half of a shield's magma is intruded into its rift zones and summit, inflating the
+        // shield the planet already grows (`hotspot`), so isn't erupted here; nine tenths of
+        // the rest flows, in lobes stacked metres thick (so that, as Kīlauea's, they cover a
+        // few square kilometres a year), and a tenth builds about its summit.
+        let mut vent = Vent::new(s.dir, (0., f64::INFINITY), 0.5 * rate, 0x6873_0000_0000 ^ k as u64, Form::Shield, 0.5 * s.radius, 0.9, 8., None, domain);
         // (Cells holding a point of a rift zone; on a patch, `cell_at` gives the nearest edge
         // cell for points beyond it.)
         let rifts = s.rift_points(radius);

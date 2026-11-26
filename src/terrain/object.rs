@@ -818,7 +818,8 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let mut medium = LandscapeMedium::with_ground(ground, material);
     if o["eruption"].as_bool().unwrap_or(false) {
         let e = eruption(&planet, &relief, &frame);
-        say(format!("Landscape: erupting, {} lava lakes and {} channels", e.lakes.len(), e.channels.len()));
+        let at: Vec<String> = e.lakes.iter().map(|(c, _)| format!("[{:.0}, {:.0}, {:.0}]", c.x, c.y, c.z)).collect();
+        say(format!("Landscape: erupting, {} lava lakes (at {}) and {} channels", e.lakes.len(), at.join(", "), e.channels.len()));
         medium = medium.with_eruption(Arc::new(e), params.planet.seed);
     }
     SceneObject { geometry, medium: Box::new(medium) }
@@ -830,9 +831,10 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
 fn eruption(planet: &crate::terrain::planet::Planet, relief: &Relief, frame: &crate::terrain::scenery::Frame) -> crate::terrain::eruption::Eruption {
     use crate::terrain::{eruption, hotspot};
     let radius = planet.params.radius;
+    // (Heights above the sea: the channels and lakes are read in plan, and stop at the sea.)
     let ground = |x: f64, z: f64| {
         let d = frame.dir(x, z);
-        frame.to_scene(&d, relief.height(&d, &relief.slope(&d), 10.)).y
+        relief.height(&d, &relief.slope(&d), 10.)
     };
     let (mut lakes, mut channels) = (vec![], vec![]);
     let shields = &planet.shields().list;
@@ -851,6 +853,8 @@ fn eruption(planet: &crate::terrain::planet::Planet, relief: &Relief, frame: &cr
                 if h > low.0 { low = (h, x, z); }
             }
         }
+        // (A shield still beneath the sea erupts there, unseen.)
+        if low.0 <= 0. { continue; }
         let crater = Vector3::new(low.1, low.0, low.2);
         lakes.push((crater, 150.));
         channels.push(eruption::channel(crater, &ground, 6000., 25., i as u64));

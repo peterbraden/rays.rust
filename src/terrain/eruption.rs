@@ -100,7 +100,7 @@ impl Eruption {
 }
 
 /// A channel from scene point `start` down the steepest way over the landscape's surface
-/// (`height` at scene x, z), in steps of `step` metres perturbed by up to `roughness`, for up to
+/// (`height` above the sea at scene x, z; the channel's points keep it as their y), in steps of `step` metres perturbed by up to `roughness`, for up to
 /// `length` metres or to the sea, from `seed`; `width` metres wide at the vent, spreading to
 /// three times that in a fan at its front.
 pub fn channel(start: Vector3<f64>, height: &dyn Fn(f64, f64) -> f64, length: f64, width: f64, seed: u64) -> Channel {

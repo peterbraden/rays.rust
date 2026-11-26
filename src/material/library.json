@@ -8108,7 +8108,13 @@
             "chroma": 0.1
           }
         ],
-        "view": "wall"
+        "view": "wall",
+        "hold": [
+          {
+            "node": "transform",
+            "field": "scale"
+          }
+        ]
       }
     ]
   },
@@ -8337,7 +8343,77 @@
             "chroma": 0.1
           }
         ],
-        "view": "wall"
+        "view": "wall",
+        "fit": {
+          "loss": {
+            "start": 116.833938,
+            "fitted": 0.90709
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 0.864302,
+            "author_solved": 5.111943,
+            "patches": 3,
+            "chosen": "the search's mean"
+          },
+          "date": "2026-11-26",
+          "applied": false,
+          "values": {
+            "scale": 1.3957,
+            "material.albedo.color_map.0.1": [
+              0.0316,
+              0.0231,
+              0.0168
+            ],
+            "material.albedo.color_map.1.1": [
+              0.0911,
+              0.0591,
+              0.0349
+            ],
+            "material.albedo.color_map.2.1.color_map.0.1": [
+              0.1318,
+              0.0867,
+              0.0495
+            ],
+            "material.albedo.color_map.2.1.color_map.1.1": [
+              0.1639,
+              0.1208,
+              0.0827
+            ],
+            "material.albedo.color_map.2.1.color_map.2.1": [
+              0.2328,
+              0.1083,
+              0.0547
+            ],
+            "material.albedo.color_map.2.1.color_map.3.1": [
+              0.2538,
+              0.1837,
+              0.1222
+            ],
+            "variables.plates.amount": 0.0384,
+            "variables.plates.scale": 0.0834,
+            "variables.plates.input.scale.1": 1.6301,
+            "variables.plates.input.input.scale": 0.034,
+            "variables.flakes.scale.1": 1.3496,
+            "variables.flakes.input.scale": 0.0265,
+            "material.albedo.color_map.0.0": -0.0008,
+            "material.albedo.color_map.1.0": 0.0423,
+            "material.albedo.color_map.2.0": 0.0782,
+            "material.albedo.color_map.2.1.color_map.0.0": 0.2742,
+            "material.albedo.color_map.2.1.color_map.1.0": 0.6027,
+            "material.albedo.color_map.2.1.color_map.2.0": 0.7997,
+            "material.albedo.color_map.2.1.color_map.3.0": 0.9311
+          }
+        },
+        "hold": [
+          {
+            "node": "transform",
+            "field": "scale"
+          }
+        ]
       }
     ]
   },

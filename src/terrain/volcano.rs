@@ -217,7 +217,7 @@ pub fn vents(planet: &Planet, domain: &Domain, p: &VolcanoParams) -> Vec<Vent> {
         // Lake's Mazama did), a third to nearly half as wide as the cone and hundreds of
         // metres deep.
         let (crater, collapses, width, depth) = (rng.next_f64(), rng.next_f64(), rng.next_f64(), rng.next_f64());
-        let caldera = (collapses < 0.2).then(|| ((0.3 + 0.15 * width) * p.cone_radius, 300. + 400. * depth));
+        let caldera = (collapses < 0.2).then_some(((0.3 + 0.15 * width) * p.cone_radius, 300. + 400. * depth));
         let form = Form::Strato { crater: 300. + 400. * crater };
         let vent = Vent::new(dir, (start, end), p.rate * (0.25 + 1.5 * rate), seed, form, p.cone_radius, p.lava_fraction, p.flow_thickness, caldera, domain);
         cinder_cones(&vent, p.cone_radius * 1.5, &[], &mut rng, domain, &mut vents);

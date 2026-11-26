@@ -684,6 +684,13 @@ fn main() {
     }
     paint::poor_mans(&img, &s.output);
     rc.print_stats();
+    // Everything is written: end here rather than free the scene piece by piece, which took
+    // 0.65 to 1.3 s of `alpine-closeup`'s every run (and, swapping, may read back from disk
+    // what it frees).
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(0);
 }
 
 /// Write the render's profile, each pixel's time (see `time_map`), and summarise it.

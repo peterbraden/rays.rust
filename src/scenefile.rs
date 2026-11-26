@@ -1215,7 +1215,7 @@ impl SceneFile {
             let medium: Box<dyn Medium + Sync + Send> = if o.get("material").is_some() || o.get("medium").is_some() {
                 SceneFile::parse_object_medium(&o, materials, media)
             } else {
-                Box::new(Solid { m: Box::new(crate::procedural::breaker::BreakerWater) })
+                Box::new(Solid { m: Box::new(crate::procedural::breaker::BreakerWater::new(breaker.seed)) })
             };
             return Some(Arc::new(SceneObject { geometry: Box::new(crate::procedural::breaker::BreakerSurface { mesh: breaker.geometry() }), medium }));
         }

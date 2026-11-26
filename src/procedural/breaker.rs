@@ -262,15 +262,55 @@ impl crate::shapes::geometry::Geometry for BreakerSurface {
     }
 }
 
-/// The breaker's water at its surface: a smooth dielectric of water's refractive index, whose
-/// rays refracted out of the water don't count the sun's disc when they meet it (the sun was
-/// sampled from inside, through the surface: `BreakerSurface`); reflections off the outside
-/// still do.
-pub struct BreakerWater;
+/// The breaker's water at its surface: a dielectric of water's refractive index, its surface
+/// not glassy but rippled and streaked (`BreakerWater::relief`), whose rays refracted out of
+/// the water don't count the sun's disc when they meet it (the sun was sampled from inside,
+/// through the surface: `BreakerSurface`); reflections off the outside still do.
+pub struct BreakerWater {
+    noise: crate::noise::PerlinNoise,
+}
+
+impl BreakerWater {
+    pub fn new(seed: u64) -> BreakerWater {
+        BreakerWater { noise: crate::noise::PerlinNoise::shuffled(seed.wrapping_add(0x5717)) }
+    }
+
+    /// The surface's small relief at `p` (m): capillary ripples a few centimetres long, in three
+    /// octaves; streaks drawn out along the flow (up the face and over the lip, in the plane of
+    /// the wave's section: long in y and z, narrow along the crest, x); and a gentle
+    /// undulation half a metre across.
+    fn relief(&self, p: &Vector3<f64>) -> f64 {
+        let n = |x: f64, y: f64, z: f64| self.noise.noise(x, y, z);
+        let ripples = 0.0012 * n(p.x / 0.03, p.y / 0.03, p.z / 0.03)
+            + 0.0006 * n(p.x / 0.015 + 7.1, p.y / 0.015, p.z / 0.015)
+            + 0.0025 * n(p.x / 0.08 + 3.3, p.y / 0.08, p.z / 0.08);
+        let streaks = 0.004 * n(p.x / 0.06 + 11.9, p.y / 0.9, p.z / 0.9);
+        let swell = 0.02 * n(p.x / 0.5 + 21.4, p.y / 0.5, p.z / 0.5);
+        ripples + streaks + swell
+    }
+
+    /// The normal `n` at `p` tilted by the relief's slope across the surface.
+    fn rippled(&self, p: &Vector3<f64>, n: &Vector3<f64>) -> Vector3<f64> {
+        let e = 0.002;
+        let h0 = self.relief(p);
+        let g = Vector3::new(
+            self.relief(&(p + Vector3::x() * e)) - h0,
+            self.relief(&(p + Vector3::y() * e)) - h0,
+            self.relief(&(p + Vector3::z() * e)) - h0,
+        ) / e;
+        let along = g - n * g.dot(n);
+        (n - along).normalize()
+    }
+}
 
 impl crate::material::model::MaterialModel for BreakerWater {
     fn scatter(&self, r: &crate::ray::Ray, intersection: &crate::intersection::Intersection, s: &crate::scene::Scene) -> crate::material::model::ScatteredRay {
-        let mut out = crate::material::functions::scatter_dielectric(crate::ocean::WATER_INDEX, crate::color::Color::white(), r, intersection,
+        // (Where the tilt would put the ray on the other side of the surface, at a grazing
+        // angle, the surface as it is.)
+        let tilted = self.rippled(&intersection.point, &intersection.normal);
+        let normal = if tilted.dot(&r.rd).signum() == intersection.normal.dot(&r.rd).signum() { tilted } else { intersection.normal };
+        let rippled = crate::intersection::Intersection { normal, ..*intersection };
+        let mut out = crate::material::functions::scatter_dielectric(crate::ocean::WATER_INDEX, crate::color::Color::white(), r, &rippled,
             crate::material::functions::surface_offset(intersection, s));
         let leaving = r.rd.dot(&intersection.normal) > 0.;
         if leaving && out.ray.as_ref().is_some_and(|ray| ray.rd.dot(&intersection.normal) > 0.) {

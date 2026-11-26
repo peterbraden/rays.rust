@@ -86,6 +86,24 @@ pub fn render_key(scene: &str, overrides: (Option<usize>, Option<usize>, Option<
     h.finish()
 }
 
+/// The report kept in a saved state's bytes (`RenderContext::encode_state`), whatever its size:
+/// empty for a state saved before reports.
+pub fn report_in_state(bytes: &[u8]) -> Result<crate::report::Report, String> {
+    if bytes.len() >= 8 && &bytes[..8] == STATE_MAGIC_WITHOUT_REPORT {
+        return Ok(Default::default());
+    }
+    if bytes.len() < STATE_HEADER || &bytes[..8] != STATE_MAGIC {
+        return Err("not a saved render, or from an older version".into());
+    }
+    let u64_at = |i: usize| bytes.get(i..i + 8).map(|b| u64::from_le_bytes(b.try_into().unwrap()));
+    let (width, height) = (u64_at(16).unwrap() as usize, u64_at(24).unwrap() as usize);
+    let end = width.checked_mul(height).and_then(|p| p.checked_mul(STATE_PIXEL)).and_then(|p| p.checked_add(STATE_HEADER))
+        .ok_or("not a saved render")?;
+    let length = u64_at(end).ok_or("cut short")? as usize;
+    let report = bytes.get(end + 8..end + 8 + length).ok_or("cut short")?;
+    crate::report::Report::decode(report)
+}
+
 /// Where a render's state is saved: alongside its image, as `<image>.accum`.
 pub fn state_path_for(output: &str) -> String {
     format!("{}.accum", output)
@@ -881,6 +899,21 @@ mod tests {
         let mut cut = part.encode_state(7);
         cut.truncate(PIXELS_END + 4);
         assert!(loaded(&cut, "cut").is_err());
+    }
+
+    #[test]
+    fn test_a_states_report_is_read_without_its_size() {
+        // (Seed 13: `render_from`'s file is named by its seed, which no other test uses.)
+        let first = render_from(13, 4, None);
+        let second = render_from(13, 8, Some(&first.encode_state(7)));
+        let state = second.encode_state(7);
+        assert_eq!(report_in_state(&state).unwrap().runs.len(), 2);
+        // Before reports: none. Cut short, or not a state: an error.
+        let mut old = state[.. PIXELS_END].to_vec();
+        old[..8].copy_from_slice(STATE_MAGIC_WITHOUT_REPORT);
+        assert!(report_in_state(&old).unwrap().runs.is_empty());
+        assert!(report_in_state(&state[.. state.len() - 1]).is_err());
+        assert!(report_in_state(b"not a state at all, no").is_err());
     }
 
     #[test]

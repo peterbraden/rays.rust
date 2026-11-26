@@ -307,6 +307,35 @@ struct ServeArgs {
     allow_origin: Vec<String>,
 }
 
+/// rays report: what a render's runs did, from its saved state
+#[derive(Parser, Debug)]
+#[command(name = "rays report", about = "Print the report kept in a render's saved state: each run that added samples, \
+what it ran on, what rendered it and why, where its time and memory went", long_about = None)]
+struct ReportArgs {
+    ///The render's image (its state, <image>.accum, is read) or the state itself
+    #[arg(index = 1)]
+    render: String,
+
+    ///Print the report as JSON
+    #[arg(long)]
+    json: bool,
+}
+
+/// `rays report`: print a render's report.
+fn print_report(a: ReportArgs) {
+    let path = if a.render.ends_with(".accum") { a.render.clone() } else { rendercontext::state_path_for(&a.render) };
+    let report = std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))
+        .and_then(|bytes| rendercontext::report_in_state(&bytes).map_err(|e| format!("{}: {}", path, e)));
+    match report {
+        Ok(r) if a.json => println!("{}", serde_json::to_string_pretty(&r).unwrap()),
+        Ok(r) => print!("{}", r.summary()),
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        },
+    }
+}
+
 fn main() {
     // `rays serve ...` is a different program from `rays <scene>`: it has its own options.
     if std::env::args().nth(1).as_deref() == Some("serve") {
@@ -320,6 +349,10 @@ fn main() {
             eprintln!("{}", e);
             std::process::exit(1);
         }
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("report") {
+        print_report(ReportArgs::parse_from(std::env::args().skip(1)));
         return;
     }
     let args = Args::parse();

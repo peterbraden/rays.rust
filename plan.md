@@ -2731,6 +2731,11 @@ A run (one invocation that added samples), as JSON, appended to the state's list
 
 ### Steps
 
+Status (November 2026): steps 1 to 5 done, but for `render-all-stats.py`, which is on its
+own branch (`render-all-stats`) and reads the report once the branches meet. Not yet: the
+world builder's own stages, media's collisions and walks, the path tracer's materials, and
+the acceleration structures' sizes beyond what the footprint shows.
+
 1. The report's types and the state's new section (`RAYSACC4`; a `RAYSACC3` state loads,
    with no runs). Test: a state saved and loaded keeps its runs, and a resumed render appends
    one; an old state still resumes.

@@ -419,7 +419,7 @@ impl Whitewater {
 impl crate::volume::DensityField for Whitewater {
     fn density(&self, p: &Vector3<f64>) -> f64 {
         let f = (p.x - self.start) / self.step;
-        if !(f >= 0.) || f >= (self.tips.len() - 1) as f64 { return 0.; }
+        if f.is_nan() || f < 0. || f >= (self.tips.len() - 1) as f64 { return 0.; }
         let (i, a) = (f.floor() as usize, f.fract());
         let (y0, z0, s0) = self.tips[i];
         let (y1, z1, s1) = self.tips[i + 1];

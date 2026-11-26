@@ -58,10 +58,12 @@ impl Kinds {
             _ => 0.,
         };
         let exposed = steep(30., 40.).max(high).max(arid);
-        let bare = ((1. - smoothstep(0.1, 1.5, sediment)) * exposed).max(steep(38., 50.));
+        // A closed basin's floor is lake beds, however thin the simulation's sediment there:
+        // never bare rock but on its steep sides.
+        let pan = field(Field::Playa).clamp(0., 1.);
+        let bare = ((1. - smoothstep(0.1, 1.5, sediment)) * exposed * (1. - pan)).max(steep(38., 50.));
         let glacial = smoothstep(1., 4., field(Field::Till)) * smoothstep(0.5, 2., sediment);
         let blown = smoothstep(0.5, 3., field(Field::Sand));
-        let pan = field(Field::Playa).clamp(0., 1.);
         let scree = steep(22., 32.) * (1. - glacial) * (1. - blown);
         let alluvium = ((1. - glacial) * (1. - blown) * (1. - pan) - scree).max(0.);
         Kinds { ice, bare, scree, glacial, alluvium, blown, pan }

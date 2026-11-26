@@ -399,8 +399,11 @@ impl Relief {
             if w > 0. {
                 let mut v = l.simulated(d);
                 if l.spacing > 1.01 * self.finest {
-                    // Relief between twice this layer's spacing and twice the finest's.
-                    v += self.planet.elevation(d, 2. * self.finest) - self.planet.elevation(d, 2. * l.spacing);
+                    // Relief between twice this layer's spacing and twice the finest's: none on
+                    // a closed basin's level floor (as the finest has none there).
+                    let floor = l.fields.at(&l.domain, crate::graph::Field::Playa, d, 0.).unwrap_or(0.);
+                    let relief = self.planet.elevation(d, 2. * self.finest) - self.planet.elevation(d, 2. * l.spacing);
+                    v += relief * (1. - smoothstep(0.02, 0.2, floor));
                 }
                 h += w * v;
                 rest -= w;
@@ -509,6 +512,21 @@ impl Relief {
         (shaped, dv * slope)
     }
 
+    /// How much of the ground at `d` is a closed basin's floor (`graph::Field::Playa`), 0 to 1,
+    /// blended between the layers as their surfaces are.
+    fn playa(&self, d: &Vector3<f64>) -> f64 {
+        let (mut rest, mut playa) = (1., 0.);
+        for l in self.layers.iter() {
+            let w = l.weight(d) * rest;
+            if w > 0. {
+                playa += w * l.fields.at(&l.domain, crate::graph::Field::Playa, d, 0.).unwrap_or(0.);
+                rest -= w;
+            }
+            if rest <= 0. { break; }
+        }
+        playa.clamp(0., 1.)
+    }
+
     /// The wind-blown sand at `d`, metres, blended between the layers as their surfaces are,
     /// and the wind of the layer that counts most there.
     fn sand(&self, d: &Vector3<f64>) -> (f64, Option<(Vector3<f64>, Vector3<f64>)>) {
@@ -576,9 +594,13 @@ impl Relief {
     /// slope there.
     pub fn height(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
         let (sand, wind) = self.sand(d);
-        // Drifting sand buries the ground's small relief.
-        let buried = 1. - 0.8 * smoothstep(0.5, 4., sand);
-        self.base(d) + buried * self.detail(d, slope, local) + self.dunes_on(d, local, sand, wind)
+        // Drifting sand buries the ground's small relief, and a closed basin's floor is level:
+        // the water spreads and dries over it, the sediment settling flat (no gullies, which
+        // its own cells are too coarse for the simulation to have filled).
+        let floor = 1. - smoothstep(0.02, 0.2, self.playa(d));
+        let buried = (1. - 0.8 * smoothstep(0.5, 4., sand)) * floor;
+        // (Nor do dunes cross it: its damp crust holds the sand, which heaps at its margins.)
+        self.base(d) + buried * self.detail(d, slope, local) + floor * self.dunes_on(d, local, sand, wind)
     }
 
     /// The surface's normal at `d` (outwards, in planet coordinates), by finite differences
@@ -1345,9 +1367,12 @@ impl Ground {
         let edge = p + Vector3::new(warp(0.61), 0., warp(0.83));
         let playa = self.playa(&edge);
         if playa > 0. {
-            // (A playa is level by nature: only its shores and the sides of its own cracks are
-            // steep, and the crust covers those.)
-            let extent = smoothstep(0.35, 0.65, playa + 0.3 * (n(600., 0.25) - 0.5)) * smoothstep(0.5, 0.7, flat);
+            // A playa is level by nature: the crust forms where the water stood and dried, on
+            // ground within ten degrees or so of level, and none on slopes steeper than twenty
+            // within the basin (the hummocks and gullies of the ground's own relief, finer than
+            // the simulation's cells), which keep the ground around. (The sides of the crust's
+            // own cracks show darker, as the cracks do.)
+            let extent = smoothstep(0.35, 0.65, playa + 0.3 * (n(600., 0.25) - 0.5)) * smoothstep(0.94, 0.985, flat);
             if extent > 0. {
                 let salt = smoothstep(0.35, 0.6, n(900., 0.75) + 0.3 * playa);
                 let crust = mix(colour(CLAY_PAN), colour(SALT), salt);

@@ -833,22 +833,37 @@ fn close_level(d: &Description, frame: &Frame, finest: Option<&Terrain>) -> Opti
 /// own finer relief: its surface raised or lowered by the difference between the two,
 /// smoothed over `finer` of its cells (one cell of the patch around it). Run five times finer,
 /// its rivers cut their valleys tens of metres deeper than the coarser patch's, which would
-/// leave its edges standing as walls against the ground around it.
+/// leave its edges standing as walls against the ground around it. At its edges it is that
+/// patch's ground exactly, its own relief growing in over the next two of that patch's cells:
+/// its simulation holds its edges at their first heights while the ground inside wears down,
+/// leaving a rim with gullies along it.
+///
+/// And where that patch has a closed basin's floor (`Basins::floor`), the close level's is its
+/// level floor: the close level's edges are outlets, so its rivers drained the basin and cut
+/// gullies across the floor where the water stands and dries.
 fn take_shape(close: &mut Terrain, around: &Terrain, finer: f64) {
     let crate::terrain::domain::Layout::Patch { n, .. } = close.domain.layout else { return };
     let surface = scenery::corner_values(around, &around.surface());
-    let mut diff: Vec<f64> = (0..close.domain.len())
-        .map(|i| scenery::sample(&around.domain, &surface, &close.domain.dirs[i]) - close.bed[i] - close.ice[i])
-        .collect();
+    let outer: Vec<f64> = close.domain.dirs.iter().map(|d| scenery::sample(&around.domain, &surface, d)).collect();
+    let raw: Vec<f64> = (0..close.domain.len()).map(|i| outer[i] - close.bed[i] - close.ice[i]).collect();
     // Two box filters a cell of the patch around wide: a tent, smooth enough not to show.
     let r = (finer / 2.).round().max(1.) as isize;
+    let mut diff = raw.clone();
     for _ in 0..2 {
         diff = box_filter(&diff, n, r);
     }
-    // (Not matched exactly at its edges: that would dam the valleys its rivers cut out
-    // through them, leaving lakes along the edges. The patches blend into each other there.)
-    for (b, d) in close.bed.iter_mut().zip(&diff) {
-        *b += d;
+    let basins = around.basins();
+    let floors: Vec<f64> = (0..around.domain.len()).map(|i| if basins.closed[i] && basins.floor[i] { 1. } else { 0. }).collect();
+    let floors = scenery::corner_values(around, &floors);
+    let fade = 2. * finer;
+    for (i, b) in close.bed.iter_mut().enumerate() {
+        let (x, z) = (i % n, i / n);
+        let edge = x.min(z).min(n - 1 - x).min(n - 1 - z) as f64;
+        let own = crate::procedural::nubis_clouds::smoothstep(0., fade, edge);
+        // (Out to a cell beyond, where the ground cover's ragged shores of salt reach:
+        // `scenery::Ground::cover`.)
+        let floor = crate::procedural::nubis_clouds::smoothstep(0.02, 0.25, scenery::sample(&around.domain, &floors, &close.domain.dirs[i]));
+        *b += raw[i] + own * (1. - floor) * (diff[i] - raw[i]);
     }
 }
 
@@ -980,7 +995,7 @@ mod tests {
             cells.iter().map(|&i| surface[i] - outer[i]).sum::<f64>() / cells.len() as f64
         };
         let (whole, edges) = (offset(&|_| true), offset(&|i| close.domain.boundary[i]));
-        assert!(whole.abs() < 3. && edges.abs() < 15., "{} {}", whole, edges);
+        assert!(whole.abs() < 3. && edges.abs() < 0.01, "{} {}", whole, edges);
         // A constant is its own average.
         assert!(box_filter(&vec![2.; 25], 5, 2).iter().all(|&v| (v - 2.).abs() < 1e-12));
     }

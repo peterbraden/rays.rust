@@ -408,7 +408,8 @@ and sizes while the albedo's moved, so the fitted stones were raised on other st
 second set of cracks). A bump's node of the same kind, seed and authored value as an albedo's
 now moves with it, and the applied fits were repaired from the versions they started from.
 scree's cobbles were also set back to 2-5 cm and held, as its fit had grown them into pale spots
-the scan (fine gravel) doesn't have.
+the scan (fine gravel) doesn't have. Refitted so: 1.99 → 1.67 on fresh patches, applied; its fit made the
+stones' facets more contrasting than the scan's, polished-looking close up.
 
 ### Presets modelled on scans
 

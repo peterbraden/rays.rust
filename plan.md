@@ -2756,3 +2756,92 @@ the acceleration structures' sizes beyond what the footprint shows.
   copy into a render's report, or only reference by key.
 - Whether to keep a per-pixel time map in the state too (`--time-map` computes one per run,
   and it is 8 bytes a pixel).
+
+
+## 17. What the reports show: where the time and memory go (November 2026)
+
+From the reports (section 16) of thirteen scenes rendered fresh on an 8 GB Apple M2 at 2 to 16
+samples (`rays report`), cross-checked against the full-quality runs in
+`demo/benchmarks/render-all.csv` (the `render-all-stats` branch), since few samples weigh set-up
+heavily. Ranked by what fixing each would recover. Each item separates what was measured from
+what is supposed.
+
+### 1. Landscapes have fallen off the GPU
+
+Measured. On 22 November (render-all run B) `terrain-alpine` and `landscape` rendered on the
+GPU with no host stage: 8 s and 7 s at 64 samples. Since the master of 25 November (its
+landscape detail and ground materials; which change exactly isn't pinned down):
+
+- `terrain-alpine`'s ground is a `Group` (`objects[0] (Group)`) the kernels can't intersect, so
+  it renders with the wavefront on the CPU: 13.4 s at 8 samples, about 13 times as slow a
+  sample. `alpine-layers`, `terrain-coast`, `terrain-volcanic` and `moonlit-alpine` are refused
+  for the same reason.
+- `landscape` stays on the GPU, but 89% of its stages' time is the host shading the ground's
+  materials (`objects[0] (SmoothMesh)`, 15 us a vertex), while the device waits (0.8 s of the
+  device's time against 5.2 s of the stages').
+
+Supposed: the `Group` is the clipmap's surface and the displaced nest about the camera
+(`scenery::Clipmap`, `displaced::Nest`); the surface alone is triangles the kernels could take,
+leaving only the displaced nest to the host. The ground's materials are the library's natural
+ones (`scenery::Bare`, `"ground_materials"`), procedural graphs the kernels have no code for.
+
+### 2. The atmosphere on the CPU
+
+Measured. Where landscapes render on the CPU, the sky stage costs 6.1 to 6.4 us a query (on the
+GPU, 0.01 to 0.04), 36% of `terrain-alpine`'s stages. A profile of its render: `exp` and
+`expf` 17,600 samples, `pathtrace::sky_light` 5,000, `skysphere` 5,000, `multiple_at` and
+`span_sample` 2,200: about 40% of the busy time.
+
+Supposed: transmittance tabulated rather than integrated per query would remove most of the
+`exp`s. Worth it while item 1 keeps these scenes on the CPU.
+
+### 3. Forests: the leaf cards
+
+Measured. A forest's `Stand` costs 4.7 to 9.0 us a ray to intersect and 6 to 9 us a vertex to
+shade (`forest-dense`: 111 s of intersection and 92 s of shading of 232 s of stages). A profile
+(November): about 60% of that in `shapes::lod`'s cards (`CardSet::intersects_range` 26%,
+`leaving_own` 12%, `occludes` 9%, `Card::crossing` 6%, `Clusters::choose` 6%), not the BVH. Each
+render builds its forests afresh: 60 s of `forest-dense`'s, which no forest scene's `"cache"`
+saves.
+
+Supposed: `leaving_own` can skip, by bounds, the trees a ray doesn't start in; `Card::crossing`
+converts each card to f64 on every test; `Clusters::choose` decodes each normal twice.
+
+### 4. Media on the GPU: a long tail of rounds
+
+Measured. `altocumulus-castellanus`: 65 rounds a pass, under 6% of the paths alive after the
+tenth; intersection (the walks through cloud) 4.3 us a path-round, two thirds of the device's
+time. `crepuscular-rays`: likewise, 1.1 us.
+
+Supposed: what the rounds cost apart from their paths (dispatches, idle lanes) matters across
+the tail; the report doesn't give each round's time yet.
+
+### 5. Memory: the scene held more than once
+
+Measured (`pebble-beach`, 7 million triangles): flattening adds 2.0 GB in 6.5 s; the GPU's
+set-up 1.6 GB (its primitives buffer 0.9 GB); the acceleration structures 2.1 GB more while
+built, 0.75 GB of it given back once compacted; a peak of 8.9 GB with 3.2 GB free at the start.
+`forest-dense`'s build adds 2.9 GB. A run that swapped heavily (`forest-dense`, 483,476 pages)
+took 286 s to exit against 113 s of run; with memory free, exiting takes about 1 s.
+
+Supposed: the flat scene could be dropped, or share its geometry with the buffers, once
+uploaded; the slow exit is the scene's teardown paging back what was swapped, which exiting
+without dropping it would avoid.
+
+### 6. Set-up outweighs rendering in short renders
+
+Measured, at full quality: building is 31% of `forest-dense`, 43 to 52% of `landscape`,
+`terrain-alpine` and `alpine-closeup`, 42% of `demo` (of 1.5 s, 0.4 s the skysphere's tables and
+0.35 s the shader). A landscape's patches, built cold, took 408 s (`alpine-meadow`), against
+seconds from the world's cache.
+
+### What the reports don't show yet
+
+- Each round's time on the device (for item 4).
+- Time in each medium, and the path tracer's work by object: `cumulus`, `altostratus` and
+  `alpine-closeup` render with the path tracer and have no breakdown.
+
+### Next
+
+Item 1 first: the largest loss, across at least six demo scenes. Find which part of the
+`Group` the kernels can take, and what the ground's materials need.

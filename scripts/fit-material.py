@@ -674,7 +674,7 @@ def put(obj, path, value):
     obj[path[-1]] = value
 
 
-def free_params(preset, taken=()):
+def free_params(preset, taken=(), hold=()):
     """Every number of a preset's graphs a fit can move, as spec params (`--free`): the sizes
     of its noises and cells (`scale`, `smallest`, a warp's `amount`, a bombing's `cell` and
     `size`; up to four times either way, on a log scale), roughness and jitter (within a
@@ -682,9 +682,16 @@ def free_params(preset, taken=()):
     thresholds, `transform`'s stretches, scalar variables (shares, densities: three times),
     a layer's coverage, and each colour map's stops (an offset and a stretch). Seeds and
     octave counts stay. Nodes of the same seed and value are one parameter: a cell pattern's
-    `id` and its `stones` must stay the same cells. `taken` are paths the spec already has."""
+    `id` and its `stones` must stay the same cells. `taken` are paths the spec already has;
+    `hold` (the reference's `"hold"`) names numbers to keep as written, each `{"node", "field",
+    "seed"}` (a missing key matches any): a size the scan shows plainly, which the search would
+    otherwise trade for a better palette."""
     params, tied = [], {}
     taken = {tuple(t) for t in taken}
+
+    def held(node, k, seed):
+        return any(h.get("node", node) == node and h.get("field", k) == k and h.get("seed", seed) == seed
+                   for h in hold)
 
     def add(path, v, kind, key=None):
         if tuple(path) in taken or v == 0:
@@ -724,6 +731,8 @@ def free_params(preset, taken=()):
             if k == "normal":
                 continue  # bump: not rendered for a fit (strip_relief)
             here = path + [k]
+            if held(node, k, seed):
+                continue
             key = lambda: (node, k, seed, v) if seed is not None else None
             if k in ("scale", "smallest", "cell", "wavelength") and number(v) and node:
                 add(here, v, "length", key())
@@ -1183,7 +1192,7 @@ def main():
     loss = FloorLoss(details) if args.loss == "floor" else FitLoss() if args.structure else PatchLoss()
     if args.free:
         taken = [p["path"] for p in spec["params"] if "path" in p]
-        extra = free_params(preset, taken)
+        extra = free_params(preset, taken, spec.get("hold", ()))
         spec = dict(spec, params=spec["params"] + extra)
         print("free: %d more parameters (%s)" % (len(extra), ", ".join(
             "%s %d" % (k, sum(p["free"] == k for p in extra)) for k in sorted({p["free"] for p in extra}))), file=sys.stderr)

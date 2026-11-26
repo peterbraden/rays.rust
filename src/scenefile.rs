@@ -981,12 +981,15 @@ impl SceneFile {
             if t >= 0.1 {
                 println!("- Built {} in {:.2} s", name, t);
             }
+            crate::report::phase(format!("build: objects[{}] ({})", i, name), t);
          }
          for (i, fog) in fogs {
             let start = web_time::Instant::now();
             let ground: Vec<Arc<SceneObject>> = objects.iter().map(|(_, o)| o.clone()).collect();
             objects.push((i, Arc::new(SceneFile::parse_valley_fog(&fog, &ground))));
-            println!("- Built valley_fog in {:.2} s", start.elapsed().as_secs_f64());
+            let t = start.elapsed().as_secs_f64();
+            println!("- Built valley_fog in {:.2} s", t);
+            crate::report::phase(format!("build: objects[{}] (valley_fog)", i), t);
          }
          if reuse { *KEPT_OBJECTS.lock().unwrap() = Some(kept); }
          objects

@@ -223,8 +223,10 @@ impl RenderContext {
     pub fn report_so_far(&self) -> crate::report::Report {
         let mut report = self.report.clone();
         let mut run = self.run.clone();
-        run.seconds = self.start_time.elapsed().as_secs_f64();
+        run.seconds = run.began.unwrap_or(self.start_time).elapsed().as_secs_f64();
         run.samples_after = self.samples.iter().map(|&n| n as u64).sum();
+        run.stages = crate::report::Stages::of(&self.schedule);
+        run.rays = self.rays_cast;
         report.runs.push(run);
         report
     }

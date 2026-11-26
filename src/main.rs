@@ -148,6 +148,78 @@ fn peak_memory() -> Option<u64> {
     None
 }
 
+/// A value of the system's (`sysctlbyname`), as text or as a number.
+#[cfg(target_os = "macos")]
+fn sysctl(name: &str) -> Option<Vec<u8>> {
+    let name = std::ffi::CString::new(name).ok()?;
+    let mut len = 0usize;
+    if unsafe { libc::sysctlbyname(name.as_ptr(), std::ptr::null_mut(), &mut len, std::ptr::null_mut(), 0) } != 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; len];
+    if unsafe { libc::sysctlbyname(name.as_ptr(), buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) } != 0 {
+        return None;
+    }
+    buf.truncate(len);
+    Some(buf)
+}
+
+/// A line of `/proc/<file>` that begins `key`, after it and its colon.
+#[cfg(target_os = "linux")]
+fn proc_field(file: &str, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(format!("/proc/{}", file)).ok()?;
+    text.lines().find(|l| l.starts_with(key)).and_then(|l| l.split_once(':')).map(|(_, v)| v.trim().to_string())
+}
+
+/// The processor's name, as the system gives it.
+fn machine_cpu() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    return sysctl("machdep.cpu.brand_string").map(|b| String::from_utf8_lossy(&b).trim_end_matches('\0').to_string());
+    #[cfg(target_os = "linux")]
+    return proc_field("cpuinfo", "model name");
+    #[allow(unreachable_code)]
+    None
+}
+
+/// The machine's memory, bytes.
+fn machine_memory() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    return sysctl("hw.memsize").and_then(|b| Some(u64::from_ne_bytes(b.get(..8)?.try_into().ok()?)));
+    #[cfg(target_os = "linux")]
+    return proc_field("meminfo", "MemTotal").and_then(|v| v.trim_end_matches("kB").trim().parse::<u64>().ok()).map(|kb| kb * 1024);
+    #[allow(unreachable_code)]
+    None
+}
+
+/// The commit of the repository this program was run from (the one its executable is in, as
+/// `target/release/rays` is), and whether its sources had changes not committed. As the
+/// repository stands now, which needn't be what the program was built from.
+fn source_revision() -> (Option<String>, Option<bool>) {
+    let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) else { return (None, None) };
+    let git = |args: &[&str]| std::process::Command::new("git").arg("-C").arg(&dir).args(args).output().ok()
+        .filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let commit = git(&["rev-parse", "HEAD"]);
+    let dirty = commit.as_ref().and_then(|_| git(&["status", "--porcelain", "--", ":/src", ":/shaders", ":/Cargo.toml", ":/Cargo.lock", ":/build.rs"]))
+        .map(|s| !s.is_empty());
+    (commit, dirty)
+}
+
+/// What a run is made with: the program, the machine.
+fn run_context() -> report::Context {
+    let (commit, dirty) = source_revision();
+    report::Context {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        commit,
+        dirty,
+        arguments: std::env::args().collect(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        cpu: machine_cpu(),
+        threads: rayon::current_num_threads(),
+        memory: machine_memory(),
+    }
+}
+
 /// rays serve: run as a render server, and host the scene builder
 #[derive(Parser, Debug)]
 #[command(name = "rays serve", about = "Serve the scene builder, and render layers for it over HTTP", long_about = None)]
@@ -195,6 +267,10 @@ fn main() {
         style("# 1. - Parsing scene, building models").bold().cyan()
     );
 
+    // This run, for the render's report (`report`), kept in its saved state.
+    report::record();
+    let mut run = report::Run::starting();
+    run.context = run_context();
     let build_start = Instant::now();
     let mut doc = scenefile::SceneFile::read_document(&args.scene).unwrap_or_else(|e| {
         eprintln!("{}", e);
@@ -218,6 +294,9 @@ fn main() {
         height: args.height,
         seed: args.seed,
     });
+    // Reading the scene and building its objects, each a part of it.
+    run.phases.push(report::Phase { name: "build".into(), seconds: build_start.elapsed().as_secs_f64() });
+    run.phases.extend(report::take_phases());
 
     let mut rc = RenderContext::new(
             s.image.width,
@@ -237,6 +316,14 @@ fn main() {
     } else if args.wavefront {
         s.render.integrator = scene::Integrator::Wavefront;
     }
+    run.decision.asked = format!("{:?}", s.render.integrator).to_lowercase();
+    let refuse = |run: &mut report::Run, integrator: &str, reason: String| {
+        run.decision.refused.push(report::Refusal { integrator: integrator.into(), reason });
+    };
+    let lap = |run: &mut report::Run, name: &str, since: Instant| {
+        run.phases.push(report::Phase { name: name.into(), seconds: since.elapsed().as_secs_f64() });
+    };
+    let flatten_start = Instant::now();
     let flat = if s.render.integrator != scene::Integrator::Path {
         match wavefront::flat::FlatScene::build(&s) {
             Ok(f) => {
@@ -246,19 +333,31 @@ fn main() {
             },
             Err(e) => {
                 println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", e);
+                refuse(&mut run, "wavefront", e.to_string());
                 None
             },
         }
     } else {
         None
     };
+    if s.render.integrator != scene::Integrator::Path {
+        lap(&mut run, "flatten", flatten_start);
+    }
     #[cfg(feature = "gpu")]
     let try_gpu = match s.render.integrator {
         scene::Integrator::Gpu => true,
         // Unasked, only a GPU that is one.
-        scene::Integrator::Auto => gpu::GpuRenderer::hardware().is_ok(),
+        scene::Integrator::Auto => match gpu::GpuRenderer::hardware() {
+            Ok(()) => true,
+            Err(e) => {
+                refuse(&mut run, "gpu", e);
+                false
+            },
+        },
         _ => false,
     };
+    #[cfg(feature = "gpu")]
+    let gpu_start = Instant::now();
     #[cfg(feature = "gpu")]
     let mut gpu = match (&flat, try_gpu) {
         (Some(f), true) => match gpu::GpuRenderer::new(&s, f) {
@@ -266,10 +365,16 @@ fn main() {
                 println!("- GPU: {}", g.adapter_name);
                 let parts: Vec<String> = g.setup.iter().map(|(what, seconds)| format!("{} {:.0} ms", what, seconds * 1e3)).collect();
                 println!("- GPU set up in {:.0} ms: {}", g.setup.iter().map(|p| p.1).sum::<f64>() * 1e3, parts.join(", "));
+                lap(&mut run, "gpu set-up", gpu_start);
+                run.phases.extend(g.setup.iter().map(|(what, seconds)| report::Phase { name: format!("gpu set-up: {}", what), seconds: *seconds }));
+                let adapter = g.adapter_name.trim_end_matches(", tracing by ray queries").to_string();
+                run.decision.gpu = Some(report::Gpu { adapter, ray_queries: g.ray_queries(), lanes: g.lanes });
                 Some(g)
             },
             Err(e) => {
                 println!("- The GPU can't render this scene ({}); rendering with the wavefront integrator", e);
+                lap(&mut run, "gpu set-up", gpu_start);
+                refuse(&mut run, "gpu", e);
                 None
             },
         },
@@ -282,17 +387,24 @@ fn main() {
     #[cfg(not(feature = "gpu"))]
     if s.render.integrator == scene::Integrator::Gpu {
         println!("- This build has no GPU support (build with --features gpu); rendering with the wavefront integrator");
+        refuse(&mut run, "gpu", "this build has no GPU support".into());
     }
     // Without the GPU the kernels run here, over the same buffers.
+    let buffers_start = Instant::now();
     let buffers = match flat.as_ref().filter(|_| !on_gpu).map(|f| kernels::Buffers::build(&s, f)) {
         Some(Ok(b)) => Some(b),
         Some(Err(why)) => {
             println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", why);
+            refuse(&mut run, "wavefront", why.to_string());
             None
         },
         None => None,
     };
+    if flat.is_some() && !on_gpu {
+        lap(&mut run, "kernel buffers", buffers_start);
+    }
     println!("- Integrator: {}", if on_gpu { "the kernels on the GPU" } else if buffers.is_some() { "the kernels on the CPU (wavefront)" } else { "the path tracer" });
+    run.decision.integrator = (if on_gpu { "gpu" } else if buffers.is_some() { "wavefront" } else { "path" }).into();
 
     // Carry on from where an earlier render of the same scene stopped, if there was one.
     let state_path = rendercontext::state_path_for(&rc.output_filename);
@@ -305,6 +417,7 @@ fn main() {
     // Each integrator's samples are its own, so a saved state is one's.
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
         ^ if on_gpu { 0x6770_7500_0000_0001 } else if buffers.is_some() { 0x7761_7665_6672_6f6e } else { 0 };
+    rc.run = run;
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
             Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
@@ -352,6 +465,8 @@ fn main() {
     }
 
     let kernels = flat.as_ref().zip(buffers).map(|(f, b)| wavefront::integrator::Kernels::with(&s, f, b));
+    let render_start = Instant::now();
+    rc.run.phases.push(report::Phase { name: "render".into(), seconds: 0. });
     let rcmtx = Mutex::new(rc);
 
     println!("{}",
@@ -422,7 +537,10 @@ fn main() {
     }
     pb.finish();
 
-    let rc = rcmtx.lock().unwrap();
+    let mut rc = rcmtx.lock().unwrap();
+    if let Some(render) = rc.run.phases.iter_mut().rfind(|p| p.name == "render") {
+        render.seconds = render_start.elapsed().as_secs_f64();
+    }
     if rc.samples_rendered > 0 {
         save_state(&state_path, &rc.encode_state(key));
     }

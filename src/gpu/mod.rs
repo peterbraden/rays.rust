@@ -216,6 +216,14 @@ impl GpuRenderer {
         pollster::block_on(Self::create(s, flat))
     }
 
+    /// Whether rays are traced by the hardware's ray queries (`rt`), rather than the BVH.
+    pub fn ray_queries(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.acceleration.is_some();
+        #[cfg(target_arch = "wasm32")]
+        false
+    }
+
     /// Whether there is a GPU worth choosing unasked, or why not: none at all, or a software
     /// rasteriser (lavapipe, SwiftShader), for which the kernels are quicker compiled for the
     /// CPU itself.

@@ -1598,7 +1598,7 @@ impl Surf {
             // The roller rides the front face, the last few hundredths of the cycle before the
             // crest.
             let roller = crate::math::smoothstep(1. - 2. * BORE_FRONT, 1. - 0.5 * BORE_FRONT, u);
-            let broken = crate::math::smoothstep(0.95, 1.05, height / (BREAKING_INDEX * d));
+            let broken = broken(height / (BREAKING_INDEX * d));
             (broken * roller, broken * (-age / FOAM_DECAY).exp())
         }).fold((0f64, 0f64), |a, b| (a.0.max(b.0), a.1.max(b.1)));
         (fresh, residual, breaking)
@@ -1644,9 +1644,12 @@ impl Surf {
             let phase = phase - self.moment(p, k);
             let height = self.wave_height(p, k, h, phase);
             let steep = height / (BREAKING_INDEX * d);
-            let broken = crate::math::smoothstep(0.95, 1.05, steep);
+            let broken = broken(steep);
             let u = (phase / std::f64::consts::TAU).rem_euclid(1.);
-            height.min(BREAKING_INDEX * d) * breaker(u, steep.min(1.), broken)
+            // Broken, as high as the water holds at most, approached smoothly (so a broken
+            // stretch still varies along its crest, not a level shelf).
+            let held = BREAKING_INDEX * d * steep.tanh();
+            (height + (held - height) * broken) * breaker(u, steep.min(1.), broken)
         }).sum::<f64>();
         Some((eta, surf))
     }
@@ -1655,7 +1658,13 @@ impl Surf {
 /// The bore's front, as a fraction of the wave's length: a metre or so in the inner surf.
 const BORE_FRONT: f64 = 0.03;
 /// How fast the water behind a bore falls away, as a fraction of the wave's length.
-const BORE_BACK: f64 = 0.35;
+const BORE_BACK: f64 = 0.25;
+
+/// How far a wave of `steep` times the height the water holds (γ d) has broken, 0 to 1: over a
+/// spread about it, so that along a crest whose height varies the breaking sets in gradually.
+fn broken(steep: f64) -> f64 {
+    crate::math::smoothstep(0.85, 1.15, steep)
+}
 
 /// A wave in the surf's elevation, in units of its height, about its mean (so the sea's mean
 /// level stays put), at `u` of the cycle from its crest (seaward: the crest ahead of it, the
@@ -1699,20 +1708,34 @@ pub struct SurfGrid {
 impl SurfGrid {
     fn stride(&self) -> usize { 3 + 2 * self.trains }
 
-    /// Bilinear weights and the cells' indices about (x, z), if inside.
-    fn corners(&self, x: f64, z: f64) -> Option<([usize; 4], [f64; 4])> {
+    /// The cells about (x, z) and their weights, if inside: Catmull-Rom's cubic each way, so
+    /// that the surface's slope is continuous across the cells (bilinear weights broke a
+    /// bore's front, a cell or two wide, into facets).
+    fn corners(&self, x: f64, z: f64) -> Option<([usize; 16], [f64; 16])> {
         let fx = (x - self.corner.x) / self.step;
         let fz = (z - self.corner.y) / self.step;
         if !(fx >= 0. && fz >= 0.) { return None; }
         let (i, j) = (fx.floor() as usize, fz.floor() as usize);
         if i + 1 >= self.n || j + 1 >= self.n { return None; }
-        let (a, b) = (fx - i as f64, fz - j as f64);
-        let at = |i: usize, j: usize| (j * self.n + i) * self.stride();
-        Some(([at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)], [(1. - a) * (1. - b), a * (1. - b), (1. - a) * b, a * b]))
+        let cubic = |t: f64| {
+            let (t2, t3) = (t * t, t * t * t);
+            [(-t3 + 2. * t2 - t) / 2., (3. * t3 - 5. * t2 + 2.) / 2., (-3. * t3 + 4. * t2 + t) / 2., (t3 - t2) / 2.]
+        };
+        let (wx, wz) = (cubic(fx - i as f64), cubic(fz - j as f64));
+        let clamp = |k: usize, o: usize| (k + o).saturating_sub(1).min(self.n - 1);
+        let mut idx = [0; 16];
+        let mut w = [0.; 16];
+        for b in 0..4 {
+            for a in 0..4 {
+                idx[b * 4 + a] = (clamp(j, b) * self.n + clamp(i, a)) * self.stride();
+                w[b * 4 + a] = wx[a] * wz[b];
+            }
+        }
+        Some((idx, w))
     }
 
-    fn lerp(&self, (idx, w): &([usize; 4], [f64; 4]), field: usize) -> f64 {
-        (0..4).map(|c| self.cells[idx[c] + field] * w[c]).sum()
+    fn lerp(&self, (idx, w): &([usize; 16], [f64; 16]), field: usize) -> f64 {
+        (0..16).map(|c| self.cells[idx[c] + field] * w[c]).sum()
     }
 
     fn depth(&self, x: f64, z: f64) -> Option<f64> {

@@ -7296,9 +7296,9 @@
           },
           {
             "node": "phasor",
-            "wavelength": 0.11,
+            "wavelength": 0.0994,
             "direction": "$wind",
-            "spread": 0.15,
+            "spread": 0.3806,
             "plan": true,
             "profile": "saw",
             "seed": 681
@@ -7307,9 +7307,9 @@
       },
       "tone": {
         "node": "fractal",
-        "scale": 20,
+        "scale": 15.91,
         "seed": 682,
-        "smallest": 0.05
+        "smallest": 0.0716
       }
     },
     "material": {
@@ -7321,14 +7321,14 @@
             {
               "node": "multiply",
               "inputs": [
-                0.8,
+                0.5686,
                 "$ripples"
               ]
             },
             {
               "node": "multiply",
               "inputs": [
-                0.6,
+                1.4888,
                 "$tone"
               ]
             }
@@ -7336,27 +7336,27 @@
         },
         "color_map": [
           [
-            -1.2,
+            -0.8691,
             [
-              0.4,
-              0.3,
-              0.18
+              0.4113,
+              0.2949,
+              0.172
             ]
           ],
           [
-            -0.3,
+            -0.302,
             [
-              0.56,
-              0.44,
-              0.28
+              0.5172,
+              0.3386,
+              0.1777
             ]
           ],
           [
-            0.8,
+            0.3911,
             [
-              0.68,
-              0.55,
-              0.38
+              0.5513,
+              0.3674,
+              0.1958
             ]
           ]
         ]
@@ -7425,9 +7425,55 @@
             ],
             "chroma": 0.1
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 236.877812,
+            "fitted": 58.910935
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 9.673182,
+            "author_solved": 16.605595,
+            "patches": 3,
+            "chosen": "the search's mean"
+          },
+          "date": "2026-11-26",
+          "applied": true,
+          "values": {
+            "scale": 1.7698,
+            "material.albedo.color_map.0.1": [
+              0.4113,
+              0.2949,
+              0.172
+            ],
+            "material.albedo.color_map.1.1": [
+              0.5172,
+              0.3386,
+              0.1777
+            ],
+            "material.albedo.color_map.2.1": [
+              0.5513,
+              0.3674,
+              0.1958
+            ],
+            "variables.ripples.inputs.1.wavelength": 0.0994,
+            "variables.ripples.inputs.1.spread": 0.3806,
+            "variables.tone.scale": 15.91,
+            "variables.tone.smallest": 0.0716,
+            "material.albedo.pattern.inputs.0.inputs.0": 0.5686,
+            "material.albedo.pattern.inputs.1.inputs.0": 1.4888,
+            "material.albedo.color_map.0.0": -0.8691,
+            "material.albedo.color_map.1.0": -0.302,
+            "material.albedo.color_map.2.0": 0.3911
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.7698
   },
   "beach_sand": {
     "show": "landscape",
@@ -7444,22 +7490,22 @@
         "inputs": [
           {
             "node": "smoothstep",
-            "from": 0.04,
+            "from": -0.2428,
             "to": 0.0,
             "input": {
               "node": "cells",
               "style": "edges",
-              "scale": 0.008,
+              "scale": 0.0254,
               "seed": 691
             }
           },
           {
             "node": "smoothstep",
-            "from": 0.3,
-            "to": 0.5,
+            "from": 0.0384,
+            "to": 0.2194,
             "input": {
               "node": "fractal",
-              "scale": 0.2,
+              "scale": 0.1496,
               "seed": 692
             }
           }
@@ -7470,17 +7516,17 @@
         "inputs": [
           {
             "node": "fractal",
-            "scale": 10,
+            "scale": 32.319,
             "seed": 693,
-            "smallest": 0.05
+            "smallest": 0.0421
           },
           {
             "node": "multiply",
             "inputs": [
-              0.3,
+              0.122,
               {
                 "node": "fractal",
-                "scale": 0.01,
+                "scale": 0.0305,
                 "seed": 694
               }
             ]
@@ -7498,35 +7544,35 @@
               "pattern": "$shells",
               "color_map": [
                 [
-                  0,
+                  -0.0258,
                   {
                     "pattern": "$dry",
                     "color_map": [
                       [
-                        -0.6,
+                        -0.7329,
                         [
-                          0.58,
-                          0.5,
-                          0.38
+                          0.3356,
+                          0.2821,
+                          0.2065
                         ]
                       ],
                       [
-                        0.6,
+                        0.0512,
                         [
-                          0.72,
-                          0.65,
-                          0.52
+                          0.1014,
+                          0.067,
+                          0.0215
                         ]
                       ]
                     ]
                   }
                 ],
                 [
-                  1,
+                  1.0494,
                   [
-                    0.85,
-                    0.83,
-                    0.78
+                    0.2281,
+                    0.1707,
+                    0.1049
                   ]
                 ]
               ]
@@ -7562,24 +7608,24 @@
             "albedo": {
               "pattern": {
                 "node": "fractal",
-                "scale": 3,
+                "scale": 0.751,
                 "seed": 697
               },
               "color_map": [
                 [
-                  -0.5,
+                  -0.2675,
                   [
-                    0.18,
-                    0.15,
-                    0.11
+                    0.1076,
+                    0.0855,
+                    0.0543
                   ]
                 ],
                 [
-                  0.5,
+                  0.6128,
                   [
-                    0.27,
-                    0.23,
-                    0.17
+                    0.1941,
+                    0.1551,
+                    0.1055
                   ]
                 ]
               ]
@@ -7614,7 +7660,7 @@
               },
               "n": {
                 "node": "fractal",
-                "scale": 2,
+                "scale": 3.1302,
                 "seed": 699
               }
             },
@@ -7705,69 +7751,70 @@
         ],
         "fit": {
           "loss": {
-            "start": 6449.154988,
-            "fitted": 3727.050415
+            "start": 1284.846599,
+            "fitted": 85.169284
           },
           "iterations": 60,
           "resolution": 128,
           "samples": 1,
           "loss_kind": "floor+detail+solved+free+roam",
           "judged": {
-            "fitted": 2608.064928,
-            "author_solved": 2693.715971,
+            "fitted": 4.036213,
+            "author_solved": 10.711604,
             "patches": 3,
-            "chosen": "generation 43's best"
+            "chosen": "the search's mean"
           },
           "date": "2026-11-26",
-          "applied": false,
+          "applied": true,
           "values": {
-            "scale": 1.844,
+            "scale": 0.5034,
             "material.layers.0.material.albedo.color_map.0.1.color_map.0.1": [
-              0.003,
-              0.003,
-              0.003
+              0.3356,
+              0.2821,
+              0.2065
             ],
             "material.layers.0.material.albedo.color_map.0.1.color_map.1.1": [
-              0.003,
-              0.003,
-              0.003
+              0.1014,
+              0.067,
+              0.0215
             ],
             "material.layers.0.material.albedo.color_map.1.1": [
-              0.0306,
-              0.003,
-              0.003
+              0.2281,
+              0.1707,
+              0.1049
             ],
             "material.layers.1.material.albedo.color_map.0.1": [
-              0.18,
-              0.15,
-              0.11
+              0.1076,
+              0.0855,
+              0.0543
             ],
             "material.layers.1.material.albedo.color_map.1.1": [
-              0.27,
-              0.23,
-              0.17
+              0.1941,
+              0.1551,
+              0.1055
             ],
-            "variables.shells.inputs.0.from": 0.0958,
-            "variables.shells.inputs.0.input.scale": 0.0032,
-            "variables.shells.inputs.1.from": 0.3897,
-            "variables.shells.inputs.1.to": 0.4534,
-            "variables.shells.inputs.1.input.scale": 0.2008,
-            "variables.dry.inputs.0.scale": 3.0622,
-            "variables.dry.inputs.0.smallest": 0.1975,
-            "variables.dry.inputs.1.inputs.0": 0.7306,
-            "variables.dry.inputs.1.inputs.1.scale": 0.0029,
-            "material.layers.0.material.albedo.color_map.0.0": -0.1888,
-            "material.layers.0.material.albedo.color_map.1.0": 0.6364,
-            "material.layers.0.material.albedo.color_map.0.1.color_map.0.0": -0.2959,
-            "material.layers.0.material.albedo.color_map.0.1.color_map.1.0": 0.9849,
-            "material.layers.1.material.albedo.pattern.scale": 11.777,
-            "material.layers.1.material.albedo.color_map.0.0": -0.0221,
-            "material.layers.1.material.albedo.color_map.1.0": 0.5497,
-            "material.layers.1.mask.inputs.n.scale": 5.9527
+            "variables.shells.inputs.0.from": -0.2428,
+            "variables.shells.inputs.0.input.scale": 0.0254,
+            "variables.shells.inputs.1.from": 0.0384,
+            "variables.shells.inputs.1.to": 0.2194,
+            "variables.shells.inputs.1.input.scale": 0.1496,
+            "variables.dry.inputs.0.scale": 32.319,
+            "variables.dry.inputs.0.smallest": 0.0421,
+            "variables.dry.inputs.1.inputs.0": 0.122,
+            "variables.dry.inputs.1.inputs.1.scale": 0.0305,
+            "material.layers.0.material.albedo.color_map.0.0": -0.0258,
+            "material.layers.0.material.albedo.color_map.1.0": 1.0494,
+            "material.layers.0.material.albedo.color_map.0.1.color_map.0.0": -0.7329,
+            "material.layers.0.material.albedo.color_map.0.1.color_map.1.0": 0.0512,
+            "material.layers.1.material.albedo.pattern.scale": 0.751,
+            "material.layers.1.material.albedo.color_map.0.0": -0.2675,
+            "material.layers.1.material.albedo.color_map.1.0": 0.6128,
+            "material.layers.1.mask.inputs.n.scale": 3.1302
           }
         }
       }
-    ]
+    ],
+    "scale": 0.5034
   },
   "mudflat": {
     "show": "landscape",
@@ -8024,72 +8071,72 @@
         ],
         "fit": {
           "loss": {
-            "start": 470.99952,
-            "fitted": 20.275968
+            "start": 1949.463193,
+            "fitted": 14.051681
           },
           "iterations": 60,
           "resolution": 128,
           "samples": 1,
           "loss_kind": "floor+detail+solved+free+roam",
           "judged": {
-            "fitted": 2.355137,
-            "author_solved": 2846.744475,
+            "fitted": 2.221907,
+            "author_solved": 81.869199,
             "patches": 3,
             "chosen": "the search's mean"
           },
           "date": "2026-11-26",
           "applied": false,
           "values": {
-            "scale": 0.5441,
+            "scale": 1.1361,
             "material.layers.0.material.albedo.color_map.0.1": [
-              0.07,
-              0.06,
-              0.05
+              0.0689,
+              0.0586,
+              0.048
             ],
             "material.layers.0.material.albedo.color_map.1.1": [
-              0.12,
-              0.1,
-              0.08
+              0.1168,
+              0.0962,
+              0.0748
             ],
             "material.layers.1.material.albedo.color_map.0.1.color_map.0.1": [
-              0.0437,
-              0.0319,
-              0.0185
+              0.0707,
+              0.0533,
+              0.0331
             ],
             "material.layers.1.material.albedo.color_map.0.1.color_map.1.1": [
-              0.1616,
-              0.1304,
-              0.0904
+              0.2438,
+              0.2016,
+              0.1441
             ],
             "material.layers.1.material.albedo.color_map.1.1": [
-              0.0281,
-              0.0225,
-              0.0145
+              0.0224,
+              0.0176,
+              0.0107
             ],
             "material.layers.2.material.albedo": [
-              0.0211,
-              0.0202,
-              0.0178
+              0.018,
+              0.0173,
+              0.015
             ],
-            "variables.lie.scale": 2.6113,
-            "variables.lie.smallest": 0.0416,
-            "variables.lie.roughness": 0.7998,
-            "variables.cracks.from": 0.1027,
-            "variables.cracks.input.amount": 0.0273,
-            "variables.cracks.input.scale": 0.1732,
-            "variables.cracks.input.input.scale": 0.0592,
-            "material.layers.0.material.albedo.pattern.scale": 0.4355,
-            "material.layers.0.material.albedo.color_map.0.0": -1.0292,
-            "material.layers.0.material.albedo.color_map.1.0": 0.7091,
-            "material.layers.1.material.albedo.color_map.0.0": 0.029,
-            "material.layers.1.material.albedo.color_map.1.0": 0.8207,
-            "material.layers.1.material.albedo.color_map.0.1.pattern.scale": 0.1328,
-            "material.layers.1.material.albedo.color_map.0.1.color_map.0.0": -0.3674,
-            "material.layers.1.material.albedo.color_map.0.1.color_map.1.0": 0.3955,
-            "material.layers.1.mask.from": 0.4999,
-            "material.layers.1.mask.to": 0.3689,
-            "material.layers.2.mask.from": -0.1848,
-            "material.layers.2.mask.to": -0.2484
+            "variables.lie.scale": 0.8222,
+            "variables.lie.smallest": 0.0195,
+            "variables.lie.roughness": 0.7872,
+            "variables.cracks.from": 0.3099,
+            "variables.cracks.input.amount": 0.0547,
+            "variables.cracks.input.scale": 0.0449,
+            "variables.cracks.input.input.scale": 0.0241,
+            "material.layers.0.material.albedo.pattern.scale": 0.869,
+            "material.layers.0.material.albedo.color_map.0.0": -0.868,
+            "material.layers.0.material.albedo.color_map.1.0": 0.2684,
+            "material.layers.1.material.albedo.color_map.0.0": 0.4484,
+            "material.layers.1.material.albedo.color_map.1.0": 1.0824,
+            "material.layers.1.material.albedo.color_map.0.1.pattern.scale": 0.077,
+            "material.layers.1.material.albedo.color_map.0.1.color_map.0.0": -0.255,
+            "material.layers.1.material.albedo.color_map.0.1.color_map.1.0": 0.8431,
+            "material.layers.1.mask.from": 0.3516,
+            "material.layers.1.mask.to": 0.1409,
+            "material.layers.2.mask.from": -0.1223,
+            "material.layers.2.mask.to": -0.2862
           }
         }
       }

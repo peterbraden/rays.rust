@@ -1655,6 +1655,49 @@ impl Surf {
     }
 }
 
+/// What the water in the surf absorbs, per metre: clear water's (red the most), and the fine
+/// sediment and plankton stirred up there taking much of the blue, so that light through a
+/// wave's crest comes out green.
+const CREST_ABSORPTION: Color = Color { rgb: Vector3::new(0.45, 0.1, 0.22) };
+
+/// How much the water in the surf scatters, per metre: turbid with fine sediment and small
+/// bubbles stirred up by the breaking (more than a coastal water's few tenths).
+const CREST_SCATTERING: f64 = 1.;
+
+impl Surf {
+    /// Along `dir` from `p`, just under the surface, through the water to where it leaves
+    /// through the surface again (the back of a wave's crest), within three metres and above
+    /// the bed: the length crossed, where it leaves, and the surface's normal there (upward).
+    /// `altitude` is a point's height above the mean sea. From the grid only.
+    pub fn through(&self, p: &Vector3<f64>, dir: &Vector3<f64>, altitude: &dyn Fn(&Vector3<f64>) -> f64) -> Option<(f64, Vector3<f64>, Vector3<f64>)> {
+        let grid = self.grid.as_ref()?;
+        let surface = |q: &Vector3<f64>| self.height(q).map(|(eta, b)| eta * b);
+        let above = |q: &Vector3<f64>| Some(altitude(q) - surface(q)?);
+        let step = 0.05;
+        let mut t = 0.02;
+        let mut previous = above(&(p + dir * t))?;
+        if previous >= 0. { return None; }
+        while t < 3. {
+            let next = t + step;
+            let q = p + dir * next;
+            let a = above(&q)?;
+            if altitude(&q) < -grid.depth(q.x, q.z)? { return None; }
+            if a >= 0. {
+                // Between the two steps, by false position.
+                let length = t + step * (-previous / (a - previous)).clamp(0., 1.);
+                let exit = p + dir * length;
+                let e = 0.02;
+                let h = |dx: f64, dz: f64| surface(&(exit + Vector3::new(dx, 0., dz))).unwrap_or(0.);
+                let normal = Vector3::new(-(h(e, 0.) - h(-e, 0.)) / (2. * e), 1., -(h(0., e) - h(0., -e)) / (2. * e)).normalize();
+                return Some((length, exit, normal));
+            }
+            previous = a;
+            t = next;
+        }
+        None
+    }
+}
+
 /// The bore's front, as a fraction of the wave's length: a metre or so in the inner surf.
 const BORE_FRONT: f64 = 0.03;
 /// How fast the water behind a bore falls away, as a fraction of the wave's length.
@@ -2168,6 +2211,50 @@ impl PhysicalOcean {
     }
 }
 
+impl PhysicalOcean {
+    /// In the surf, sunlight scattered towards the viewer by the turbid water under the
+    /// surface, having reached it through whatever water lies towards the sun: under a wave's
+    /// face with the sun behind the wave, through the thin top of its crest (the face, turned
+    /// from the sun or lit at a grazing angle, lets in little: `direct_lighting`), so the water
+    /// there, scattering mostly forwards, glows green. Single scattering along the ray
+    /// refracted into the face, at four depths within the light's reach: at each, the sunlight
+    /// left after crossing the water towards the sun (`Surf::through`) and back, by Henyey and
+    /// Greenstein's phase with g = 0.8.
+    fn crest_glow(&self, rd: &Vector3<f64>, n: &Vector3<f64>, intersection: &Intersection, s: &Scene) -> Color {
+        let (Some(surf), Some(sun)) = (self.surf.as_ref(), s.sun.as_ref()) else { return Color::black() };
+        let l = sun.direction;
+        // As turbid as the surf is: none out where the open sea's waves are (`Surf::height`).
+        let Some((_, turbid)) = surf.height(&intersection.point) else { return Color::black() };
+        if turbid <= 0. || l.dot(&self.center.map_or(Vector3::y(), |c| (intersection.point - c).normalize())) <= 0. { return Color::black(); }
+        let d = rd.normalize();
+        let Some(t) = crate::material::functions::refract(d, *n, 1. / WATER_INDEX) else { return Color::black() };
+        let t = t.normalize();
+        let leave = 1. - fresnel(n.dot(&-d).max(0.));
+        let (g, scatter) = (0.8, CREST_SCATTERING);
+        let cos = l.dot(&t);
+        let phase = (1. - g * g) / (4. * std::f64::consts::PI * (1. + g * g - 2. * g * cos).powf(1.5));
+        let extinction = CREST_ABSORPTION.as_unbounded().rgb.add_scalar(scatter);
+        let altitude = |p: &Vector3<f64>| self.altitude(p);
+        let mut sum = Vector3::zeros();
+        for (depth, width) in [(0.05, 0.1), (0.15, 0.15), (0.35, 0.3), (0.7, 0.4)] {
+            let q = intersection.point + t * depth;
+            let Some((length, _, _)) = surf.through(&q, &l, &altitude) else { continue };
+            sum += (extinction * -(depth + length)).map(f64::exp) * width;
+        }
+        if sum == Vector3::zeros() { return Color::black(); }
+        let light = sun.irradiance_at(&intersection.point) * sun.transmittance_from(&intersection.point, s);
+        light * Color { rgb: sum } * (scatter * phase * leave * turbid)
+    }
+
+    /// Height of `p` above the mean sea.
+    fn altitude(&self, p: &Vector3<f64>) -> f64 {
+        match self.center {
+            Some(c) => (p - c).norm() + c.y,
+            None => p.y,
+        }
+    }
+}
+
 impl MaterialModel for PhysicalOcean {
     fn water(&self) -> Option<crate::material::model::Water> {
         // (Transparent water goes down to what is beneath, which the kernel doesn't; nor does
@@ -2229,7 +2316,8 @@ impl MaterialModel for PhysicalOcean {
         let into = Intersection { normal: n, ..*intersection };
         // The water body, lit through the surface, as much as gets in.
         let water = self.water.as_reflectance() + BUBBLES.as_reflectance() * bubbles;
-        let body = crate::material::functions::direct_lighting(water * (1. - fresnel(n.dot(&v))), &into, s);
+        let body = crate::material::functions::direct_lighting(water * (1. - fresnel(n.dot(&v))), &into, s)
+            + self.crest_glow(&r.rd, &n, intersection, s);
         // The glitter of the sun and the moon. The sun's is shared with a glitter probe that
         // might have found it from the medium the ray left (`VolumeMaterial::glitter_probe`).
         let mut glitter = Color::black();
@@ -2666,6 +2754,16 @@ mod curved_tests {
         };
         assert!(span(20., 150.) > 0.5, "{}", span(20., 150.));
         assert!(heights.iter().all(|&(x, h)| h <= BREAKING_INDEX * a * x.powf(2. / 3.) + 0.05), "too high");
+        // Light passes through a crest: from just under its front, seawards, the water is left
+        // again through its back within a few metres; straight down from a trough, never.
+        let level = |p: &Vector3<f64>| p.y;
+        let at = |x: f64| surf.height(&Vector3::new(x, 0., 3.)).map_or(0., |(eta, b)| eta * b);
+        let crest = heights.iter().filter(|h| h.0 > 20. && h.0 < 150.).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+        let front = Vector3::new(crest.0 - 0.3, at(crest.0 - 0.3) - 0.05, 3.);
+        let (length, exit, normal) = surf.through(&front, &Vector3::new(1., 0., 0.), &level).expect("through the crest");
+        assert!(length > 0.1 && length < 3. && normal.y > 0. && (exit.y - at(exit.x)).abs() < 0.02, "{} {:?} {:?}", length, exit, normal);
+        let trough = heights.iter().filter(|h| h.0 > 20. && h.0 < 150.).min_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+        assert!(surf.through(&Vector3::new(trough.0, trough.1 - 0.05, 3.), &-Vector3::y(), &level).is_none());
         // An ocean with it has the surf's relief, and is the CPU's.
         let ocean = Ocean { planet_radius: None, waves: WaveField::sea(Vector2::new(1., 0.), 0., 1, SeaState::default()),
             detail_center: Vector2::new(150., 0.), detail_distance: 300., absorption: None, surf: Some(surf) };

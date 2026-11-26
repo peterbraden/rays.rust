@@ -142,7 +142,7 @@ jobs:
         cargo run --release --features gpu -- --gpu --fresh --width 160 --height 90 --samples 32 -o native-spheres.png demo/benchmarks/spheres.json --compare web-spheres.png --max-flip 0.01
     - name: Keep the pictures
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: web-comparison
         path: |

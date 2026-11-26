@@ -13192,5 +13192,1219 @@
       }
     ],
     "scale": 1.0854
+  },
+  "desert_pavement": {
+    "show": "landscape",
+    "doc": "Desert ground: an ochre crust crazed by fine cracks, darker where it is damp or dusty, with pale angular chips and stones scattered thinly over it; modelled on Poly Haven's dry_ground_rocks.",
+    "variables": {
+      "stone": [
+        0.62,
+        0.57,
+        0.5
+      ],
+      "stone_mid": [
+        0.5,
+        0.44,
+        0.37
+      ],
+      "stone_dark": [
+        0.36,
+        0.3,
+        0.24
+      ],
+      "rim": [
+        0.16,
+        0.11,
+        0.07
+      ],
+      "soil": [
+        0.45,
+        0.28,
+        0.14
+      ],
+      "soil2": [
+        0.32,
+        0.19,
+        0.09
+      ],
+      "crack": [
+        0.2,
+        0.12,
+        0.06
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "bombing",
+          "shape": "stone",
+          "cell": 0.14,
+          "size": [
+            0.025,
+            0.07
+          ],
+          "width": 0.7,
+          "density": 0.3,
+          "seed": 1021,
+          "output": "mask"
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "bombing",
+                "shape": "stone",
+                "cell": 0.05,
+                "size": [
+                  0.01,
+                  0.03
+                ],
+                "width": 0.7,
+                "density": 0.35,
+                "seed": 1011,
+                "output": "mask"
+              },
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "smoothstep",
+                      "from": 0.06,
+                      "to": 0.0,
+                      "input": {
+                        "node": "warp",
+                        "amount": 0.01,
+                        "scale": 0.03,
+                        "seed": 1042,
+                        "octaves": 2,
+                        "input": {
+                          "node": "cells",
+                          "style": "edges",
+                          "scale": 0.05,
+                          "seed": 1041
+                        }
+                      }
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        {
+                          "pattern": {
+                            "node": "add",
+                            "inputs": [
+                              {
+                                "node": "fractal",
+                                "scale": 0.6,
+                                "seed": 1031,
+                                "smallest": 0.01
+                              },
+                              {
+                                "node": "multiply",
+                                "inputs": [
+                                  0.3,
+                                  {
+                                    "node": "fractal",
+                                    "scale": 0.03,
+                                    "seed": 1032,
+                                    "smallest": 0.002
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          "color_map": [
+                            [
+                              -0.3,
+                              "$soil2"
+                            ],
+                            [
+                              0.3,
+                              "$soil"
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        1,
+                        "$crack"
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  {
+                    "pattern": {
+                      "node": "add",
+                      "inputs": [
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.5,
+                            {
+                              "node": "bombing",
+                              "shape": "stone",
+                              "cell": 0.05,
+                              "size": [
+                                0.01,
+                                0.03
+                              ],
+                              "width": 0.7,
+                              "density": 0.35,
+                              "seed": 1011,
+                              "output": "id"
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.3,
+                            {
+                              "node": "bombing",
+                              "shape": "stone",
+                              "cell": 0.05,
+                              "size": [
+                                0.01,
+                                0.03
+                              ],
+                              "width": 0.7,
+                              "density": 0.35,
+                              "seed": 1011,
+                              "output": "facet"
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            -0.6,
+                            {
+                              "node": "bombing",
+                              "shape": "stone",
+                              "cell": 0.05,
+                              "size": [
+                                0.01,
+                                0.03
+                              ],
+                              "width": 0.7,
+                              "density": 0.35,
+                              "seed": 1011,
+                              "output": "edge"
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.2,
+                            {
+                              "node": "fractal",
+                              "scale": 0.004,
+                              "seed": 1013,
+                              "smallest": 0.0002
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.35,
+                            {
+                              "node": "cells",
+                              "style": "id",
+                              "scale": 0.0005,
+                              "seed": 1014
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "color_map": [
+                      [
+                        -0.3,
+                        "$rim"
+                      ],
+                      [
+                        0.15,
+                        "$stone_dark"
+                      ],
+                      [
+                        0.6,
+                        "$stone_mid"
+                      ],
+                      [
+                        1.15,
+                        "$stone"
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            {
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.5,
+                      {
+                        "node": "bombing",
+                        "shape": "stone",
+                        "cell": 0.14,
+                        "size": [
+                          0.025,
+                          0.07
+                        ],
+                        "width": 0.7,
+                        "density": 0.3,
+                        "seed": 1021,
+                        "output": "id"
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.3,
+                      {
+                        "node": "bombing",
+                        "shape": "stone",
+                        "cell": 0.14,
+                        "size": [
+                          0.025,
+                          0.07
+                        ],
+                        "width": 0.7,
+                        "density": 0.3,
+                        "seed": 1021,
+                        "output": "facet"
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      -0.6,
+                      {
+                        "node": "bombing",
+                        "shape": "stone",
+                        "cell": 0.14,
+                        "size": [
+                          0.025,
+                          0.07
+                        ],
+                        "width": 0.7,
+                        "density": 0.3,
+                        "seed": 1021,
+                        "output": "edge"
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.2,
+                      {
+                        "node": "fractal",
+                        "scale": 0.008,
+                        "seed": 1023,
+                        "smallest": 0.0004
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.35,
+                      {
+                        "node": "cells",
+                        "style": "id",
+                        "scale": 0.001,
+                        "seed": 1024
+                      }
+                    ]
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  -0.3,
+                  "$rim"
+                ],
+                [
+                  0.15,
+                  "$stone_dark"
+                ],
+                [
+                  0.6,
+                  "$stone_mid"
+                ],
+                [
+                  1.15,
+                  "$stone"
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.004,
+                {
+                  "node": "bombing",
+                  "shape": "stone",
+                  "cell": 0.05,
+                  "size": [
+                    0.01,
+                    0.03
+                  ],
+                  "width": 0.7,
+                  "density": 0.35,
+                  "seed": 1011,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.01,
+                {
+                  "node": "bombing",
+                  "shape": "stone",
+                  "cell": 0.14,
+                  "size": [
+                    0.025,
+                    0.07
+                  ],
+                  "width": 0.7,
+                  "density": 0.3,
+                  "seed": 1021,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.0015,
+                {
+                  "node": "smoothstep",
+                  "from": 0.06,
+                  "to": 0.0,
+                  "input": {
+                    "node": "warp",
+                    "amount": 0.01,
+                    "scale": 0.03,
+                    "seed": 1042,
+                    "octaves": 2,
+                    "input": {
+                      "node": "cells",
+                      "style": "edges",
+                      "scale": 0.05,
+                      "seed": 1041
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:dry_ground_rocks",
+        "licence": "CC0",
+        "size": 4.0,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "soil"
+              ],
+              [
+                "variables",
+                "soil2"
+              ],
+              [
+                "variables",
+                "crack"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "stone"
+              ],
+              [
+                "variables",
+                "stone_mid"
+              ],
+              [
+                "variables",
+                "stone_dark"
+              ],
+              [
+                "variables",
+                "rim"
+              ]
+            ],
+            "chroma": 0.05
+          }
+        ]
+      }
+    ]
+  },
+  "dark_stony_soil": {
+    "show": "landscape",
+    "doc": "Dark stony soil: peaty brown earth thick with grey grit and small angular stones in patches, bare earth between; modelled on Poly Haven's brown_mud_rocks_01.",
+    "variables": {
+      "stone": [
+        0.38,
+        0.37,
+        0.36
+      ],
+      "stone_mid": [
+        0.24,
+        0.23,
+        0.22
+      ],
+      "stone_dark": [
+        0.13,
+        0.12,
+        0.11
+      ],
+      "rim": [
+        0.04,
+        0.035,
+        0.03
+      ],
+      "soil": [
+        0.13,
+        0.1,
+        0.07
+      ],
+      "soil2": [
+        0.07,
+        0.05,
+        0.035
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "multiply",
+          "inputs": [
+            {
+              "node": "bombing",
+              "shape": "stone",
+              "cell": 0.035,
+              "size": [
+                0.015,
+                0.045
+              ],
+              "width": 0.72,
+              "density": 0.9,
+              "seed": 1121,
+              "output": "mask"
+            },
+            {
+              "node": "smoothstep",
+              "from": -0.35,
+              "to": 0.15,
+              "input": {
+                "node": "fractal",
+                "scale": 0.3,
+                "seed": 1131,
+                "smallest": 0.03
+              }
+            }
+          ]
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "multiply",
+                "inputs": [
+                  {
+                    "node": "bombing",
+                    "shape": "stone",
+                    "cell": 0.01,
+                    "size": [
+                      0.004,
+                      0.012
+                    ],
+                    "width": 0.75,
+                    "density": 1.0,
+                    "seed": 1111,
+                    "output": "mask"
+                  },
+                  {
+                    "node": "smoothstep",
+                    "from": -0.35,
+                    "to": 0.15,
+                    "input": {
+                      "node": "fractal",
+                      "scale": 0.3,
+                      "seed": 1131,
+                      "smallest": 0.03
+                    }
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "fractal",
+                      "scale": 0.15,
+                      "seed": 1141,
+                      "smallest": 0.002
+                    },
+                    "color_map": [
+                      [
+                        -0.4,
+                        "$soil2"
+                      ],
+                      [
+                        0.4,
+                        "$soil"
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  {
+                    "pattern": {
+                      "node": "add",
+                      "inputs": [
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.5,
+                            {
+                              "node": "bombing",
+                              "shape": "stone",
+                              "cell": 0.01,
+                              "size": [
+                                0.004,
+                                0.012
+                              ],
+                              "width": 0.75,
+                              "density": 1.0,
+                              "seed": 1111,
+                              "output": "id"
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.3,
+                            {
+                              "node": "bombing",
+                              "shape": "stone",
+                              "cell": 0.01,
+                              "size": [
+                                0.004,
+                                0.012
+                              ],
+                              "width": 0.75,
+                              "density": 1.0,
+                              "seed": 1111,
+                              "output": "facet"
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            -0.6,
+                            {
+                              "node": "bombing",
+                              "shape": "stone",
+                              "cell": 0.01,
+                              "size": [
+                                0.004,
+                                0.012
+                              ],
+                              "width": 0.75,
+                              "density": 1.0,
+                              "seed": 1111,
+                              "output": "edge"
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.2,
+                            {
+                              "node": "fractal",
+                              "scale": 0.003,
+                              "seed": 1113,
+                              "smallest": 0.00015000000000000001
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.35,
+                            {
+                              "node": "cells",
+                              "style": "id",
+                              "scale": 0.000375,
+                              "seed": 1114
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "color_map": [
+                      [
+                        -0.3,
+                        "$rim"
+                      ],
+                      [
+                        0.15,
+                        "$stone_dark"
+                      ],
+                      [
+                        0.6,
+                        "$stone_mid"
+                      ],
+                      [
+                        1.15,
+                        "$stone"
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            {
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.5,
+                      {
+                        "node": "bombing",
+                        "shape": "stone",
+                        "cell": 0.035,
+                        "size": [
+                          0.015,
+                          0.045
+                        ],
+                        "width": 0.72,
+                        "density": 0.9,
+                        "seed": 1121,
+                        "output": "id"
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.3,
+                      {
+                        "node": "bombing",
+                        "shape": "stone",
+                        "cell": 0.035,
+                        "size": [
+                          0.015,
+                          0.045
+                        ],
+                        "width": 0.72,
+                        "density": 0.9,
+                        "seed": 1121,
+                        "output": "facet"
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      -0.6,
+                      {
+                        "node": "bombing",
+                        "shape": "stone",
+                        "cell": 0.035,
+                        "size": [
+                          0.015,
+                          0.045
+                        ],
+                        "width": 0.72,
+                        "density": 0.9,
+                        "seed": 1121,
+                        "output": "edge"
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.2,
+                      {
+                        "node": "fractal",
+                        "scale": 0.008,
+                        "seed": 1123,
+                        "smallest": 0.0004
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.35,
+                      {
+                        "node": "cells",
+                        "style": "id",
+                        "scale": 0.001,
+                        "seed": 1124
+                      }
+                    ]
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  -0.3,
+                  "$rim"
+                ],
+                [
+                  0.15,
+                  "$stone_dark"
+                ],
+                [
+                  0.6,
+                  "$stone_mid"
+                ],
+                [
+                  1.15,
+                  "$stone"
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.006,
+                {
+                  "node": "bombing",
+                  "shape": "stone",
+                  "cell": 0.01,
+                  "size": [
+                    0.004,
+                    0.012
+                  ],
+                  "width": 0.75,
+                  "density": 1.0,
+                  "seed": 1111,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.012,
+                {
+                  "node": "bombing",
+                  "shape": "stone",
+                  "cell": 0.035,
+                  "size": [
+                    0.015,
+                    0.045
+                  ],
+                  "width": 0.72,
+                  "density": 0.9,
+                  "seed": 1121,
+                  "output": "height"
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:brown_mud_rocks_01",
+        "licence": "CC0",
+        "size": 1.3,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "soil"
+              ],
+              [
+                "variables",
+                "soil2"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "stone"
+              ],
+              [
+                "variables",
+                "stone_mid"
+              ],
+              [
+                "variables",
+                "stone_dark"
+              ],
+              [
+                "variables",
+                "rim"
+              ]
+            ],
+            "chroma": 0.05
+          }
+        ]
+      }
+    ]
+  },
+  "cracked_riverbed": {
+    "show": "landscape",
+    "doc": "A dried river bed: pale silty mud split into plates a hand or two across, their edges curled up and lighter, finer cracks within them, each plate its own shade; modelled on Poly Haven's mud_cracked_dry_riverbed_002.",
+    "variables": {
+      "mud": [
+        0.47,
+        0.38,
+        0.29
+      ],
+      "mud2": [
+        0.37,
+        0.29,
+        0.22
+      ],
+      "crack": [
+        0.2,
+        0.15,
+        0.11
+      ],
+      "lip": [
+        0.56,
+        0.47,
+        0.37
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "smoothstep",
+          "from": 0.025,
+          "to": 0.0,
+          "input": {
+            "node": "warp",
+            "amount": 0.008,
+            "scale": 0.084,
+            "seed": 1212,
+            "octaves": 2,
+            "input": {
+              "node": "cells",
+              "style": "edges",
+              "scale": 0.14,
+              "seed": 1211
+            }
+          }
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "multiply",
+                "inputs": [
+                  0.4,
+                  {
+                    "node": "smoothstep",
+                    "from": 0.03,
+                    "to": 0.0,
+                    "input": {
+                      "node": "warp",
+                      "amount": 0.005,
+                      "scale": 0.036,
+                      "seed": 1222,
+                      "octaves": 2,
+                      "input": {
+                        "node": "cells",
+                        "style": "edges",
+                        "scale": 0.06,
+                        "seed": 1221
+                      }
+                    }
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "smoothstep",
+                      "from": 0.07,
+                      "to": 0.025,
+                      "input": {
+                        "node": "warp",
+                        "amount": 0.008,
+                        "scale": 0.084,
+                        "seed": 1212,
+                        "octaves": 2,
+                        "input": {
+                          "node": "cells",
+                          "style": "edges",
+                          "scale": 0.14,
+                          "seed": 1211
+                        }
+                      }
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        {
+                          "pattern": {
+                            "node": "add",
+                            "inputs": [
+                              {
+                                "node": "multiply",
+                                "inputs": [
+                                  0.4,
+                                  {
+                                    "node": "cells",
+                                    "style": "id",
+                                    "scale": 0.14,
+                                    "seed": 1211
+                                  }
+                                ]
+                              },
+                              {
+                                "node": "fractal",
+                                "scale": 0.25,
+                                "seed": 1231,
+                                "smallest": 0.004
+                              }
+                            ]
+                          },
+                          "color_map": [
+                            [
+                              -0.4,
+                              "$mud2"
+                            ],
+                            [
+                              0.7,
+                              "$mud"
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        1,
+                        "$lip"
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  "$crack"
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            "$crack"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.002,
+                {
+                  "node": "smoothstep",
+                  "from": 0.025,
+                  "to": 0.0,
+                  "input": {
+                    "node": "warp",
+                    "amount": 0.008,
+                    "scale": 0.084,
+                    "seed": 1212,
+                    "octaves": 2,
+                    "input": {
+                      "node": "cells",
+                      "style": "edges",
+                      "scale": 0.14,
+                      "seed": 1211
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0005,
+                {
+                  "node": "smoothstep",
+                  "from": 0.07,
+                  "to": 0.025,
+                  "input": {
+                    "node": "warp",
+                    "amount": 0.008,
+                    "scale": 0.084,
+                    "seed": 1212,
+                    "octaves": 2,
+                    "input": {
+                      "node": "cells",
+                      "style": "edges",
+                      "scale": 0.14,
+                      "seed": 1211
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.0005,
+                {
+                  "node": "smoothstep",
+                  "from": 0.03,
+                  "to": 0.0,
+                  "input": {
+                    "node": "warp",
+                    "amount": 0.005,
+                    "scale": 0.036,
+                    "seed": 1222,
+                    "octaves": 2,
+                    "input": {
+                      "node": "cells",
+                      "style": "edges",
+                      "scale": 0.06,
+                      "seed": 1221
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:mud_cracked_dry_riverbed_002",
+        "licence": "CC0",
+        "size": 2.0,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "mud"
+              ],
+              [
+                "variables",
+                "mud2"
+              ],
+              [
+                "variables",
+                "lip"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "crack"
+              ]
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

@@ -9,7 +9,7 @@
   "light_sampler": "bvh",
   "filter": "mitchell",
   "adaptive": {"threshold": 0.015, "min_samples": 32},
-  "output": {"exposure": 4, "tonemap": "filmic", "glare": true},
+  "output": {"exposure": 6, "tonemap": "filmic", "glare": true},
   "camera": {"location": [-6.3, 1.5, 11], "lookat": [0.4, 2.1, 0], "up": [0, 1, 0], "angle": 0.62, "aperture": 0.02},
   "materials": {
     "SNOW": {"type": "snow", "preset": "fresh", "sparkle": 0.08, "seed": 1},
@@ -26,7 +26,7 @@
     "SNOWY_GRANITE": {"type": "snow_cover", "material": "GRANITE", "cover": 0.6, "drift": 0.15, "snow": {"preset": "fresh"}, "seed": 7}
   },
   "objects": [
-    {"type": "skysphere", "sun_direction": [0.45, -0.05, -1]},
+    {"type": "skysphere", "sun_direction": [-0.85, -0.008, 0.5]},
     {"type": "plane", "y": 0, "material": "SNOW", "normal": {"pattern": "bumps", "amount": 0.25, "scale": 1.5}},
     {"type": "cottage", "style": "stone", "location": [0, 0, 0], "yaw": -18, "snow": 0.22, "seed": 3},
     {"type": "tree", "species": "norway-spruce", "seed": 31, "location": [-9.5, 0, 7.5], "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"], "params": {"scale": 4.2, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},

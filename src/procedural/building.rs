@@ -418,10 +418,11 @@ fn cuboid_in(m: &mut IndexedMesh, f: &Frame, lo: V, hi: V) {
 /// deep as `depth`, give or take a fifth, and rounded over its edges; along the `v1` edge
 /// curling `lip` beyond it and drooping, a cornice. With `ridge`, the `v0` edge is a ridge: the
 /// snow runs right to it, and its top there rises straight up (along `up`) to meet the snow
-/// on the roof's other side.
+/// on the roof's other side, its depth there `ridge_depth` (blending to `depth` over a metre),
+/// so the two sides meet.
 #[allow(clippy::too_many_arguments)]
 pub fn snow_pad(frame: &Frame, (u0, u1): (f64, f64), (v0, v1): (f64, f64), depth: f64, round: f64, lip: f64,
-                ridge: Option<V>, noise: &PerlinNoise, spacing: f64) -> IndexedMesh {
+                ridge: Option<(V, f64)>, noise: &PerlinNoise, spacing: f64) -> IndexedMesh {
     let nu = ((u1 - u0) / spacing).ceil().max(2.) as usize;
     let length = v1 + lip - v0;
     let nv = (length / spacing).ceil().max(2.) as usize;
@@ -442,7 +443,11 @@ pub fn snow_pad(frame: &Frame, (u0, u1): (f64, f64), (v0, v1): (f64, f64), depth
                 let p = frame.at(u, v, 0.);
                 // Uneven over metres where the wind laid it, and a little over decimetres.
                 let (w, x) = (p * 0.6, p * 4.);
-                let deep = depth * (1. + 0.35 * (noise.fbm(w.x, w.y, w.z, 3, 0.5, 2.) - 0.5)
+                let base = match ridge {
+                    Some((_, at_ridge)) => { let t = ((v - v0) / 1.).clamp(0., 1.); at_ridge + (depth - at_ridge) * t * t * (3. - 2. * t) },
+                    None => depth,
+                };
+                let deep = base * (1. + 0.35 * (noise.fbm(w.x, w.y, w.z, 3, 0.5, 2.) - 0.5)
                     + 0.06 * (noise.fbm(x.x + 31., x.y, x.z, 2, 0.5, 2.) - 0.5));
                 let across = edge(u - u0) * edge(u1 - u);
                 let from = if ridge.is_some() { 1. } else { edge(v - v0) };
@@ -457,7 +462,7 @@ pub fn snow_pad(frame: &Frame, (u0, u1): (f64, f64), (v0, v1): (f64, f64), depth
                 };
                 let h = if top { hi } else { lo };
                 m.positions.push(match (ridge, j) {
-                    (Some(up), 0) if top => p + up * (h / up.dot(&frame.n)),
+                    (Some((up, _)), 0) if top => p + up * (h / up.dot(&frame.n)),
                     _ => p + frame.n * h,
                 });
             }
@@ -753,8 +758,11 @@ impl Cottage {
             }
             if self.snow > 0. {
                 let frame = Frame { origin: crest, u: V::x(), v: down, n: up };
-                snow.append_mesh(snow_pad(&frame, (-half - 0.03, half + 0.03), (0., slope + thick * tan), self.snow,
-                    0.15, 0.35 * self.snow, Some(V::y()), &noise, 0.03));
+                // The wind scours the windward side (the back) and drops it in the lee; the two
+                // sides meet at the ridge at their mean.
+                let deep = self.snow * if side > 0. { 1.12 } else { 0.85 };
+                snow.append_mesh(snow_pad(&frame, (-half - 0.03, half + 0.03), (0., slope + thick * tan), deep,
+                    0.15, 0.35 * deep, Some((V::y(), self.snow)), &noise, 0.03));
             }
             // Icicles along the eave: from under the snow's cornice, where it curls over the
             // edge, or with no snow from under the edge itself.
@@ -954,6 +962,8 @@ impl Cottage {
                 }
             }
             for (j, &(y0, y1)) in courses.iter().enumerate() {
+                // Big stones laid in this course that rise into the next.
+                let mut tall: Vec<(f64, f64, f64, f64)> = vec![];
                 if !wall.gable && y0 >= top - 0.02 { break; }
                 let y1 = if wall.gable { y1 } else { y1.min(top) };
                 let below_eaves = y1 <= top + 1e-9;
@@ -1001,15 +1011,38 @@ impl Cottage {
                         if b - (u + l) < 0.15 { l = b - u; }
                         // Not every stone fills its course: some sit lower or stop short.
                         let shrink = rng.next_f64().powi(2) * 0.2 * h;
-                        let (sa, sb) = if rng.next_f64() < 0.5 { (ya + shrink, yb) } else { (ya, yb - shrink) };
+                        let (mut sa, mut sb) = if rng.next_f64() < 0.5 { (ya + shrink, yb) } else { (ya, yb - shrink) };
                         let depth = 0.16 + rng.next_f64() * 0.1;
+                        let roll = rng.next_f64();
+                        // Now and then a big stone, rising through the course above (where that
+                        // is clear of openings and corners); the course above is laid round it.
+                        let above = courses.get(j + 1).map(|c| c.1);
+                        if let Some(above) = above.filter(|&above| roll < 0.1 && ya <= y0 + 1e-9 && yb >= y1 - 1e-9 && l > 0.3 && l < 0.8
+                            && below_eaves && (wall.gable || above <= top) && u > -outer_half + 0.75 && u + l < outer_half - 0.75
+                            && !keep_clear.iter().any(|&(ca, cb, cya, cyb)| ca < u + l && cb > u && cya < above && cyb > y1)) {
+                            sb = above - shrink * 0.5;
+                            sa = y0;
+                            tall.push((u, u + l, y1, above));
+                        }
                         let which = (rng.next_f64() * 3.) as usize % 3;
+                        let (gap, p) = (0.006 + rng.next_f64() * 0.008, 4. + rng.next_f64() * 3.);
+                        if roll > 0.85 && sb - sa > 0.2 {
+                            // Or a course made up of two: a thin stone, or two, pinned under a
+                            // thicker one, as snecked rubble is laid.
+                            let thin = (sb - sa) * (0.3 + rng.next_f64() * 0.12);
+                            let split = u + l * (0.35 + rng.next_f64() * 0.3);
+                            for (p0, p1) in [(u, split), (split, u + l)] {
+                                let w = (rng.next_f64() * 3.) as usize % 3;
+                                stone(&mut stones[w], &f, (p0, p1), (sa, sa + thin), (face - depth, face), gap, 0.012, p + 1., rng, noise);
+                            }
+                            sa += thin;
+                        }
                         // Squarish, packed close: faces roughly flat, edges knocked round.
-                        stone(&mut stones[which], &f, (u, u + l), (sa, sb), (face - depth, face), 0.006 + rng.next_f64() * 0.008,
-                            0.015, 4. + rng.next_f64() * 3., rng, noise);
+                        stone(&mut stones[which], &f, (u, u + l), (sa, sb), (face - depth, face), gap, 0.015, p, rng, noise);
                         u += l;
                     }
                 }
+                keep_clear.extend(tall);
             }
             // The wall's mortar core, less its openings: rectangles between their edges, and
             // up the gable in steps under the roof.

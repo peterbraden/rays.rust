@@ -129,7 +129,16 @@ impl pathtrace::HostShapes for Kernels<'_> {
         let r = host_ray(ro, rd, &self.buffers.origin);
         // (From a vertex the kernels shaded: none of the host's surfaces.)
         crate::shapes::leaving::with(None, || {
-            self.buffers.host_shapes.iter().any(|&k| self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64))
+            self.buffers.host_shapes.iter().any(|&k| {
+                let began = web_time::Instant::now();
+                let occluded = self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64);
+                let seconds = began.elapsed().as_secs_f64();
+                crate::scheduler::count_object(crate::kernels::host::shape_key(self.flat, k), |o| {
+                    o.shadow_rays += 1;
+                    o.shadow_seconds += seconds;
+                });
+                occluded
+            })
         })
     }
 }
@@ -151,12 +160,24 @@ impl<M: pathtrace::Media> pathtrace::Finder for WithHost<'_, M> {
         if !self.host_shapes.is_empty() {
             let r = host_ray(p.o.truncate(), p.d.truncate(), &self.kernels.buffers.origin);
             let mut reach = if found.state.z == u32::MAX { f64::INFINITY } else { found.hit.x as f64 };
+            let mut nearest = None;
             for &shape in self.host_shapes {
-                if let Some(x) = self.kernels.flat.shapes[shape].0.geometry.intersects_range(&r, crate::wavefront::flat::MIN_SHAPE, reach) {
+                let began = web_time::Instant::now();
+                let x = self.kernels.flat.shapes[shape].0.geometry.intersects_range(&r, crate::wavefront::flat::MIN_SHAPE, reach);
+                let seconds = began.elapsed().as_secs_f64();
+                crate::scheduler::count_object(crate::kernels::host::shape_key(self.kernels.flat, shape), |o| {
+                    o.rays += 1;
+                    o.intersect_seconds += seconds;
+                });
+                if let Some(x) = x {
                     reach = x.dist;
+                    nearest = Some(shape);
                     found.state.z = (self.listed + shape) as u32;
                     found.hit = Vec4::new(x.dist as f32, 0., 0., 1.);
                 }
+            }
+            if let Some(shape) = nearest {
+                crate::scheduler::count_object(crate::kernels::host::shape_key(self.kernels.flat, shape), |o| o.hits += 1);
             }
         }
         pathtrace::intersect_media::<M>(scene, &found)
@@ -286,7 +307,13 @@ impl<'a> Kernels<'a> {
             // 4. The host's vertices.
             let mut waiting = 0;
             for (((_, pixel, k), p), vertex) in paths.iter_mut().zip(&vertices).filter(|((_, p), _)| p.state.y & PATH_HOST != 0) {
+                let (began, key) = (web_time::Instant::now(), crate::kernels::host::object_key(flat, p.state.z));
                 *p = crate::kernels::host::shade(s, flat, &self.buffers.origin, p, *pixel, *k, *vertex);
+                if let Some(key) = key {
+                    let seconds = began.elapsed().as_secs_f64();
+                    stats.object(key).vertices += 1;
+                    stats.object(key).shade_seconds += seconds;
+                }
                 waiting += 1;
             }
             if waiting > 0 {
@@ -303,6 +330,8 @@ impl<'a> Kernels<'a> {
             });
         }
         lap(&mut stats, Stage::Accumulate, done.len());
+        // The host's shapes' work, counted on this thread as the rounds went.
+        stats.merge_objects(&crate::scheduler::take_objects());
         (done, crate::time_map::thread_time() - began, stats)
     }
 }
@@ -828,7 +857,44 @@ pub mod tests {
     /// shadow and are shadowed as the rest.
     #[test]
     fn test_shapes_their_own_code_intersects_agree_with_the_path_tracer() {
-        let s = SceneFile::from_string(r#"{
+        let s = shapes_scene();
+        let flat = FlatScene::build(&s).unwrap();
+        assert_eq!((flat.shapes.len(), flat.hosts.len()), (2, 1));
+        let n = 256;
+        let (w, h) = (s.image.width, s.image.height);
+        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_the_host_counts_its_work_by_object() {
+        let s = shapes_scene();
+        let flat = FlatScene::build(&s).unwrap();
+        let (_, _, stats) = Kernels::new(&s, &flat).unwrap().pass(0);
+        // Every vertex the host shaded is some object's.
+        let vertices: u64 = stats.objects.iter().map(|o| o.vertices).sum();
+        assert!(vertices > 0);
+        assert_eq!(vertices, stats.stage(Stage::Host).items);
+        // Each shape the host intersects was tested against the paths' rays, and nearest for
+        // some; and against shadow rays from the vertices the kernels shaded (the floor's).
+        for k in 0..flat.shapes.len() {
+            let o = &stats.objects[crate::kernels::host::shape_key(&flat, k)];
+            assert!(o.rays > 0 && o.hits > 0 && o.hits <= o.rays && o.shadow_rays > 0, "shape {}: {:?}", k, o);
+        }
+        // And named for the report, the shapes after the materials.
+        let names = crate::kernels::host::object_names(&s, &flat);
+        assert_eq!(names.iter().map(|n| n.1).collect::<Vec<_>>(), vec!["material", "shape", "shape"]);
+        assert!(names[1].0.starts_with("objects[1] ") && names[2].0.starts_with("objects[2] "), "{:?}", names);
+    }
+
+    /// A torus and a cone, which the host intersects, on a floor the kernels shade, under a sun
+    /// and a point light.
+    fn shapes_scene() -> Scene {
+        SceneFile::from_string(r#"{
             "width": 24, "height": 16, "background": [0.2, 0.25, 0.3], "max_depth": 6, "path_termination": "russian_roulette",
             "sun": { "direction": [-1, 2, -1], "intensity": 2 },
             "lights": [ { "location": [1, 3, -1], "intensity": 4 } ],
@@ -844,17 +910,7 @@ pub mod tests {
                 { "type": "cone", "base": [1, 0, 0], "cap": [1, 1.2, 0], "base_radius": 0.6, "cap_radius": 0, "material": "P" },
                 { "type": "sphere", "location": [0, 0.3, -1.2], "radius": 0.3, "material": "F" }
             ]
-        }"#.to_string());
-        let flat = FlatScene::build(&s).unwrap();
-        assert_eq!((flat.shapes.len(), flat.hosts.len()), (2, 1));
-        let n = 256;
-        let (w, h) = (s.image.width, s.image.height);
-        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
-        for t in 0..6 {
-            for ch in 0..3 {
-                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
-            }
-        }
+        }"#.to_string())
     }
 
     /// Three host materials (a texture, a layered one, rough glass) among two the stages

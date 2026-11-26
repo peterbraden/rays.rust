@@ -38,6 +38,13 @@ pub struct Run {
     pub rays: u64,
     /// Its memory, and the machine's, over time (`Memory`).
     pub memory: Memory,
+    /// What the host did for each object the kernels have no code for (`ObjectRecord`): where
+    /// the kernels rendered (on the CPU or the GPU; the path tracer has no such division).
+    pub objects: Vec<ObjectRecord>,
+    /// The names of those objects, by their key (`kernels::host::object_names`): the host's
+    /// to give, from the scene; not kept, as `objects` carries them.
+    #[serde(skip)]
+    pub object_names: Vec<(String, &'static str)>,
     /// When it started, to measure `seconds` from: this process's clock, not the report's.
     #[serde(skip)]
     pub began: Option<web_time::Instant>,
@@ -196,6 +203,38 @@ pub struct StageRecord {
     pub batches: u64,
     pub items: u64,
     pub seconds: f64,
+}
+
+/// The host's work on one object (`scheduler::ObjectStats`): the vertices on its material it
+/// shaded, and the rays it tested its shape against, each with the seconds it took (summed over
+/// threads). What porting the object's material or shape to the kernels would save.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObjectRecord {
+    /// The object, by its place in the scene file and its kind of shape: "objects[2] (Stand)".
+    pub name: String,
+    /// "material": the host shades it; "shape": the host intersects it (and shades it).
+    pub role: String,
+    pub vertices: u64,
+    pub shade_seconds: f64,
+    pub rays: u64,
+    pub hits: u64,
+    pub intersect_seconds: f64,
+    pub shadow_rays: u64,
+    pub shadow_seconds: f64,
+}
+
+impl ObjectRecord {
+    /// Each object with any work, by name.
+    pub fn of(stats: &crate::scheduler::Stats, names: &[(String, &'static str)]) -> Vec<ObjectRecord> {
+        stats.objects.iter().enumerate().filter(|(_, o)| **o != Default::default()).map(|(key, o)| {
+            let (name, role) = names.get(key).cloned().unwrap_or_else(|| (format!("object {}", key), ""));
+            ObjectRecord {
+                name, role: role.into(), vertices: o.vertices, shade_seconds: o.shade_seconds, rays: o.rays, hits: o.hits,
+                intersect_seconds: o.intersect_seconds, shadow_rays: o.shadow_rays, shadow_seconds: o.shadow_seconds,
+            }
+        }).collect()
+    }
 }
 
 impl Stages {
@@ -362,6 +401,25 @@ mod tests {
         let json = serde_json::to_value(&sample).unwrap();
         assert_eq!(json["footprint"], 7);
         assert_eq!(serde_json::from_value::<MemorySample>(json).unwrap(), sample);
+    }
+
+    #[test]
+    fn test_objects_are_named_by_their_keys() {
+        use crate::scheduler::Stats;
+        let mut stats = Stats::default();
+        stats.object(2).rays += 10;
+        stats.object(2).hits += 4;
+        stats.object(0).vertices += 3;
+        let names = vec![("objects[4] (Mesh)".to_string(), "material"), ("objects[5] (Sphere)".to_string(), "material"), ("objects[1] (Stand)".to_string(), "shape")];
+        let records = ObjectRecord::of(&stats, &names);
+        // Those with work only, named by key.
+        assert_eq!(records.iter().map(|r| (r.name.as_str(), r.role.as_str(), r.vertices, r.rays, r.hits)).collect::<Vec<_>>(),
+            vec![("objects[4] (Mesh)", "material", 3, 0, 0), ("objects[1] (Stand)", "shape", 0, 10, 4)]);
+        // Merged across threads' and batches' stats, by key.
+        let mut other = Stats::default();
+        other.object(2).rays += 5;
+        stats.merge(&other);
+        assert_eq!(stats.objects[2].rays, 15);
     }
 
     #[test]

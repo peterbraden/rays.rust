@@ -490,6 +490,10 @@ fn main() {
     // Each integrator's samples are its own, so a saved state is one's.
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
         ^ if on_gpu { 0x6770_7500_0000_0001 } else if buffers.is_some() { 0x7761_7665_6672_6f6e } else { 0 };
+    // The objects the host answers for, by name, for what it did for each.
+    if let Some(f) = &flat {
+        run.object_names = kernels::host::object_names(&s, f);
+    }
     rc.run = run;
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {

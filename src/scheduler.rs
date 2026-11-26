@@ -228,6 +228,54 @@ pub struct StageStats {
     pub seconds: f64,
 }
 
+/// The host's work on one object the kernels have no code for: vertices on its material that
+/// the scene's own code shaded, and rays its shape was tested against by its own code (paths'
+/// rays, `rays`, of which `hits` were nearest; and shadow rays from vertices the kernels shaded,
+/// `shadow_rays`), each with its time. Counted per thread as it happens (`count_object`), so
+/// that the threads needn't share a counter, and gathered into a batch's `Stats`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ObjectStats {
+    pub vertices: u64,
+    pub shade_seconds: f64,
+    pub rays: u64,
+    pub hits: u64,
+    pub intersect_seconds: f64,
+    pub shadow_rays: u64,
+    pub shadow_seconds: f64,
+}
+
+impl ObjectStats {
+    pub fn add(&mut self, o: &ObjectStats) {
+        self.vertices += o.vertices;
+        self.shade_seconds += o.shade_seconds;
+        self.rays += o.rays;
+        self.hits += o.hits;
+        self.intersect_seconds += o.intersect_seconds;
+        self.shadow_rays += o.shadow_rays;
+        self.shadow_seconds += o.shadow_seconds;
+    }
+}
+
+thread_local! {
+    static OBJECTS: std::cell::RefCell<Vec<ObjectStats>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Count work on object `key` on this thread.
+pub fn count_object(key: usize, f: impl FnOnce(&mut ObjectStats)) {
+    OBJECTS.with(|o| {
+        let mut o = o.borrow_mut();
+        if o.len() <= key {
+            o.resize(key + 1, ObjectStats::default());
+        }
+        f(&mut o[key]);
+    });
+}
+
+/// The work on objects this thread has counted since last taken.
+pub fn take_objects() -> Vec<ObjectStats> {
+    OBJECTS.with(|o| std::mem::take(&mut *o.borrow_mut()))
+}
+
 /// What a render's stages did, for judging how work is scheduled. Recorded by the wavefront
 /// integrator and by the GPU's host, and added up (`merge`) across threads and passes.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -244,6 +292,9 @@ pub struct Stats {
     /// Time the device took for whole blocks of passes, where stages can't be timed apart
     /// (the GPU: from the first pass queued to the image read back).
     pub device_seconds: f64,
+    /// The host's work on each object the kernels have no code for (`ObjectStats`), by its key
+    /// (`kernels::host::object_key`): its material's vertices, and its shape's rays.
+    pub objects: Vec<ObjectStats>,
 }
 
 impl Stats {
@@ -274,6 +325,21 @@ impl Stats {
         self.stages[stage as usize]
     }
 
+    /// The host's work on object `key`.
+    pub fn object(&mut self, key: usize) -> &mut ObjectStats {
+        if self.objects.len() <= key {
+            self.objects.resize(key + 1, ObjectStats::default());
+        }
+        &mut self.objects[key]
+    }
+
+    /// Add work on objects, by key, as `take_objects` gives it.
+    pub fn merge_objects(&mut self, objects: &[ObjectStats]) {
+        for (key, o) in objects.iter().enumerate() {
+            self.object(key).add(o);
+        }
+    }
+
     pub fn merge(&mut self, other: &Stats) {
         for (a, b) in self.stages.iter_mut().zip(&other.stages) {
             a.batches += b.batches;
@@ -285,6 +351,7 @@ impl Stats {
             self.round(round, *paths);
         }
         self.device_seconds += other.device_seconds;
+        self.merge_objects(&other.objects);
     }
 
     pub fn is_empty(&self) -> bool {

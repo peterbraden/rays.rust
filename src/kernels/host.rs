@@ -121,6 +121,37 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
     next
 }
 
+/// The object the host answers for at a hit on primitive `prim`, as a key for its work
+/// (`scheduler::ObjectStats`): an object whose material isn't data by its place in
+/// `FlatScene::hosts`; a shape the host intersects after them, by its place in `shapes`.
+pub fn object_key(flat: &FlatScene, prim: u32) -> Option<usize> {
+    let listed = flat.prims.len() + flat.planes.len();
+    if prim as usize >= listed {
+        return Some(shape_key(flat, prim as usize - listed));
+    }
+    match flat.hit_material(prim) {
+        crate::wavefront::flat::FlatMaterial::Host { object } => Some(*object as usize),
+        _ => None,
+    }
+}
+
+/// The key of shape `k` of `FlatScene::shapes` (`object_key`).
+pub fn shape_key(flat: &FlatScene, k: usize) -> usize {
+    flat.hosts.len() + k
+}
+
+/// What each key names (`object_key`): the object by its place in the scene file and its kind
+/// of shape, and whether the host shades its material or intersects its shape.
+pub fn object_names(s: &Scene, flat: &FlatScene) -> Vec<(String, &'static str)> {
+    let name = |o: &crate::sceneobject::SceneObject| match s.source_index(o) {
+        Some(i) => format!("objects[{}] ({})", i, o.geometry.kind()),
+        None => o.geometry.kind().to_string(),
+    };
+    flat.hosts.iter().map(|o| (name(o), "material"))
+        .chain(flat.shapes.iter().map(|(o, _)| (name(o), "shape")))
+        .collect()
+}
+
 /// `PathState::hit.w` of a path whose ray leaves a vertex the host shaded, its point (in the
 /// frame about the origin) in `hit.xyz`: until its next ray is intersected, a path's `hit` is
 /// otherwise unread (`shade` clears what would read it, and `pathtrace::find_all` clears it).

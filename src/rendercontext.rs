@@ -226,6 +226,7 @@ impl RenderContext {
         run.seconds = run.began.unwrap_or(self.start_time).elapsed().as_secs_f64();
         run.samples_after = self.samples.iter().map(|&n| n as u64).sum();
         run.stages = crate::report::Stages::of(&self.schedule);
+        run.objects = crate::report::ObjectRecord::of(&self.schedule, &run.object_names);
         run.rays = self.rays_cast;
         let memory = crate::report::memory_so_far();
         if !memory.samples.is_empty() {

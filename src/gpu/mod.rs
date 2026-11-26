@@ -672,12 +672,23 @@ impl GpuRenderer {
         host.guess.store((count + count / 4 + 64) as usize, Ordering::Relaxed);
         let began = web_time::Instant::now();
         let origin = self.origin;
-        let shaded: Vec<PathState> = paths.par_iter().map(|p| {
+        let shaded: Vec<(PathState, Option<usize>, f64)> = paths.par_iter().map(|p| {
             // Its slot (`gather_host`) is its pixel's path in a lane, so that sample of the
             // pixel's.
             let (pixel, lane) = (p.state.w as usize % image, p.state.w as usize / image);
-            host::shade(s, flat, &origin, p, pixel as u32, (first[pixel] + lane) as u32, None)
+            let (began, key) = (web_time::Instant::now(), host::object_key(flat, p.state.z));
+            let next = host::shade(s, flat, &origin, p, pixel as u32, (first[pixel] + lane) as u32, None);
+            (next, key, began.elapsed().as_secs_f64())
         }).collect();
+        // Each object's vertices, for the report.
+        let mut objects = crate::scheduler::Stats::default();
+        for &(_, key, seconds) in &shaded {
+            if let Some(key) = key {
+                objects.object(key).vertices += 1;
+                objects.object(key).shade_seconds += seconds;
+            }
+        }
+        let shaded: Vec<PathState> = shaded.into_iter().map(|(p, _, _)| p).collect();
         self.queue.write_buffer(&host.gathered, 0, bytemuck::cast_slice(&shaded));
         let seconds = began.elapsed().as_secs_f64();
         // The next rounds begin at side 0 of the queue, which the scattered paths that go on
@@ -697,6 +708,7 @@ impl GpuRenderer {
         let mut block = self.block.lock().unwrap();
         block.host_seconds += seconds;
         block.stats.record(crate::scheduler::Stage::Host, count, seconds);
+        block.stats.merge_objects(&objects.objects);
         Ok(true)
     }
 

@@ -4571,7 +4571,10 @@ impl SceneFile {
             return;
         }
         let intensity = SceneFile::parse_number(&sun["intensity"], 1.);
-        for o in objects.iter_mut().filter(|o| o["type"].as_str() == Some("lightning") && o.get("sun_intensity").is_none()) {
+        // Lightning, and a landscape's erupting lava (`terrain::eruption`), are as bright as they
+        // are on the sun's scale.
+        let bright = |o: &Value| matches!(o["type"].as_str(), Some("lightning") | Some("landscape"));
+        for o in objects.iter_mut().filter(|o| bright(o) && o.get("sun_intensity").is_none()) {
             o["sun_intensity"] = serde_json::json!(intensity);
         }
     }

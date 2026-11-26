@@ -1683,9 +1683,10 @@ impl LandscapeMedium {
     }
 
     /// With `eruption`'s lava glowing on the ground cover.
-    pub fn with_eruption(mut self, eruption: Arc<crate::terrain::eruption::Eruption>, seed: u64) -> LandscapeMedium {
+    pub fn with_eruption(mut self, eruption: Arc<crate::terrain::eruption::Eruption>, seed: u64, sun_intensity: f64) -> LandscapeMedium {
         self.active = Some(crate::terrain::eruption::ActiveLava {
             eruption, crust: Box::new(Land { ground: self.ground.clone() }), noise: PerlinNoise::shuffled(seed.wrapping_add(919)),
+            per_nit: crate::terrain::eruption::radiance_per_nit(sun_intensity),
         });
         self
     }

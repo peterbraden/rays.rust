@@ -33,10 +33,13 @@ pub fn luminance(kelvin: f64) -> f64 {
     1e7 * (25_900. / 2_800. - 25_900. / kelvin.max(300.)).exp()
 }
 
-/// The scene's radiance per cd/m²: a white surface under the sun (whose `intensity` is the
-/// scene's unit of irradiance, about 20,000 lux; `SceneFile::sky_follows_sun`) has a radiance
-/// of 1/π of it, and a luminance of 20,000/π cd/m².
-pub const RADIANCE_PER_NIT: f64 = 1. / 20_000.;
+/// The scene's radiance per cd/m² under a sun of `sun_intensity`, on the scale the scene's
+/// other physically bright things share (`procedural::lightning::SUN_ILLUMINANCE`: a sun of
+/// intensity 1 gives 1.27·10⁵ lux; `SceneFile::lightning_follows_sun` passes the scene's sun's
+/// intensity to the landscape).
+pub fn radiance_per_nit(sun_intensity: f64) -> f64 {
+    sun_intensity / crate::procedural::lightning::SUN_ILLUMINANCE
+}
 
 /// A lava channel: its course (scene points, a few tens of metres apart, from the vent down)
 /// and its width at each, metres.
@@ -138,6 +141,8 @@ pub struct ActiveLava {
     pub eruption: std::sync::Arc<Eruption>,
     pub crust: Box<dyn MaterialModel + Sync + Send>,
     pub noise: crate::noise::PerlinNoise,
+    /// The scene's radiance per cd/m² (`radiance_per_nit`).
+    pub per_nit: f64,
 }
 
 impl ActiveLava {
@@ -153,7 +158,7 @@ impl ActiveLava {
         let core = 1_420. - 120. * along;
         let glow = open * luminance(core) + (1. - open) * heat.max(0.2) * cracks * 0.6 * luminance(core - 120.);
         let emission = crate::spectrum::Emission::blackbody(core);
-        emission.radiance() * (glow * RADIANCE_PER_NIT)
+        emission.radiance() * (glow * self.per_nit)
     }
 }
 

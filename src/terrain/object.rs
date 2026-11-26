@@ -820,7 +820,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         let e = eruption(&planet, &relief, &frame);
         let at: Vec<String> = e.lakes.iter().map(|(c, _)| format!("[{:.0}, {:.0}, {:.0}]", c.x, c.y, c.z)).collect();
         say(format!("Landscape: erupting, {} lava lakes (at {}) and {} channels", e.lakes.len(), at.join(", "), e.channels.len()));
-        medium = medium.with_eruption(Arc::new(e), params.planet.seed);
+        medium = medium.with_eruption(Arc::new(e), params.planet.seed, o["sun_intensity"].as_f64().unwrap_or(1.));
     }
     SceneObject { geometry, medium: Box::new(medium) }
 }

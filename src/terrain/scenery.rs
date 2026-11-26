@@ -1268,7 +1268,7 @@ impl Ground {
         let wet = capillary_rise(BEACH_SAND / 1000.);
         let reach = crate::ocean::runup(h0, period, FORESHORE);
         if h < -0.05 || h > reach + wet { return None; }
-        if h > reach { return Some(RiverAt::Bed(BEACH_SAND / 1000.)); }
+        if h > reach { return Some(RiverAt::Swash(Swash::Wet)); }
         let setup = crate::ocean::setup(h0, period, FORESHORE);
         // Where this uprush has reached, its edge ragged by a finer noise.
         let tongue = (0.5 + 0.7 * self.noise.noise(p.x / 15., p.z / 15., 3.7)).clamp(0., 1.);
@@ -1635,9 +1635,10 @@ pub struct LandscapeMedium {
     beds: [Lambertian; 2],
     /// Foam on the swash.
     foam: Lambertian,
-    /// The swash's film of water over sand: a smooth coat of water (a few ripples where the
-    /// grains break it) over dry sand, whose light the coat turns back to the grains darkens it
-    /// as being wet does (`material::layered`).
+    /// The shore's sand, the library's beach sand, wet (dark and glossy, with ripples) where
+    /// the swash has drained, and under its film of water, glassier still (the library's `wet`
+    /// overlay).
+    wet_sand: Box<dyn MaterialModel + Sync + Send>,
     film: Box<dyn MaterialModel + Sync + Send>,
     /// Their bars, bare beside the water: sand, and gravel and coarser (the material
     /// library's).
@@ -1663,13 +1664,17 @@ impl LandscapeMedium {
             ground,
             beds: [Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(SAND_ALBEDO)) }, Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(GRAVEL_ALBEDO)) }],
             foam: Lambertian { albedo: crate::textures::ColorTexture::Constant(Color::new(0.6, 0.6, 0.6)) },
-            film: Box::new(crate::material::layered::Coated {
-                base: crate::material::layered::Base::Diffuse(crate::textures::ColorTexture::Constant(Color::new(SAND_ALBEDO[0], SAND_ALBEDO[1], SAND_ALBEDO[2]))),
-                refractive_index: crate::ocean::WATER_INDEX, roughness: 0.03, thickness: 0.01, albedo: Color::black(), g: 0., max_depth: 10, samples: 1,
-            }),
+            wet_sand: crate::scenefile::SceneFile::parse_material_definition(&wet_sand(), "wet_sand", &serde_json::Map::new()),
+            film: crate::scenefile::SceneFile::parse_material_definition(
+                &serde_json::json!({"type": "library", "name": "wet", "amount": 0.35, "over": wet_sand()}), "swash_film", &serde_json::Map::new()),
             bars: ["beach_sand", "river_gravel"].map(|name| crate::scenefile::SceneFile::parse_material_definition(&serde_json::json!({"type": "library", "name": name}), name, &serde_json::Map::new())),
         }
     }
+}
+
+/// The library's beach sand, all of it wet (its waterline, a scene height, far above).
+fn wet_sand() -> serde_json::Value {
+    serde_json::json!({"type": "library", "name": "beach_sand", "waterline": 1e9})
 }
 
 /// Dry sand and river gravel (cobbles of mixed rock), as albedos.
@@ -1699,7 +1704,7 @@ impl Medium for LandscapeMedium {
             RiverAt::Bar(grain) => &*self.bars[(grain > 0.002) as usize],
             RiverAt::Swash(Swash::Lace) => &self.foam,
             RiverAt::Swash(Swash::Film) => &*self.film,
-            RiverAt::Swash(Swash::Wet) => &self.beds[0],
+            RiverAt::Swash(Swash::Wet) => &*self.wet_sand,
             RiverAt::Land if self.ground.salt_lake(&pt) => &self.brine,
             RiverAt::Land => &*self.land,
         }

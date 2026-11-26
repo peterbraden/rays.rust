@@ -352,6 +352,44 @@ right in tone and from afar, less so close up: desert_pavement's larger stones w
 the scan's are pale, dark_stony_soil's grit is too regular, and cracked_riverbed's plates came
 out smaller and lumpier than the scan's.
 
+### Reworks, `hold`, and the first fits of the landscape presets
+
+Those three were then reworked for their close-up faults (a separate layer of dark stones on
+the pavement, a finer grit layer in the soil, the riverbed's plate size held) and refitted on
+roaming patches. Judged on fresh patches against the fits applied before, desert_pavement went
+1.08 → 0.96 and was applied (its crust's cracks are now visible close up, if heavy). The other
+two scored better but looked worse and were left as they were: dark_stony_soil 2.43 → 2.20,
+greyer from afar and a mosaic of rimmed stones close up; cracked_riverbed 1.44 → 2.65, small
+plates crazed by too many fine cracks. A score on fresh patches is necessary, not sufficient:
+every fit is looked at, near and far, before it is applied.
+
+A reference may list numbers a `--free` search must leave as written, `"hold"`: entries of
+`{"node", "field", "seed"}`, any of them left out matching every value. The barks hold their
+`transform` nodes' `scale`, the stretch that makes plates and ridges run up the trunk: a free fit
+of pine_bark matched the scan's colours but squashed its plates round, gravel from afar.
+
+scree was rebuilt from three layers of `stone` sprites (grain, gravel and cobble sizes over
+fines, coloured by each stone's `id`) and fitted: 3.21 → 1.99 on fresh patches, applied. Its
+fine gravel is close to the scan's; its cobbles come out larger and more sharply rimmed than
+the scan's, pale spots from afar.
+
+Six natural presets had their first scans (Poly Haven), searching all their numbers but the
+held ones, and solving their colours:
+
+| Preset | Scan | Author's, colours solved | Fit | Applied |
+|---|---|---|---|---|
+| pine_bark | pine_bark | 5.11 | 0.67 | yes |
+| oak_bark | jolcham_oak_bark_01 | 2.38 | 0.94 | no: the scan's pale lichen and moss came out as dark streaks; the preset needs a lichen layer |
+| sandstone | sandstone_cracks | 40.9 | 4.55 | no: bedding meant for cliff faces is contour rings seen from above; needs a cliff scan, fitted as a `wall` |
+| dune_sand | dense_sand | 55.2 | 29.3 | no: the scan has no ripples |
+| beach_sand | damp_beach_sand | 2694 | 2608 | no: renders near white in the fitting scene |
+| mudflat | brown_mud_02 | 2847 | 2.36 | no: its wet sheen mirrors the white sky and sun |
+
+The last two are glossy where wet, and the fitting scene, lit to read albedo off matte ground,
+shows the gloss as white sheets and glints: wet materials need to be fitted without it. Nearly
+uniform scans also make large scores, since the loss is relative to how much the scan varies
+between its own tiles.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

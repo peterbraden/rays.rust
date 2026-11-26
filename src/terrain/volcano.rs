@@ -54,7 +54,10 @@
 //! are hundreds of metres across, smoothing away the small relief that steers real flows. Here each landscape step sends one flow, along
 //! one such perturbed path, laying lava `flow_thickness` thick until the step's volume is used.
 //! A flow stops at the sea, the edge of a patch, or a pit, where the rest of its lava ponds.
-//! Over many steps the flows spread down different valleys, building a lava apron.
+//! Over many steps the flows spread down different valleys, building a lava apron. A step's lava
+//! goes as many flows of at most `FLOW_VOLUME`, each spread `FLOW_WIDTH` wide and its vent's
+//! flow thickness deep, so running as far as its volume lasts, up to about `FLOW_LENGTH`; lava
+//! running into the sea or out of the domain is lost to it (no longer ponded at its edge).
 
 use crate::geometry::Pcg32;
 use crate::na::Vector3;
@@ -177,7 +180,12 @@ pub struct Vent {
     pub caldera: Option<(f64, f64)>,
     /// The cells its caldera takes, and how far each is from the vent.
     collapse: Vec<(usize, f64)>,
+    /// The cells about its summit (its cone's weight over `SUMMIT`), where its flows break out.
+    summit: Vec<usize>,
 }
+
+/// Flows break out anywhere about a vent's summit: where its cone's weight is over this.
+const SUMMIT: f64 = 0.85;
 
 impl Vent {
     /// A vent at `dir` erupting `rate` m³/yr between `start` and `end`, building `form` out to
@@ -188,7 +196,7 @@ impl Vent {
            caldera: Option<(f64, f64)>, domain: &Domain) -> Vent {
         let mut vent = Vent {
             dir, start, end, rate, seed, cell: None, cone: vec![], cone_radius, lava_fraction, flow_thickness, rifts: vec![],
-            form, integral: form.integral(cone_radius), caldera, collapse: vec![],
+            form, integral: form.integral(cone_radius), caldera, collapse: vec![], summit: vec![],
         };
         place(&mut vent, domain);
         vent
@@ -282,6 +290,16 @@ fn cinder_cones(parent: &Vent, reach: f64, along: &[Vector3<f64>], rng: &mut Pcg
     }
 }
 
+/// The most lava one flow carries, cubic metres: a step's lava is shared among flows of at most
+/// this (Kīlauea's flows of the 1983-2018 eruption were mostly 0.01 to 0.1 km³).
+pub const FLOW_VOLUME: f64 = 5e7;
+/// The most flows a vent sends in a step.
+const MAX_FLOWS: usize = 64;
+/// How wide a shield's flows spread, metres (a stratovolcano's half as wide).
+pub const FLOW_WIDTH: f64 = 1500.;
+/// The longest a flow runs, metres, give or take half.
+pub const FLOW_LENGTH: f64 = 20e3;
+
 /// A hotspot's supply of basalt, cubic metres per year, for a full-height shield in its main
 /// stage: Hawaii's is about 0.1 to 0.2 km³ a year in all, shared between two or three active
 /// shields (Robinson and Eakins, "Estimated magma supply rates for the Hawaiian Islands",
@@ -303,6 +321,7 @@ fn place(vent: &mut Vent, domain: &Domain) {
         let d = distance(c);
         let w = vent.form.weight(d, vent.cone_radius);
         if w > 0. { vent.cone.push((c, w)); }
+        if w > SUMMIT { vent.summit.push(c); }
         else if Some(c) == vent.cell { vent.cone.push((c, 1.)); } // cells larger than the cone
         if d < caldera { vent.collapse.push((c, d)); }
         if d >= vent.cone_radius { continue; }
@@ -359,36 +378,59 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
             if h > 0.05 { mark(c, cone_aa); }
         }
 
-        // Lava flows only from vents in the domain: from the vent, or one of its rift zones.
+        // Lava flows only from vents in the domain, from the vent or one of its rift zones:
+        // the step's lava as many flows, each of at most `FLOW_VOLUME`, each as long as its
+        // volume runs out spread `FLOW_WIDTH` wide and `flow_thickness` deep, as far as
+        // `FLOW_LENGTH` (lava cools as it goes: the longest of Hawaii's run 50 km, most a few to
+        // twenty), down the steepest way over ground perturbed by up to `roughness`.
         let mut rng = Pcg32::new(vent.seed, t.to_bits());
-        let pick = (rng.next_f64() * (1 + vent.rifts.len()) as f64) as usize;
-        let start = if pick == 0 { vent.cell } else { vent.rifts.get(pick - 1).copied() };
-        let Some(mut c) = start.or(vent.cell) else { continue };
-        let mut remaining = volume * vent.lava_fraction;
-        total += remaining;
-        let mut run = 0.;
-        for _ in 0..domain.len() {
-            if remaining <= 0. { break; }
-            // The steepest way down over ground perturbed by up to `roughness`.
-            let next = domain.links(c).iter()
-                .map(|l| (l.to, (ground[c] - ground[l.to] - p.roughness * rng.next_f64()) / l.dist, l.dist))
-                .filter(|&(_, s, _)| s > 0.)
-                .max_by(|a, b| a.1.total_cmp(&b.1));
-            let lay = if next.is_none() || fixed[c] { remaining } else { remaining.min(vent.flow_thickness * domain.area[c]) };
-            ground[c] += lay / domain.area[c];
-            lava[c] += lay / domain.area[c];
-            remaining -= lay;
-            let aa = match vent.form {
-                Form::Shield => {
-                    let slope = next.map_or(0., |(_, s, _)| s);
-                    smoothstep(4e3, 12e3, run).max(smoothstep(0.06, 0.14, slope))
+        let lava_volume = volume * vent.lava_fraction;
+        let flows = ((lava_volume / FLOW_VOLUME).ceil() as usize).clamp(1, MAX_FLOWS);
+        let width = if vent.form == Form::Shield { FLOW_WIDTH } else { 0.5 * FLOW_WIDTH };
+        for _ in 0..flows {
+            let pick = (rng.next_f64() * (1 + vent.rifts.len()) as f64) as usize;
+            let summit = (!vent.summit.is_empty()).then(|| vent.summit[((rng.next_f64() * vent.summit.len() as f64) as usize).min(vent.summit.len() - 1)]);
+            let start = if pick == 0 { summit.or(vent.cell) } else { vent.rifts.get(pick - 1).copied() };
+            let Some(mut c) = start.or(vent.cell) else { break };
+            let per_metre = vent.flow_thickness * width;
+            let length = (lava_volume / flows as f64 / per_metre).min(FLOW_LENGTH * (0.5 + rng.next_f64()));
+            let mut run = 0.;
+            while run < length {
+                if fixed[c] { break; } // into the sea, or beyond the domain
+                let next = domain.links(c).iter()
+                    .map(|l| (l.to, (ground[c] - ground[l.to] - p.roughness * rng.next_f64()) / l.dist, l.dist))
+                    .filter(|&(_, s, _)| s > 0.)
+                    .max_by(|a, b| a.1.total_cmp(&b.1));
+                // The flow's volume over this step along it: on the cell, and on those beside
+                // it where the flow is wider than the cell.
+                let step = next.map_or(domain.area[c].sqrt(), |(_, _, dist)| dist).min(length - run).max(0.);
+                let laid = per_metre * step;
+                let cell = domain.area[c].sqrt();
+                let beside: Vec<usize> = if width > 1.5 * cell { domain.edges(c).iter().map(|l| l.to).filter(|&n| !fixed[n]).collect() } else { vec![] };
+                let share = if beside.is_empty() { 1. } else { (cell / width).clamp(0.3, 1.) };
+                let aa = match vent.form {
+                    Form::Shield => {
+                        let slope = next.map_or(0., |(_, s, _)| s);
+                        // (Not by the vent, where the flows pile up into a cone of their own.)
+                        smoothstep(4e3, 12e3, run).max(smoothstep(0.08, 0.2, slope) * smoothstep(1e3, 3e3, run))
+                    }
+                    _ => 1.,
+                };
+                let mut lay = |c: usize, v: f64| {
+                    ground[c] += v / domain.area[c];
+                    lava[c] += v / domain.area[c];
+                    mark(c, aa);
+                };
+                lay(c, laid * share);
+                for &n in &beside { lay(n, laid * (1. - share) / beside.len() as f64); }
+                total += laid;
+                run += step;
+                match next {
+                    Some((to, _, _)) => c = to,
+                    // A pit: the flow ponds in it, the rest of its lava over the next steps here.
+                    None if step <= 0. => break,
+                    None => {}
                 }
-                _ => 1.,
-            };
-            mark(c, aa);
-            match next {
-                Some((to, _, dist)) if !fixed[c] => { c = to; run += dist; }
-                _ => break,
             }
         }
     }
@@ -510,7 +552,7 @@ mod tests {
         assert!(!flowed.is_empty());
         assert!(flowed.iter().all(|&i| when[i] <= 2000. && lava[i] > 0.));
         let near = |i: usize| d.radius * d.dirs[i].angle(&d.dirs[centre]) < 3000.;
-        assert!(flowed.iter().filter(|&&i| near(i)).all(|&i| aa[i] < 0.5));
+        for &i in flowed.iter().filter(|&&i| near(i)) { assert!(aa[i] < 0.5, "{} m from the vent: aa {}", d.radius * d.dirs[i].angle(&d.dirs[centre]), aa[i]); }
         assert!(flowed.iter().any(|&i| aa[i] > 0.5), "flows turn to ʻaʻā downstream");
         // A stratovolcano's are ʻaʻā from the start.
         let s = Vent::new(d.dirs[centre], (0., 1e9), 1e6, 4, Form::Strato { crater: 300. }, 6000., 1., 10., None, &d);

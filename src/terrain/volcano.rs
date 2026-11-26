@@ -51,12 +51,16 @@
 //! perturbing the elevation model with random noise of a few metres and following the steepest
 //! descent. It predicts direction, not how far lava runs; here the run-out follows from the
 //! volume and `flow_thickness`. `roughness` is larger than DOWNFLOW's metres because our cells
-//! are hundreds of metres across, smoothing away the small relief that steers real flows. Here each landscape step sends one flow, along
-//! one such perturbed path, laying lava `flow_thickness` thick until the step's volume is used.
-//! A flow stops at the sea, the edge of a patch, or a pit, where the rest of its lava ponds.
-//! Over many steps the flows spread down different valleys, building a lava apron. A step's lava
-//! goes as many flows of at most `FLOW_VOLUME`, each spread `FLOW_WIDTH` wide and its vent's
-//! flow thickness deep, so running as far as its volume lasts, up to about `FLOW_LENGTH`; lava
+//! are hundreds of metres across, smoothing away the small relief that steers real flows.
+//! A step's lava goes as many flows of at most `FLOW_VOLUME` (a shield's, `SHIELD_FLOW_VOLUME`:
+//! its eruptions are larger and tube-fed, so run tens of kilometres down its flanks), each
+//! along its own perturbed path, laid its vent's flow thickness deep across its width
+//! (`FLOW_WIDTH`, `SHIELD_FLOW_WIDTH`: the cells beside the path, out to half the width either
+//! side, `lateral`, so a flow is as thick on any grid), running as far as its volume lasts, up
+//! to about `FLOW_LENGTH` (`SHIELD_FLOW_LENGTH`). In a hollow, often raised ahead of it by its
+//! own lava beside it, a flow ponds and spills over the hollow's lowest side, never back the
+//! way it came. Over many steps the flows spread down different valleys, building a lava
+//! apron. A flow stops at the sea or the edge of a patch: lava
 //! running into the sea or out of the domain is lost to it (no longer ponded at its edge).
 
 use crate::geometry::Pcg32;
@@ -297,12 +301,48 @@ fn cinder_cones(parent: &Vent, reach: f64, along: &[Vector3<f64>], rng: &mut Pcg
 /// The most lava one flow carries, cubic metres: a step's lava is shared among flows of at most
 /// this (Kīlauea's flows of the 1983-2018 eruption were mostly 0.01 to 0.1 km³).
 pub const FLOW_VOLUME: f64 = 5e7;
+/// The most lava one of a shield's flows carries, cubic metres: a growing shield's eruptions
+/// are larger and longer, fed through tubes (Mauna Loa's of 1859 and 1984 were 0.38 and
+/// 0.22 km³, and ran 51 and 27 km), so its lava is spread over its flanks, not heaped by
+/// its summit.
+pub const SHIELD_FLOW_VOLUME: f64 = 2.5e8;
+/// How wide a shield's flows spread, metres.
+pub const SHIELD_FLOW_WIDTH: f64 = 1000.;
 /// The most flows a vent sends in a step.
 const MAX_FLOWS: usize = 64;
 /// How wide a shield's flows spread, metres (a stratovolcano's half as wide).
 pub const FLOW_WIDTH: f64 = 1500.;
 /// The longest a flow runs, metres, give or take half.
 pub const FLOW_LENGTH: f64 = 20e3;
+/// The longest a shield's flow runs, metres, give or take half.
+pub const SHIELD_FLOW_LENGTH: f64 = 35e3;
+
+/// The cells a flow of `width` metres covers across its path at cell `c`, heading to `next`
+/// (the path's cell, and those beside it out to half the width either way, walked across the
+/// grid square to the flow's way, stopping at `fixed` cells).
+fn lateral(domain: &Domain, c: usize, next: Option<usize>, width: f64, fixed: &[bool]) -> Vec<usize> {
+    let mut cells = vec![c];
+    let cell = domain.area[c].sqrt();
+    let Some(next) = next else { return cells };
+    let reach = (0.5 * width / cell).round() as usize;
+    if reach == 0 { return cells; }
+    let up = domain.dirs[c];
+    let across = up.cross(&(domain.dirs[next] - up)).normalize();
+    for side in [1., -1.] {
+        let (mut at, mut gone) = (c, 0.);
+        while gone + 0.5 * cell < 0.5 * width {
+            // The edge neighbour most nearly square to the flow, this side.
+            let Some(l) = domain.edges(at).iter()
+                .max_by(|a, b| (side * (domain.dirs[a.to] - domain.dirs[at]).dot(&across)).total_cmp(&(side * (domain.dirs[b.to] - domain.dirs[at]).dot(&across))))
+                else { break };
+            if side * (domain.dirs[l.to] - domain.dirs[at]).dot(&across) <= 0. || fixed[l.to] { break; }
+            gone += l.dist * ((domain.dirs[l.to] - domain.dirs[at]).normalize().dot(&across)).abs();
+            at = l.to;
+            cells.push(at);
+        }
+    }
+    cells
+}
 
 /// A hotspot's supply of basalt, cubic metres per year, for a full-height shield in its main
 /// stage: Hawaii's is about 0.1 to 0.2 km³ a year in all, shared between two or three active
@@ -392,29 +432,37 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
         // twenty), down the steepest way over ground perturbed by up to `roughness`.
         let mut rng = Pcg32::new(vent.seed, t.to_bits());
         let lava_volume = volume * vent.lava_fraction;
-        let flows = ((lava_volume / FLOW_VOLUME).ceil() as usize).clamp(1, MAX_FLOWS);
-        let width = if vent.form == Form::Shield { FLOW_WIDTH } else { 0.5 * FLOW_WIDTH };
+        let shield = vent.form == Form::Shield;
+        let most = if shield { SHIELD_FLOW_VOLUME } else { FLOW_VOLUME };
+        let flows = ((lava_volume / most).ceil() as usize).clamp(1, MAX_FLOWS);
+        let width = if shield { SHIELD_FLOW_WIDTH } else { 0.5 * FLOW_WIDTH };
+        let longest = if shield { SHIELD_FLOW_LENGTH } else { FLOW_LENGTH };
         for _ in 0..flows {
             let pick = (rng.next_f64() * (1 + vent.rifts.len()) as f64) as usize;
             let summit = (!vent.summit.is_empty()).then(|| vent.summit[((rng.next_f64() * vent.summit.len() as f64) as usize).min(vent.summit.len() - 1)]);
             let start = if pick == 0 { summit.or(vent.cell) } else { vent.rifts.get(pick - 1).copied() };
             let Some(mut c) = start.or(vent.cell) else { break };
             let per_metre = vent.flow_thickness * width;
-            let length = (lava_volume / flows as f64 / per_metre).min(FLOW_LENGTH * (0.5 + rng.next_f64()));
+            let length = (lava_volume / flows as f64 / per_metre).min(longest * (0.5 + rng.next_f64()));
             let mut run = 0.;
+            let mut came = None;
             while run < length {
                 if fixed[c] { break; } // into the sea, or beyond the domain
+                // Down the steepest way; or, in a hollow (often of the flow's own making, its
+                // lava beside it raising the way ahead), ponding and spilling over its lowest
+                // side, never back the way it came.
                 let next = domain.links(c).iter()
+                    .filter(|l| Some(l.to) != came)
                     .map(|l| (l.to, (ground[c] - ground[l.to] - p.roughness * rng.next_f64()) / l.dist, l.dist))
-                    .filter(|&(_, s, _)| s > 0.)
                     .max_by(|a, b| a.1.total_cmp(&b.1));
                 // The flow's volume over this step along it: on the cell, and on those beside
                 // it where the flow is wider than the cell.
                 let step = next.map_or(domain.area[c].sqrt(), |(_, _, dist)| dist).min(length - run).max(0.);
                 let laid = per_metre * step;
-                let cell = domain.area[c].sqrt();
-                let beside: Vec<usize> = if width > 1.5 * cell { domain.edges(c).iter().map(|l| l.to).filter(|&n| !fixed[n]).collect() } else { vec![] };
-                let share = if beside.is_empty() { 1. } else { (cell / width).clamp(0.3, 1.) };
+                // Across the flow's width: the cells beside the path, out to half the width
+                // either side, walked across the grid square to the flow (on cells wider than
+                // the flow, the path's cell alone).
+                let across = lateral(domain, c, next.map(|(to, _, _)| to), width, fixed);
                 let aa = match vent.form {
                     Form::Shield => {
                         let slope = next.map_or(0., |(_, s, _)| s);
@@ -428,15 +476,12 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
                     lava[c] += v / domain.area[c];
                     mark(c, aa);
                 };
-                lay(c, laid * share);
-                for &n in &beside { lay(n, laid * (1. - share) / beside.len() as f64); }
+                for &n in &across { lay(n, laid / across.len() as f64); }
                 total += laid;
                 run += step;
                 match next {
-                    Some((to, _, _)) => c = to,
-                    // A pit: the flow ponds in it, the rest of its lava over the next steps here.
-                    None if step <= 0. => break,
-                    None => {}
+                    Some((to, _, _)) if step > 0. => { came = Some(c); c = to; }
+                    _ => break,
                 }
             }
         }
@@ -566,6 +611,26 @@ mod tests {
         let (mut when, mut aa) = (vec![crate::terrain::simulation::NO_LAVA; d.len()], vec![0.; d.len()]);
         erupt(&d, std::slice::from_ref(&s), &p, 0., 100., &mut ground, &mut lava, &fixed, Some((&mut when, &mut aa)));
         assert!((0..d.len()).filter(|&i| when[i] > 0.).all(|i| aa[i] == 1.));
+    }
+
+    #[test]
+    fn test_a_flow_is_as_thick_on_any_grid() {
+        // One shield flow on a slope, on grids of 100 m and 25 m: it lies its own thickness
+        // deep across its width, not heaped along its line on the finer.
+        let planet = Planet::new(crate::terrain::planet::PlanetParams { seed: 5, ..Default::default() });
+        for spacing in [100., 25.] {
+            let d = Domain::patch(10., 20., 128, spacing, planet.params.radius);
+            let centre = d.len() / 2 + 64;
+            let thickness = 8.;
+            let v = Vent::new(d.dirs[centre], (0., 1e9), 2e7, 3, Form::Shield, 2000., 1., thickness, None, &d);
+            let mut ground: Vec<f64> = (0..d.len()).map(|i| 2000. - 0.1 * d.radius * d.dirs[i].angle(&d.dirs[centre])).collect();
+            let mut lava = vec![0.; d.len()];
+            // (Flows leave a patch at its edge, as in a simulation.)
+            let edge: Vec<bool> = (0..d.len()).map(|i| d.edges(i).len() < 4).collect();
+            erupt(&d, std::slice::from_ref(&v), &VolcanoParams { roughness: 0., ..VolcanoParams::default() }, 0., 1., &mut ground, &mut lava, &edge, None);
+            let most = lava.iter().cloned().fold(0., f64::max);
+            assert!(most > 0.5 * thickness && most < 3. * thickness, "{} m grid: {} m thick", spacing, most);
+        }
     }
 
     #[test]

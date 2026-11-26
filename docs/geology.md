@@ -218,8 +218,10 @@ plains instead, not yet drawn.
   the floor's depth: about 9 km above a deep sea floor, eight times as wide. Convex, level at
   the summit, with a summit caldera, two or three rift zones stretching them into ridges, and
   an apron at the foot. The youngest erupt through the landscape's run: lava many times as
-  fast as an arc volcano's, mostly as thin, long flows from the summit and the rift zones
-  (`volcano::HOTSPOT_RATE`). Bare rock is only what has erupted in the landscape's time
+  fast as an arc volcano's, mostly as thin flows from the summit and the rift zones, each a
+  quarter of a cubic kilometre running tens of kilometres down the flanks as Mauna Loa's do,
+  laid a few metres thick across its width on any grid (`volcano::HOTSPOT_RATE`,
+  `SHIELD_FLOW_VOLUME`, `lateral`). Bare rock is only what has erupted in the landscape's time
   (`Terrain::fresh_lava`); the old basalt of the shields weathers and grows over like any rock.
 - **Older shields** sink under their weight and as the plate cools (two kilometres in their
   first few million years, five and a half in all), and their height above the sea wears down

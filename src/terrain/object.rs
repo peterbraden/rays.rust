@@ -842,17 +842,22 @@ fn eruption(planet: &crate::terrain::planet::Planet, relief: &Relief, frame: &cr
     for (i, s) in shields.iter().enumerate() {
         if hotspot::activity(s.age) < 0.2 || radius * s.dir.angle(&origin) > 200e3 { continue; }
         let summit = frame.to_scene(&s.dir, 0.);
-        // The crater: on the highest ground within a kilometre of where the summit was (the
-        // landscape's own eruptions have since built on it).
-        let mut low = (f64::NEG_INFINITY, summit.x, summit.z);
-        for a in -4..=4 {
-            for b in -4..=4 {
+        // The crater: on the flattest ground near the top within 3 km of where the summit
+        // was (the landscape's own eruptions, and its glaciers, have since reshaped it): of the
+        // points within 300 m of the highest, the one whose ground varies least over the lake.
+        let samples: Vec<(f64, f64, f64)> = (-12..=12).flat_map(|a| (-12..=12).map(move |b| (a, b)))
+            .filter(|(a, b)| a * a + b * b <= 144)
+            .map(|(a, b)| {
                 let (x, z) = (summit.x + 250. * a as f64, summit.z + 250. * b as f64);
-                if (a * a + b * b) > 16 { continue; }
-                let h = ground(x, z);
-                if h > low.0 { low = (h, x, z); }
-            }
-        }
+                (ground(x, z), x, z)
+            }).collect();
+        let top = samples.iter().map(|s| s.0).fold(f64::NEG_INFINITY, f64::max);
+        let roughness = |&(h, x, z): &(f64, f64, f64)| (0..8).map(|k| {
+            let a = k as f64 * std::f64::consts::TAU / 8.;
+            (ground(x + 150. * a.cos(), z + 150. * a.sin()) - h).abs()
+        }).fold(0., f64::max);
+        let low = samples.iter().filter(|s| s.0 > top - 300.)
+            .map(|s| (roughness(s), *s)).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, s)| s).unwrap();
         // (A shield still beneath the sea erupts there, unseen.)
         if low.0 <= 0. { continue; }
         let crater = Vector3::new(low.1, low.0, low.2);

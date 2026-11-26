@@ -59,6 +59,9 @@ pub struct Eruption {
 
 const CELL: f64 = 100.;
 
+/// `Eruption::heat`'s place along a channel for a lake.
+pub const LAKE: f64 = -1.;
+
 fn key(x: f64, z: f64) -> (i64, i64) { ((x / CELL).floor() as i64, (z / CELL).floor() as i64) }
 
 impl Eruption {
@@ -78,11 +81,11 @@ impl Eruption {
     }
 
     /// How hot the lava at scene point `p` is, 0 (none) to 1 (a channel's open core, or a
-    /// lake), and how far down its channel it is, 0 to 1 (0 on a lake).
+    /// lake), and how far down its channel it is, 0 to 1 (`LAKE` on a lake).
     pub fn heat(&self, p: &Vector3<f64>) -> Option<(f64, f64)> {
         for &(c, r) in &self.lakes {
             let d = (p.x - c.x).hypot(p.z - c.z);
-            if d < r { return Some((1. - smoothstep(0.85 * r, r, d), 0.)); }
+            if d < r { return Some((1. - smoothstep(0.85 * r, r, d), LAKE)); }
         }
         let mut best: Option<(f64, f64)> = None;
         for &(c, k) in self.cells.get(&key(p.x, p.z)).into_iter().flatten() {
@@ -105,23 +108,27 @@ impl Eruption {
 /// A channel from scene point `start` down the steepest way over the landscape's surface
 /// (`height` above the sea at scene x, z; the channel's points keep it as their y), in steps of `step` metres perturbed by up to `roughness`, for up to
 /// `length` metres or to the sea, from `seed`; `width` metres wide at the vent, spreading to
-/// three times that in a fan at its front.
+/// three times that in a fan at its front. Lava ponds in a hollow and spills over its lowest
+/// side, so a channel crosses pits up to `SPILL` metres deep; it never turns back on itself.
 pub fn channel(start: Vector3<f64>, height: &dyn Fn(f64, f64) -> f64, length: f64, width: f64, seed: u64) -> Channel {
     let step = 40.;
     let mut rng = Pcg32::new(seed, 11);
     let mut p = Vector3::new(start.x, height(start.x, start.z), start.z);
     let mut points = vec![p];
     let mut run = 0.;
+    let mut heading: Option<Vector3<f64>> = None;
     while run < length {
         let mut next: Option<(Vector3<f64>, f64)> = None;
         for k in 0..12 {
             let a = k as f64 * std::f64::consts::TAU / 12.;
             let (x, z) = (p.x + step * a.cos(), p.z + step * a.sin());
+            if heading.is_some_and(|d| d.x * a.cos() + d.z * a.sin() < 0.) { continue; }
             let h = height(x, z);
             let drop = p.y - h + 3. * (rng.next_f64() - 0.5);
-            if drop > 0. && next.is_none_or(|(_, d)| drop > d) { next = Some((Vector3::new(x, h, z), drop)); }
+            if drop > -SPILL && next.is_none_or(|(_, d)| drop > d) { next = Some((Vector3::new(x, h, z), drop)); }
         }
         let Some((q, _)) = next else { break };
+        heading = Some((q - p).normalize());
         p = q;
         points.push(p);
         run += step;
@@ -134,6 +141,9 @@ pub fn channel(start: Vector3<f64>, height: &dyn Fn(f64, f64) -> f64, length: f6
     }).collect();
     Channel { points, widths }
 }
+
+/// The deepest hollow a channel spills across, metres.
+const SPILL: f64 = 15.;
 
 /// The lava's material: the ground beneath (`crust`, the landscape's own ground cover) that
 /// also glows where `eruption` has lava.
@@ -151,6 +161,18 @@ impl ActiveLava {
     pub fn glow(&self, p: &Vector3<f64>) -> Color {
         let Some((heat, along)) = self.eruption.heat(p) else { return Color::black() };
         let n = |s: f64, o: f64| self.noise.fbm(p.x / s + o * 13., p.y / s, p.z / s, 3, 0.5, 2.);
+        if along == LAKE {
+            // A lake's crust: plates metres to tens of metres across, carried on the
+            // convecting lava and pulled apart at seams that glow at its full heat; open
+            // lava where the crust founders against the crater's wall.
+            let core = 1_430.;
+            let seams = 1. - smoothstep(0., 0.025, (n(18., 0.53) - 0.5).abs());
+            let fine = 1. - smoothstep(0., 0.03, (n(3., 0.31) - 0.5).abs());
+            let rim = 1. - heat;
+            let open = smoothstep(0.3, 0.9, rim + 0.4 * (n(25., 0.77) - 0.5));
+            let glow = open * luminance(core) + (1. - open) * (seams * luminance(core - 40.) + 0.3 * fine * luminance(core - 180.));
+            return crate::spectrum::Emission::blackbody(core).radiance() * (glow * heat.max(0.3) * self.per_nit);
+        }
         // Cracks in the crust: the noise's narrow valleys, metres apart, a decimetre wide.
         let cracks = 1. - smoothstep(0., 0.04, (n(2.5, 0.31) - 0.5).abs());
         // Open lava where the crust is torn: most at the core, in patches.
@@ -195,5 +217,14 @@ mod tests {
         let (h, along) = e.heat(&mid).unwrap();
         assert!(h > 0.9 && (along - 0.5).abs() < 0.05, "{} {}", h, along);
         assert!(e.heat(&(mid + Vector3::new(500., 0., 500.))).is_none());
+        assert_eq!(e.heat(&Vector3::new(0., 2000., 0.)).unwrap().1, LAKE);
+    }
+
+    #[test]
+    fn test_a_channel_spills_across_a_hollow() {
+        // A slope down x with a 10 m pit across it: the lava fills it and carries on.
+        let height = |x: f64, _z: f64| 1000. - 0.1 * x - 10. * (1. - ((x - 1000.) / 100.).powi(2)).max(0.);
+        let c = channel(Vector3::new(0., 0., 0.), &height, 3000., 30., 3);
+        assert!(c.points.last().unwrap().x > 2000., "stopped at {}", c.points.last().unwrap().x);
     }
 }

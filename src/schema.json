@@ -2785,6 +2785,12 @@
           ]
         },
         {
+          "name": "eruption",
+          "kind": "boolean",
+          "default": false,
+          "doc": "Show the active volcanoes erupting: each young hotspot shield still building holds a lava lake at its summit, with glowing channels running down from it and a rift zone (best seen at dusk or night)."
+        },
+        {
           "name": "close_level",
           "kind": "boolean",
           "default": true,

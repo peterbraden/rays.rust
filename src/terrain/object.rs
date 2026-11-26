@@ -815,7 +815,51 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         None => Box::new(mesh),
     };
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
-    SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }
+    let mut medium = LandscapeMedium::with_ground(ground, material);
+    if o["eruption"].as_bool().unwrap_or(false) {
+        let e = eruption(&planet, &relief, &frame);
+        say(format!("Landscape: erupting, {} lava lakes and {} channels", e.lakes.len(), e.channels.len()));
+        medium = medium.with_eruption(Arc::new(e), params.planet.seed);
+    }
+    SceneObject { geometry, medium: Box::new(medium) }
+}
+
+/// The eruption in progress about the scene (`terrain::eruption`): each young shield still
+/// building within 200 km (`hotspot::activity` over a fifth), a lava lake in its summit crater
+/// and channels from there and from a rift zone.
+fn eruption(planet: &crate::terrain::planet::Planet, relief: &Relief, frame: &crate::terrain::scenery::Frame) -> crate::terrain::eruption::Eruption {
+    use crate::terrain::{eruption, hotspot};
+    let radius = planet.params.radius;
+    let ground = |x: f64, z: f64| {
+        let d = frame.dir(x, z);
+        frame.to_scene(&d, relief.height(&d, &relief.slope(&d), 10.)).y
+    };
+    let (mut lakes, mut channels) = (vec![], vec![]);
+    let shields = &planet.shields().list;
+    let origin = frame.dir(0., 0.);
+    for (i, s) in shields.iter().enumerate() {
+        if hotspot::activity(s.age) < 0.2 || radius * s.dir.angle(&origin) > 200e3 { continue; }
+        let summit = frame.to_scene(&s.dir, 0.);
+        // The crater: on the highest ground within a kilometre of where the summit was (the
+        // landscape's own eruptions have since built on it).
+        let mut low = (f64::NEG_INFINITY, summit.x, summit.z);
+        for a in -4..=4 {
+            for b in -4..=4 {
+                let (x, z) = (summit.x + 250. * a as f64, summit.z + 250. * b as f64);
+                if (a * a + b * b) > 16 { continue; }
+                let h = ground(x, z);
+                if h > low.0 { low = (h, x, z); }
+            }
+        }
+        let crater = Vector3::new(low.1, low.0, low.2);
+        lakes.push((crater, 150.));
+        channels.push(eruption::channel(crater, &ground, 6000., 25., i as u64));
+        if let Some(rift) = s.rift_points(radius).get(2) {
+            let r = frame.to_scene(rift, 0.);
+            channels.push(eruption::channel(Vector3::new(r.x, 0., r.z), &ground, 8000., 35., i as u64 + 7));
+        }
+    }
+    eruption::Eruption::new(lakes, channels)
 }
 
 /// Cameras higher than this above the ground, metres, see no detail worth displacing: from

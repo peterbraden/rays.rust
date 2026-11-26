@@ -372,13 +372,16 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
         let cone = volume * (1. - vent.lava_fraction);
         let in_domain: f64 = vent.cone.iter().map(|&(c, w)| w * domain.area[c]).sum();
         let weight = in_domain.max(vent.integral);
-        let cone_aa = if vent.form == Form::Shield { 0. } else { 1. };
+        // (A shield's growth about its summit is its intrusions and the lobes stacked within
+        // it, not fresh flows over its surface: those are its flows'. A stratovolcano's or a
+        // cinder cone's is its scoria and ash, rubbly as ʻaʻā.)
+        let fresh_cone = vent.form != Form::Shield;
         for &(c, w) in &vent.cone {
             let h = cone * w / weight;
             ground[c] += h;
             lava[c] += h;
             total += h * domain.area[c];
-            if h > 0.05 { mark(c, cone_aa); }
+            if fresh_cone && h > 0.05 { mark(c, 1.); }
         }
 
         // Lava flows only from vents in the domain, from the vent or one of its rift zones:

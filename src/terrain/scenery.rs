@@ -1656,6 +1656,8 @@ impl MaterialModel for Land {
 pub struct LandscapeMedium {
     ground: Arc<Ground>,
     land: Box<dyn MaterialModel + Sync + Send>,
+    /// An eruption in progress, its lava glowing (`terrain::eruption`).
+    active: Option<crate::terrain::eruption::ActiveLava>,
     water: PhysicalOcean,
     /// Terminal lakes: shallow brine over a pale floor, greener and brighter than rivers.
     brine: PhysicalOcean,
@@ -1675,13 +1677,23 @@ impl LandscapeMedium {
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
             water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None },
             brine: PhysicalOcean { water: Color::new(0.03, 0.07, 0.065), roughness: 0.003, center: Some(centre), foam: None, absorption: None },
+            active: None,
             ground,
         }
+    }
+
+    /// With `eruption`'s lava glowing on the ground cover.
+    pub fn with_eruption(mut self, eruption: Arc<crate::terrain::eruption::Eruption>, seed: u64) -> LandscapeMedium {
+        self.active = Some(crate::terrain::eruption::ActiveLava {
+            eruption, crust: Box::new(Land { ground: self.ground.clone() }), noise: PerlinNoise::shuffled(seed.wrapping_add(919)),
+        });
+        self
     }
 }
 
 impl Medium for LandscapeMedium {
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
+        if let Some(a) = &self.active && a.eruption.heat(&pt).is_some() { return a; }
         if self.ground.wet(&pt) { &self.water }
         else if self.ground.salt_lake(&pt) { &self.brine }
         else { &*self.land }

@@ -2923,3 +2923,22 @@ C. Keep the cover on the host but only its colour: a texture of the cover per tr
 - Whether to start with bare ground and the cover's colour (most pixels in most scenes) and leave
   snow, ice and the library materials on the host for now, as `FlatMaterial` can mix kernel and
   host materials by point?
+
+### Decision and steps (option B, chosen)
+
+The riskiest assumption is that shading at vertices reproduces the picture; so it is tested
+first, on the CPU, before anything is ported:
+
+1. `MaterialModel::bake(context)`: a material's parameters at a point, as a plastic's (albedo,
+   refractive index, roughness; Lambertian as no coat), for `lambertian`, `plastic` and
+   `surface_layers` (the library's ground presets use only these). `Ground::bake(p, normal)`:
+   the cover averaged over several jittered evaluations (it picks the class and the kind of bare
+   ground at random): the shares of snow, ice and water, the snow's age, the ice's blueness, and
+   the bare ground's baked parameters.
+2. Flattening keeps, for the triangles of an object whose medium bakes, its three vertices'
+   values (a side table by primitive).
+3. On the CPU, the host shades such a triangle from its vertices' values, interpolated, with the
+   existing BSDFs: the picture against today's by FLIP, near and far, is the test of the
+   assumption.
+4. Then the kernels: a ground material reading the same values (`tables`), plastic as now, snow
+   and ice ported to `shaders/shared`, water as `MAT_WATER`; the landscape leaves the host.

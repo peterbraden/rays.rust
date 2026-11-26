@@ -1,7 +1,7 @@
 {
  "width": 640,
  "height": 427,
- "supersamples": 64,
+ "supersamples": 128,
  "max_depth": 12,
  "path_termination": "russian_roulette",
  "output": {

@@ -8,7 +8,7 @@
   "variables": {
     "wave": {"type": "breaker", "center": [0, 0, 0], "height": 2, "depth": 2, "width": 60, "stage": 0.95, "peel": 0.6, "seed": 3}
   },
-  "camera": {"location": [-9, -0.3, -5.5], "lookat": [2, 0.4, 0], "up": [0, 1, 0], "angle": 1.0},
+  "camera": {"location": [-1.5, -0.4, -4.2], "lookat": [0.5, 0.5, 0], "up": [0, 1, 0], "angle": 0.75},
   "sun": {"intensity": 4.9},
   "materials": {
     "SAND": {"type": "library", "name": "beach_sand", "waterline": 1e9}

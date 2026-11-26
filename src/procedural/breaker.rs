@@ -36,6 +36,12 @@ pub struct Breaker {
     /// from one end to the other.
     pub stage: f64,
     pub peel: f64,
+    /// How much the wave varies along its crest (0 for none, 1 by default): its height, how
+    /// thick its lip is and how far it throws, and the crest's line, bending in plan.
+    pub variation: f64,
+    /// This section's lip's thickness and throw, as multiples of the usual.
+    pub lip: f64,
+    pub throw: f64,
     /// How many points across a section and sections along the crest.
     pub resolution: (usize, usize),
     pub seed: u64,
@@ -72,6 +78,9 @@ impl Breaker {
             width: n("width", 40.).max(0.1),
             stage: n("stage", 0.9).clamp(0., 1.),
             peel: n("peel", 0.8),
+            variation: n("variation", 1.).max(0.),
+            lip: 1.,
+            throw: 1.,
             resolution: (resolution.0.max(40), resolution.1.max(2)),
             seed: SceneFile::parse_int(&o["seed"], 0) as u64,
         }
@@ -111,7 +120,7 @@ impl Breaker {
         let bed = -self.depth - 0.05 * h;
         let (front, back) = (-8. * h, 8. * h);
         let (bottom, top) = self.extremes();
-        let tip = top + THROW * stage.clamp(0., 1.);
+        let tip = top + THROW * self.throw.clamp(0.5, 1.1) * stage.clamp(0., 1.);
         // Fixed shares of the points: the face and the lip's underside, the lip's outer
         // surface, the back of the wave; the rest are the corners.
         let corners = 4;
@@ -131,7 +140,7 @@ impl Breaker {
         // Back over the lip's outer surface, thickening from the tip to the roof.
         let thickness = |phi: f64| {
             let u = if tip > top { ((tip - phi) / (tip - top)).clamp(0., 1.) } else { 1. };
-            h * (TIP + (ROOF - TIP) * u.powf(0.7))
+            h * self.lip.clamp(0.5, 1.6) * (TIP + (ROOF - TIP) * u.powf(0.7))
         };
         for i in 0..n_out {
             let phi = tip - (tip - top) * i as f64 / (n_out - 1) as f64;
@@ -170,10 +179,21 @@ impl Breaker {
         let sections: Vec<Vec<Vector3<f64>>> = (0..=along).map(|j| {
             let t = j as f64 / along as f64 - 0.5;
             let x = t * self.width;
-            let stage = (self.stage + self.peel * t).clamp(0., 1.);
-            let varied = Breaker { height: self.height * (1. + 0.08 * noise.noise(x / 9., 0.5, 1.7)), ..self.clone() };
+            // Along the crest: the stage peeling, and wandering a little; the wave higher where
+            // it has thrown further (the peak, the shoulder lower); the lip thicker or thinner,
+            // throwing further or less; and the crest's line bending, metres in tens.
+            let v = self.variation;
+            let wander = |scale: f64, seed: f64| noise.noise(x / scale, seed, 0.5);
+            let stage = (self.stage + self.peel * t + 0.08 * v * wander(7., 2.3)).clamp(0., 1.);
+            let varied = Breaker {
+                height: self.height * (1. + v * (0.25 * (stage - self.stage) + 0.1 * wander(9., 1.7))),
+                lip: 1. + 0.35 * v * wander(5., 3.1),
+                throw: 1. + 0.08 * v * wander(6., 4.9),
+                ..self.clone()
+            };
+            let bend = v * (1.0 * wander(20., 6.7) + 0.15 * x * x / self.width.max(1.));
             varied.section(stage, count).iter()
-                .map(|p| self.center + Vector3::new(x, p.y, p.x))
+                .map(|p| self.center + Vector3::new(x, p.y, p.x + bend))
                 .collect()
         }).collect();
         let mut positions: Vec<Vector3<f64>> = sections.concat();
@@ -313,8 +333,8 @@ mod tests {
 
     #[test]
     fn test_a_breakers_section_is_a_simple_loop() {
-        let w = wave();
-        for stage in [0., 0.3, 0.7, 1.] {
+        for (stage, lip, throw) in [(0., 1., 1.), (0.3, 1., 1.), (0.7, 1., 1.), (1., 1., 1.), (1., 0.5, 1.1), (1., 1.6, 0.5), (0.6, 1.6, 1.1)] {
+            let w = Breaker { lip, throw, ..wave() };
             let s = w.section(stage, 200);
             assert_eq!(s.len(), 200);
             assert!(signed_area(&s) > 0.);

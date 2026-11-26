@@ -903,6 +903,7 @@
         {"name": "width", "kind": "number", "default": 40, "doc": "The crest's length along x, m.", "min": 0.1},
         {"name": "stage", "kind": "number", "default": 0.9, "doc": "How far the lip has thrown at the crest's middle, 0 (a steep face) to 1 (about to land).", "min": 0, "max": 1},
         {"name": "peel", "kind": "number", "default": 0.8, "doc": "How much the stage changes from one end of the crest to the other (the wave peeling)."},
+        {"name": "variation", "kind": "number", "default": 1, "doc": "How much the wave varies along its crest: its height, its lip's thickness and throw, and the crest's line bending in plan (0 for none).", "min": 0},
         {"name": "resolution", "kind": "vec2", "default": [240, 120], "doc": "Points around a cross-section, and sections along the crest."},
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Varies the height along the crest."}
       ],

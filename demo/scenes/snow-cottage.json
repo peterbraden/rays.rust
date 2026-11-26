@@ -1,0 +1,45 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 256,
+  "chunk_size": 32,
+  "samples_per_chunk": 4,
+  "max_depth": 6,
+  "path_termination": "russian_roulette",
+  "light_sampler": "bvh",
+  "filter": "mitchell",
+  "adaptive": {"threshold": 0.015, "min_samples": 32},
+  "output": {"exposure": 4, "tonemap": "filmic", "glare": true},
+  "camera": {"location": [-7.5, 1.55, 13.5], "lookat": [0.4, 2.1, 0], "up": [0, 1, 0], "angle": 0.62, "aperture": 0.02},
+  "materials": {
+    "SNOW": {"type": "snow", "preset": "fresh", "sparkle": 0.08, "seed": 1},
+    "SPRUCE_NEEDLE_1": {"type": "leaf", "reflectance": [0.03, 0.08, 0.04], "transmittance": [0.01, 0.04, 0.015], "roughness": 0.2},
+    "SPRUCE_NEEDLE_2": {"type": "leaf", "reflectance": [0.04, 0.1, 0.05], "transmittance": [0.015, 0.05, 0.02], "roughness": 0.2},
+    "PINE_NEEDLE": {"type": "leaf", "reflectance": [0.06, 0.11, 0.05], "transmittance": [0.02, 0.06, 0.015], "roughness": 0.2},
+    "BARK_BASE": {"type": "lambertian", "albedo": [0.22, 0.17, 0.13]},
+    "BARK": {"type": "noise", "base_material": "BARK_BASE", "noise_type": "fbm", "octaves": 4, "scale": 2.5, "color": [0.36, 0.34, 0.3], "blend_factor": 0.6},
+    "LADEN_NEEDLE_1": {"type": "snow_cover", "material": "SPRUCE_NEEDLE_1", "cover": 0.5, "drift": 0.3, "snow": {"preset": "fresh"}, "seed": 3},
+    "LADEN_NEEDLE_2": {"type": "snow_cover", "material": "SPRUCE_NEEDLE_2", "cover": 0.45, "drift": 0.3, "snow": {"preset": "fresh"}, "seed": 4},
+    "LADEN_PINE_NEEDLE": {"type": "snow_cover", "material": "PINE_NEEDLE", "cover": 0.5, "drift": 0.3, "snow": {"preset": "fresh"}, "seed": 5},
+    "SNOWY_BARK": {"type": "snow_cover", "material": "BARK", "cover": 0.4, "drift": 0.2, "snow": {"preset": "settled"}, "seed": 6},
+    "GRANITE": {"type": "rock", "preset": "granite", "lichen": 0.3, "seed": 1},
+    "SNOWY_GRANITE": {"type": "snow_cover", "material": "GRANITE", "cover": 0.6, "drift": 0.15, "snow": {"preset": "fresh"}, "seed": 7}
+  },
+  "objects": [
+    {"type": "skysphere", "sun_direction": [0.45, -0.05, -1]},
+    {"type": "plane", "y": 0, "material": "SNOW", "normal": {"pattern": "bumps", "amount": 0.25, "scale": 1.5}},
+    {"type": "cottage", "location": [0, 0, 0], "yaw": -18, "seed": 3},
+    {"type": "tree", "species": "norway-spruce", "seed": 31, "location": [-9.5, 0, 7.5], "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"], "params": {"scale": 4.2, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},
+    {"type": "tree", "species": "balsam-fir", "seed": 32, "location": [7.5, 0, 2.5], "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"], "params": {"scale": 5.5, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},
+    {"type": "tree", "species": "norway-spruce", "seed": 33, "location": [5.2, 0, 9.5], "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"], "params": {"scale": 2.2, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},
+    {"type": "boulder", "location": [-5.2, -0.25, 5.2], "radius": 0.55, "angularity": 0.4, "seed": 4, "material": "SNOWY_GRANITE"},
+    {"type": "boulder", "location": [3.6, -0.3, 6.2], "radius": 0.4, "angularity": 0.5, "seed": 5, "material": "SNOWY_GRANITE"},
+    {"type": "forest", "seed": 12, "lod": {"pixels": 1}, "cache": "demo/scenes/.forest-cache", "area": {"min": [-90, -90], "max": [90, 40]}, "spacing": 4.5, "clearings": 0.05, "patch_size": 30, "patchiness": 0.3, "variants": 8,
+     "where": "min(1, max(0, (sqrt(x * x + 1.6 * (z - 6) * (z - 6)) - 16) / 8)) * min(1, max(0, (sqrt(((x + 7.5) * 0.874 + (z - 13.5) * 0.486) * ((x + 7.5) * 0.874 + (z - 13.5) * 0.486)) - 7 - 0.5 * max(0, ((x + 7.5) * 0.486 - (z - 13.5) * 0.874) - 14)) / 4))",
+     "species": [
+       {"species": "norway-spruce", "weight": 4, "spacing": 0.8, "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"]},
+       {"species": "balsam-fir", "weight": 3, "spacing": 0.7, "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"]},
+       {"species": "scots-pine", "weight": 1, "bark": "SNOWY_BARK", "leaves": "LADEN_PINE_NEEDLE"}
+     ]}
+  ]
+}

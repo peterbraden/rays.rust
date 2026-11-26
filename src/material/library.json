@@ -6122,382 +6122,622 @@
   },
   "scree": {
     "show": "landscape",
-    "doc": "Scree: angular stones from fist-sized to a few centimetres, each its own shade, lying on each other with dark gaps between, older stones grown with lichen.",
+    "doc": "Scree: angular stones from fist-sized to grit, packed edge to edge, each its own rock's colour (greys, a purplish and an ochre stone, a few pale ones), its broken faces lighter or darker, dark rims where they meet; modelled on ambientCG's Gravel043.",
     "variables": {
-      "big": {
-        "node": "multiply",
-        "inputs": [
-          0.2412,
-          {
-            "node": "smoothstep",
-            "from": 0.0,
-            "to": 0.4494,
-            "input": {
-              "node": "warp",
-              "amount": 0.0239,
-              "scale": 0.2205,
-              "seed": 662,
-              "octaves": 2,
-              "input": {
-                "node": "cells",
-                "style": "edges",
-                "scale": 0.1156,
-                "seed": 661
-              }
-            }
-          },
-          {
-            "node": "add",
-            "inputs": [
-              0.8921,
-              {
-                "node": "multiply",
-                "inputs": [
-                  0.1601,
-                  {
-                    "node": "warp",
-                    "amount": 0.0239,
-                    "scale": 0.2205,
-                    "seed": 662,
-                    "octaves": 2,
-                    "input": {
-                      "node": "cells",
-                      "style": "id",
-                      "scale": 0.1156,
-                      "seed": 661
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "mid": {
-        "node": "multiply",
-        "inputs": [
-          0.0411,
-          {
-            "node": "smoothstep",
-            "from": 0.0,
-            "to": 0.3009,
-            "input": {
-              "node": "warp",
-              "amount": 0.0117,
-              "scale": 0.1045,
-              "seed": 664,
-              "octaves": 2,
-              "input": {
-                "node": "cells",
-                "style": "edges",
-                "scale": 0.3338,
-                "seed": 663
-              }
-            }
-          },
-          {
-            "node": "add",
-            "inputs": [
-              0.3014,
-              {
-                "node": "multiply",
-                "inputs": [
-                  0.173,
-                  {
-                    "node": "warp",
-                    "amount": 0.0117,
-                    "scale": 0.1045,
-                    "seed": 664,
-                    "octaves": 2,
-                    "input": {
-                      "node": "cells",
-                      "style": "id",
-                      "scale": 0.3338,
-                      "seed": 663
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "small": {
-        "node": "multiply",
-        "inputs": [
-          0.0103,
-          {
-            "node": "smoothstep",
-            "from": 0.0,
-            "to": 0.1401,
-            "input": {
-              "node": "warp",
-              "amount": 0.0052,
-              "scale": 0.0881,
-              "seed": 666,
-              "octaves": 2,
-              "input": {
-                "node": "cells",
-                "style": "edges",
-                "scale": 0.0183,
-                "seed": 665
-              }
-            }
-          },
-          {
-            "node": "add",
-            "inputs": [
-              0.3003,
-              {
-                "node": "multiply",
-                "inputs": [
-                  0.4851,
-                  {
-                    "node": "warp",
-                    "amount": 0.0052,
-                    "scale": 0.0881,
-                    "seed": 666,
-                    "octaves": 2,
-                    "input": {
-                      "node": "cells",
-                      "style": "id",
-                      "scale": 0.0183,
-                      "seed": 665
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "id_big": {
-        "node": "warp",
-        "amount": 0.2413,
-        "scale": 0.0849,
-        "seed": 662,
-        "octaves": 2,
-        "input": {
-          "node": "cells",
-          "style": "id",
-          "scale": 0.1156,
-          "seed": 661
-        }
-      },
-      "id_mid": {
-        "node": "warp",
-        "amount": 0.0108,
-        "scale": 0.1045,
-        "seed": 664,
-        "octaves": 2,
-        "input": {
-          "node": "cells",
-          "style": "id",
-          "scale": 0.3338,
-          "seed": 663
-        }
-      },
-      "id_small": {
-        "node": "warp",
-        "amount": 0.0129,
-        "scale": 0.0881,
-        "seed": 666,
-        "octaves": 2,
-        "input": {
-          "node": "cells",
-          "style": "id",
-          "scale": 0.0183,
-          "seed": 665
-        }
-      },
-      "palette": [
-        [
-          0,
-          [
-            0.0565,
-            0.0612,
-            0.0629
-          ]
-        ],
-        [
-          0.3,
-          [
-            0.1324,
-            0.1166,
-            0.0725
-          ]
-        ],
-        [
-          0.6,
-          [
-            0.2138,
-            0.1991,
-            0.1752
-          ]
-        ],
-        [
-          0.85,
-          [
-            0.2941,
-            0.2583,
-            0.2149
-          ]
-        ],
-        [
-          1,
-          [
-            0.323,
-            0.289,
-            0.255
-          ]
-        ]
+      "grey": [
+        0.27,
+        0.27,
+        0.27
       ],
-      "tone": {
-        "node": "fractal",
-        "scale": 24.274,
-        "seed": 667,
-        "smallest": 0.8189
-      }
+      "grey_dark": [
+        0.15,
+        0.15,
+        0.16
+      ],
+      "grey_light": [
+        0.4,
+        0.4,
+        0.4
+      ],
+      "purple": [
+        0.25,
+        0.2,
+        0.22
+      ],
+      "ochre": [
+        0.42,
+        0.33,
+        0.2
+      ],
+      "pale": [
+        0.62,
+        0.6,
+        0.56
+      ],
+      "rim": [
+        0.05,
+        0.05,
+        0.05
+      ],
+      "fines": [
+        0.12,
+        0.12,
+        0.12
+      ]
     },
     "material": {
       "type": "lambertian",
       "albedo": {
         "pattern": {
-          "node": "subtract",
-          "a": "$big",
-          "b": {
-            "node": "multiply",
-            "inputs": [
-              0.0966,
-              {
-                "node": "smoothstep",
-                "from": 0,
-                "to": -0.0278,
-                "input": {
-                  "node": "max",
-                  "inputs": [
-                    "$mid",
-                    "$small"
-                  ]
-                }
-              }
-            ]
-          }
+          "node": "bombing",
+          "shape": "stone",
+          "cell": 0.04,
+          "size": [
+            0.02,
+            0.05
+          ],
+          "width": 0.75,
+          "density": 0.5,
+          "seed": 1331,
+          "output": "mask"
         },
         "color_map": [
           [
-            0.0065,
+            0,
             {
               "pattern": {
-                "node": "subtract",
-                "a": "$mid",
-                "b": {
-                  "node": "multiply",
-                  "inputs": [
-                    0.031,
-                    {
-                      "node": "smoothstep",
-                      "from": 0,
-                      "to": 0.1061,
-                      "input": "$small"
-                    }
-                  ]
-                }
+                "node": "bombing",
+                "shape": "stone",
+                "cell": 0.012,
+                "size": [
+                  0.008,
+                  0.02
+                ],
+                "width": 0.75,
+                "density": 1.4,
+                "seed": 1321,
+                "output": "mask"
               },
               "color_map": [
                 [
-                  -0.0178,
+                  0,
                   {
-                    "pattern": "$small",
+                    "pattern": {
+                      "node": "bombing",
+                      "shape": "stone",
+                      "cell": 0.006,
+                      "size": [
+                        0.003,
+                        0.009
+                      ],
+                      "width": 0.75,
+                      "density": 2.5,
+                      "seed": 1311,
+                      "output": "mask"
+                    },
                     "color_map": [
                       [
-                        -0.005,
-                        [
-                          0.05,
-                          0.048,
-                          0.045
-                        ]
+                        0,
+                        {
+                          "pattern": {
+                            "node": "fractal",
+                            "scale": 0.3,
+                            "seed": 1341,
+                            "smallest": 0.002
+                          },
+                          "color_map": [
+                            [
+                              -0.5,
+                              "$rim"
+                            ],
+                            [
+                              0.5,
+                              "$fines"
+                            ]
+                          ]
+                        }
                       ],
                       [
-                        0.0029,
+                        1,
                         {
-                          "pattern": "$id_small",
-                          "color_map": "$palette",
-                          "interpolation": "step"
+                          "pattern": {
+                            "node": "add",
+                            "inputs": [
+                              {
+                                "node": "multiply",
+                                "inputs": [
+                                  0.6,
+                                  {
+                                    "node": "bombing",
+                                    "shape": "stone",
+                                    "cell": 0.006,
+                                    "size": [
+                                      0.003,
+                                      0.009
+                                    ],
+                                    "width": 0.75,
+                                    "density": 2.5,
+                                    "seed": 1311,
+                                    "output": "facet"
+                                  }
+                                ]
+                              },
+                              {
+                                "node": "multiply",
+                                "inputs": [
+                                  -1.0,
+                                  {
+                                    "node": "bombing",
+                                    "shape": "stone",
+                                    "cell": 0.006,
+                                    "size": [
+                                      0.003,
+                                      0.009
+                                    ],
+                                    "width": 0.75,
+                                    "density": 2.5,
+                                    "seed": 1311,
+                                    "output": "edge"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          "color_map": [
+                            [
+                              -0.7,
+                              "$rim"
+                            ],
+                            [
+                              0.15,
+                              {
+                                "pattern": {
+                                  "node": "bombing",
+                                  "shape": "stone",
+                                  "cell": 0.006,
+                                  "size": [
+                                    0.003,
+                                    0.009
+                                  ],
+                                  "width": 0.75,
+                                  "density": 2.5,
+                                  "seed": 1311,
+                                  "output": "id"
+                                },
+                                "interpolation": "step",
+                                "color_map": [
+                                  [
+                                    0,
+                                    "$grey_dark"
+                                  ],
+                                  [
+                                    0.25,
+                                    "$grey"
+                                  ],
+                                  [
+                                    0.55,
+                                    "$grey_light"
+                                  ],
+                                  [
+                                    0.72,
+                                    "$purple"
+                                  ],
+                                  [
+                                    0.84,
+                                    "$ochre"
+                                  ],
+                                  [
+                                    0.94,
+                                    "$pale"
+                                  ]
+                                ]
+                              }
+                            ],
+                            [
+                              0.75,
+                              {
+                                "pattern": {
+                                  "node": "bombing",
+                                  "shape": "stone",
+                                  "cell": 0.006,
+                                  "size": [
+                                    0.003,
+                                    0.009
+                                  ],
+                                  "width": 0.75,
+                                  "density": 2.5,
+                                  "seed": 1311,
+                                  "output": "id"
+                                },
+                                "interpolation": "step",
+                                "color_map": [
+                                  [
+                                    0,
+                                    "$grey_dark"
+                                  ],
+                                  [
+                                    0.25,
+                                    "$grey"
+                                  ],
+                                  [
+                                    0.55,
+                                    "$grey_light"
+                                  ],
+                                  [
+                                    0.72,
+                                    "$purple"
+                                  ],
+                                  [
+                                    0.84,
+                                    "$ochre"
+                                  ],
+                                  [
+                                    0.94,
+                                    "$pale"
+                                  ]
+                                ]
+                              }
+                            ]
+                          ]
                         }
                       ]
                     ]
                   }
                 ],
                 [
-                  -0.0115,
+                  1,
                   {
-                    "pattern": "$id_mid",
-                    "color_map": "$palette",
-                    "interpolation": "step"
+                    "pattern": {
+                      "node": "add",
+                      "inputs": [
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.6,
+                            {
+                              "node": "bombing",
+                              "shape": "stone",
+                              "cell": 0.012,
+                              "size": [
+                                0.008,
+                                0.02
+                              ],
+                              "width": 0.75,
+                              "density": 1.4,
+                              "seed": 1321,
+                              "output": "facet"
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            -1.0,
+                            {
+                              "node": "bombing",
+                              "shape": "stone",
+                              "cell": 0.012,
+                              "size": [
+                                0.008,
+                                0.02
+                              ],
+                              "width": 0.75,
+                              "density": 1.4,
+                              "seed": 1321,
+                              "output": "edge"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "color_map": [
+                      [
+                        -0.7,
+                        "$rim"
+                      ],
+                      [
+                        0.15,
+                        {
+                          "pattern": {
+                            "node": "bombing",
+                            "shape": "stone",
+                            "cell": 0.012,
+                            "size": [
+                              0.008,
+                              0.02
+                            ],
+                            "width": 0.75,
+                            "density": 1.4,
+                            "seed": 1321,
+                            "output": "id"
+                          },
+                          "interpolation": "step",
+                          "color_map": [
+                            [
+                              0,
+                              "$grey_dark"
+                            ],
+                            [
+                              0.25,
+                              "$grey"
+                            ],
+                            [
+                              0.55,
+                              "$grey_light"
+                            ],
+                            [
+                              0.72,
+                              "$purple"
+                            ],
+                            [
+                              0.84,
+                              "$ochre"
+                            ],
+                            [
+                              0.94,
+                              "$pale"
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        0.75,
+                        {
+                          "pattern": {
+                            "node": "bombing",
+                            "shape": "stone",
+                            "cell": 0.012,
+                            "size": [
+                              0.008,
+                              0.02
+                            ],
+                            "width": 0.75,
+                            "density": 1.4,
+                            "seed": 1321,
+                            "output": "id"
+                          },
+                          "interpolation": "step",
+                          "color_map": [
+                            [
+                              0,
+                              "$grey_dark"
+                            ],
+                            [
+                              0.25,
+                              "$grey"
+                            ],
+                            [
+                              0.55,
+                              "$grey_light"
+                            ],
+                            [
+                              0.72,
+                              "$purple"
+                            ],
+                            [
+                              0.84,
+                              "$ochre"
+                            ],
+                            [
+                              0.94,
+                              "$pale"
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
                   }
                 ]
               ]
             }
           ],
           [
-            0.0273,
+            1,
             {
-              "pattern": "$id_big",
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.6,
+                      {
+                        "node": "bombing",
+                        "shape": "stone",
+                        "cell": 0.04,
+                        "size": [
+                          0.02,
+                          0.05
+                        ],
+                        "width": 0.75,
+                        "density": 0.5,
+                        "seed": 1331,
+                        "output": "facet"
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      -1.0,
+                      {
+                        "node": "bombing",
+                        "shape": "stone",
+                        "cell": 0.04,
+                        "size": [
+                          0.02,
+                          0.05
+                        ],
+                        "width": 0.75,
+                        "density": 0.5,
+                        "seed": 1331,
+                        "output": "edge"
+                      }
+                    ]
+                  }
+                ]
+              },
               "color_map": [
                 [
-                  -0.4744,
-                  [
-                    0.106,
-                    0.1017,
-                    0.0989
-                  ]
+                  -0.7,
+                  "$rim"
                 ],
                 [
-                  0.0576,
-                  [
-                    0.1199,
-                    0.1287,
-                    0.1249
-                  ]
+                  0.15,
+                  {
+                    "pattern": {
+                      "node": "bombing",
+                      "shape": "stone",
+                      "cell": 0.04,
+                      "size": [
+                        0.02,
+                        0.05
+                      ],
+                      "width": 0.75,
+                      "density": 0.5,
+                      "seed": 1331,
+                      "output": "id"
+                    },
+                    "interpolation": "step",
+                    "color_map": [
+                      [
+                        0,
+                        "$grey_dark"
+                      ],
+                      [
+                        0.25,
+                        "$grey"
+                      ],
+                      [
+                        0.55,
+                        "$grey_light"
+                      ],
+                      [
+                        0.72,
+                        "$purple"
+                      ],
+                      [
+                        0.84,
+                        "$ochre"
+                      ],
+                      [
+                        0.94,
+                        "$pale"
+                      ]
+                    ]
+                  }
                 ],
                 [
-                  0.5896,
-                  [
-                    0.2032,
-                    0.21,
-                    0.2009
-                  ]
-                ],
-                [
-                  0.9443,
-                  [
-                    0.3177,
-                    0.3288,
-                    0.2634
-                  ]
-                ],
-                [
-                  1.299,
-                  [
-                    0.38,
-                    0.37,
-                    0.3
-                  ]
+                  0.75,
+                  {
+                    "pattern": {
+                      "node": "bombing",
+                      "shape": "stone",
+                      "cell": 0.04,
+                      "size": [
+                        0.02,
+                        0.05
+                      ],
+                      "width": 0.75,
+                      "density": 0.5,
+                      "seed": 1331,
+                      "output": "id"
+                    },
+                    "interpolation": "step",
+                    "color_map": [
+                      [
+                        0,
+                        "$grey_dark"
+                      ],
+                      [
+                        0.25,
+                        "$grey"
+                      ],
+                      [
+                        0.55,
+                        "$grey_light"
+                      ],
+                      [
+                        0.72,
+                        "$purple"
+                      ],
+                      [
+                        0.84,
+                        "$ochre"
+                      ],
+                      [
+                        0.94,
+                        "$pale"
+                      ]
+                    ]
+                  }
                 ]
-              ],
-              "interpolation": "step"
+              ]
             }
           ]
         ]
       },
       "normal": {
         "graph": {
-          "node": "max",
+          "node": "add",
           "inputs": [
-            "$big",
-            "$mid",
-            "$small"
+            {
+              "node": "multiply",
+              "inputs": [
+                0.006666666666666667,
+                {
+                  "node": "bombing",
+                  "shape": "stone",
+                  "cell": 0.006,
+                  "size": [
+                    0.003,
+                    0.009
+                  ],
+                  "width": 0.75,
+                  "density": 2.5,
+                  "seed": 1311,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.013333333333333334,
+                {
+                  "node": "bombing",
+                  "shape": "stone",
+                  "cell": 0.012,
+                  "size": [
+                    0.008,
+                    0.02
+                  ],
+                  "width": 0.75,
+                  "density": 1.4,
+                  "seed": 1321,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.02,
+                {
+                  "node": "bombing",
+                  "shape": "stone",
+                  "cell": 0.04,
+                  "size": [
+                    0.02,
+                    0.05
+                  ],
+                  "width": 0.75,
+                  "density": 0.5,
+                  "seed": 1331,
+                  "output": "height"
+                }
+              ]
+            }
           ]
         },
         "amount": 1
@@ -6512,274 +6752,57 @@
         "params": [
           {
             "field": "scale",
-            "min": 0.12,
-            "max": 0.6,
+            "min": 0.7,
+            "max": 1.4,
             "log": true,
-            "default": 1.0
+            "default": 1
           },
           {
-            "path": [
-              "variables",
-              "palette",
-              0,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "grey"
+              ],
+              [
+                "variables",
+                "grey_dark"
+              ],
+              [
+                "variables",
+                "grey_light"
+              ],
+              [
+                "variables",
+                "rim"
+              ],
+              [
+                "variables",
+                "fines"
+              ]
+            ]
           },
           {
-            "path": [
-              "variables",
-              "palette",
-              1,
-              1
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "purple"
+              ],
+              [
+                "variables",
+                "ochre"
+              ],
+              [
+                "variables",
+                "pale"
+              ]
             ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "variables",
-              "palette",
-              2,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "variables",
-              "palette",
-              3,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "variables",
-              "palette",
-              4,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "material",
-              "albedo",
-              "color_map",
-              0,
-              1,
-              "color_map",
-              0,
-              1,
-              "color_map",
-              0,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "material",
-              "albedo",
-              "color_map",
-              1,
-              1,
-              "color_map",
-              0,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "material",
-              "albedo",
-              "color_map",
-              1,
-              1,
-              "color_map",
-              1,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "material",
-              "albedo",
-              "color_map",
-              1,
-              1,
-              "color_map",
-              2,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "material",
-              "albedo",
-              "color_map",
-              1,
-              1,
-              "color_map",
-              3,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
-          },
-          {
-            "path": [
-              "material",
-              "albedo",
-              "color_map",
-              1,
-              1,
-              "color_map",
-              4,
-              1
-            ],
-            "kind": "color",
-            "max": 0.7,
-            "chroma": 0.3
+            "chroma": 0.05
           }
-        ],
-        "fit": {
-          "loss": {
-            "start": 65.28838,
-            "fitted": 2.83042
-          },
-          "iterations": 60,
-          "resolution": 128,
-          "samples": 1,
-          "loss_kind": "floor+detail+solved+free",
-          "date": "2026-11-25",
-          "applied": true,
-          "values": {
-            "variables.big.inputs.0": 0.2412,
-            "variables.big.inputs.1.to": 0.4494,
-            "variables.big.inputs.1.input.amount": 0.0239,
-            "variables.big.inputs.1.input.scale": 0.2205,
-            "variables.big.inputs.1.input.input.scale": 0.1156,
-            "variables.big.inputs.2.inputs.0": 0.8921,
-            "variables.big.inputs.2.inputs.1.inputs.0": 0.1601,
-            "variables.big.inputs.2.inputs.1.inputs.1.amount": 0.0239,
-            "variables.big.inputs.2.inputs.1.inputs.1.scale": 0.2205,
-            "variables.big.inputs.2.inputs.1.inputs.1.input.scale": 0.1156,
-            "variables.mid.inputs.0": 0.0411,
-            "variables.mid.inputs.1.to": 0.3009,
-            "variables.mid.inputs.1.input.amount": 0.0117,
-            "variables.mid.inputs.1.input.scale": 0.1045,
-            "variables.mid.inputs.1.input.input.scale": 0.3338,
-            "variables.mid.inputs.2.inputs.0": 0.3014,
-            "variables.mid.inputs.2.inputs.1.inputs.0": 0.173,
-            "variables.mid.inputs.2.inputs.1.inputs.1.amount": 0.0117,
-            "variables.mid.inputs.2.inputs.1.inputs.1.scale": 0.1045,
-            "variables.mid.inputs.2.inputs.1.inputs.1.input.scale": 0.3338,
-            "variables.small.inputs.0": 0.0103,
-            "variables.small.inputs.1.to": 0.1401,
-            "variables.small.inputs.1.input.amount": 0.0052,
-            "variables.small.inputs.1.input.scale": 0.0881,
-            "variables.small.inputs.1.input.input.scale": 0.0183,
-            "variables.small.inputs.2.inputs.0": 0.3003,
-            "variables.small.inputs.2.inputs.1.inputs.0": 0.4851,
-            "variables.small.inputs.2.inputs.1.inputs.1.amount": 0.0052,
-            "variables.small.inputs.2.inputs.1.inputs.1.scale": 0.0881,
-            "variables.small.inputs.2.inputs.1.inputs.1.input.scale": 0.0183,
-            "variables.id_big.amount": 0.2413,
-            "variables.id_big.scale": 0.0849,
-            "variables.id_big.input.scale": 0.1156,
-            "variables.id_mid.amount": 0.0108,
-            "variables.id_mid.scale": 0.1045,
-            "variables.id_mid.input.scale": 0.3338,
-            "variables.id_small.amount": 0.0129,
-            "variables.id_small.scale": 0.0881,
-            "variables.id_small.input.scale": 0.0183,
-            "variables.palette.0.1": [
-              0.0565,
-              0.0612,
-              0.0629
-            ],
-            "variables.palette.1.1": [
-              0.1324,
-              0.1166,
-              0.0725
-            ],
-            "variables.palette.2.1": [
-              0.2138,
-              0.1991,
-              0.1752
-            ],
-            "variables.palette.3.1": [
-              0.2941,
-              0.2583,
-              0.2149
-            ],
-            "variables.tone.scale": 24.274,
-            "variables.tone.smallest": 0.8189,
-            "material.albedo.pattern.b.inputs.0": 0.0966,
-            "material.albedo.pattern.b.inputs.1.to": -0.0278,
-            "material.albedo.color_map.0.0": 0.0065,
-            "material.albedo.color_map.0.1.pattern.b.inputs.0": 0.031,
-            "material.albedo.color_map.0.1.pattern.b.inputs.1.to": 0.1061,
-            "material.albedo.color_map.0.1.color_map.0.0": -0.0178,
-            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.0": -0.005,
-            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.0": 0.0029,
-            "material.albedo.color_map.0.1.color_map.1.0": -0.0115,
-            "material.albedo.color_map.1.0": 0.0273,
-            "material.albedo.color_map.1.1.color_map.0.0": -0.4744,
-            "material.albedo.color_map.1.1.color_map.0.1": [
-              0.106,
-              0.1017,
-              0.0989
-            ],
-            "material.albedo.color_map.1.1.color_map.1.0": 0.0576,
-            "material.albedo.color_map.1.1.color_map.1.1": [
-              0.1199,
-              0.1287,
-              0.1249
-            ],
-            "material.albedo.color_map.1.1.color_map.2.0": 0.5896,
-            "material.albedo.color_map.1.1.color_map.2.1": [
-              0.2032,
-              0.21,
-              0.2009
-            ],
-            "material.albedo.color_map.1.1.color_map.3.0": 0.9443,
-            "material.albedo.color_map.1.1.color_map.3.1": [
-              0.3177,
-              0.3288,
-              0.2634
-            ],
-            "material.albedo.color_map.1.1.color_map.4.0": 1.299,
-            "scale": 0.1843
-          }
-        }
+        ]
       }
-    ],
-    "scale": 0.1843
+    ]
   },
   "river_gravel": {
     "show": "landscape",

@@ -15103,24 +15103,24 @@
     "doc": "A dried river bed: pale silty mud split into plates a hand or two across, their edges curled up and lighter, finer cracks within them, each plate its own shade; modelled on Poly Haven's mud_cracked_dry_riverbed_002.",
     "variables": {
       "mud": [
-        0.47,
-        0.38,
-        0.29
+        0.3184,
+        0.216,
+        0.1374
       ],
       "mud2": [
-        0.37,
-        0.29,
-        0.22
+        0.3737,
+        0.2823,
+        0.2048
       ],
       "crack": [
-        0.2,
-        0.15,
-        0.11
+        0.156,
+        0.0946,
+        0.0525
       ],
       "lip": [
-        0.56,
-        0.47,
-        0.37
+        0.5347,
+        0.4226,
+        0.3097
       ]
     },
     "material": {
@@ -15128,44 +15128,44 @@
       "albedo": {
         "pattern": {
           "node": "smoothstep",
-          "from": 0.025,
+          "from": 0.3075,
           "to": 0.0,
           "input": {
             "node": "warp",
-            "amount": 0.008,
-            "scale": 0.084,
+            "amount": 0.0084,
+            "scale": 0.0628,
             "seed": 1212,
             "octaves": 2,
             "input": {
               "node": "cells",
               "style": "edges",
-              "scale": 0.14,
+              "scale": 0.0524,
               "seed": 1211
             }
           }
         },
         "color_map": [
           [
-            0,
+            0.1294,
             {
               "pattern": {
                 "node": "multiply",
                 "inputs": [
-                  0.4,
+                  0.589,
                   {
                     "node": "smoothstep",
-                    "from": 0.03,
+                    "from": 0.1467,
                     "to": 0.0,
                     "input": {
                       "node": "warp",
-                      "amount": 0.005,
-                      "scale": 0.036,
+                      "amount": 0.0141,
+                      "scale": 0.0301,
                       "seed": 1222,
                       "octaves": 2,
                       "input": {
                         "node": "cells",
                         "style": "edges",
-                        "scale": 0.06,
+                        "scale": 0.238,
                         "seed": 1221
                       }
                     }
@@ -15174,29 +15174,29 @@
               },
               "color_map": [
                 [
-                  0,
+                  0.064,
                   {
                     "pattern": {
                       "node": "smoothstep",
-                      "from": 0.07,
-                      "to": 0.025,
+                      "from": 0.0883,
+                      "to": 0.0206,
                       "input": {
                         "node": "warp",
-                        "amount": 0.008,
-                        "scale": 0.084,
+                        "amount": 0.0084,
+                        "scale": 0.0628,
                         "seed": 1212,
                         "octaves": 2,
                         "input": {
                           "node": "cells",
                           "style": "edges",
-                          "scale": 0.14,
+                          "scale": 0.0524,
                           "seed": 1211
                         }
                       }
                     },
                     "color_map": [
                       [
-                        0,
+                        0.2231,
                         {
                           "pattern": {
                             "node": "add",
@@ -15204,51 +15204,51 @@
                               {
                                 "node": "multiply",
                                 "inputs": [
-                                  0.4,
+                                  0.6741,
                                   {
                                     "node": "cells",
                                     "style": "id",
-                                    "scale": 0.14,
+                                    "scale": 0.0524,
                                     "seed": 1211
                                   }
                                 ]
                               },
                               {
                                 "node": "fractal",
-                                "scale": 0.25,
+                                "scale": 0.1869,
                                 "seed": 1231,
-                                "smallest": 0.004
+                                "smallest": 0.001
                               }
                             ]
                           },
                           "color_map": [
                             [
-                              -0.4,
+                              -0.4112,
                               "$mud2"
                             ],
                             [
-                              0.7,
+                              0.2385,
                               "$mud"
                             ]
                           ]
                         }
                       ],
                       [
-                        1,
+                        0.7324,
                         "$lip"
                       ]
                     ]
                   }
                 ],
                 [
-                  1,
+                  1.4281,
                   "$crack"
                 ]
               ]
             }
           ],
           [
-            1,
+            1.4688,
             "$crack"
           ]
         ]
@@ -15374,17 +15374,75 @@
             ]
           }
         ],
-        "hold": [
-          {
-            "node": "cells",
-            "field": "scale"
+        "fit": {
+          "loss": {
+            "start": 112.09042,
+            "fitted": 1.545046
           },
-          {
-            "node": "warp",
-            "field": "scale"
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 1.438724,
+            "author_solved": 8.579141,
+            "patches": 3,
+            "chosen": "generation 54's best"
+          },
+          "date": "2026-11-26",
+          "applied": true,
+          "values": {
+            "scale": 0.7408,
+            "variables.mud": [
+              0.3184,
+              0.216,
+              0.1374
+            ],
+            "variables.mud2": [
+              0.3737,
+              0.2823,
+              0.2048
+            ],
+            "variables.lip": [
+              0.5347,
+              0.4226,
+              0.3097
+            ],
+            "variables.crack": [
+              0.156,
+              0.0946,
+              0.0525
+            ],
+            "material.albedo.pattern.from": 0.3075,
+            "material.albedo.pattern.input.amount": 0.0084,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.input.amount": 0.0084,
+            "material.albedo.pattern.input.scale": 0.0628,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.input.scale": 0.0628,
+            "material.albedo.pattern.input.input.scale": 0.0524,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.input.input.scale": 0.0524,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.0.inputs.1.scale": 0.0524,
+            "material.albedo.color_map.0.0": 0.1294,
+            "material.albedo.color_map.1.0": 1.4688,
+            "material.albedo.color_map.0.1.pattern.inputs.0": 0.589,
+            "material.albedo.color_map.0.1.pattern.inputs.1.from": 0.1467,
+            "material.albedo.color_map.0.1.pattern.inputs.1.input.amount": 0.0141,
+            "material.albedo.color_map.0.1.pattern.inputs.1.input.scale": 0.0301,
+            "material.albedo.color_map.0.1.pattern.inputs.1.input.input.scale": 0.238,
+            "material.albedo.color_map.0.1.color_map.0.0": 0.064,
+            "material.albedo.color_map.0.1.color_map.1.0": 1.4281,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.from": 0.0883,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.to": 0.0206,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.0": 0.2231,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.0": 0.7324,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.0.inputs.0": 0.6741,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.1.scale": 0.1869,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.1.smallest": 0.001,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.0": -0.4112,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.0": 0.2385
           }
-        ]
+        }
       }
-    ]
+    ],
+    "scale": 0.7408
   }
 }

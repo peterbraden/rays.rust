@@ -1071,7 +1071,7 @@ fn lava_material(kind: Bare, seed: u64) -> serde_json::Value {
             let lobes = serde_json::json!({"node": "cells", "style": "stones", "plan": true, "scale": 5, "seed": seed});
             let ropes = serde_json::json!({"node": "phasor", "wavelength": 0.12, "plan": true, "seed": seed + 1});
             let grain = serde_json::json!({"node": "fractal", "scale": 0.5, "smallest": 0.01, "seed": seed + 2});
-            serde_json::json!({"type": "plastic", "refractive_index": 1.55, "roughness": 0.25,
+            serde_json::json!({"type": "plastic", "refractive_index": 1.55, "roughness": 0.5,
                 "albedo": {"pattern": {"node": "fractal", "scale": 3, "smallest": 0.05, "seed": seed + 3}, "interpolation": "smooth",
                     "color_map": [[0, [0.028, 0.028, 0.032]], [0.5, [0.04, 0.04, 0.045]], [1, [0.07, 0.07, 0.08]]]},
                 "normal": {"graph": {"node": "add", "inputs": [
@@ -1529,8 +1529,7 @@ impl Ground {
     /// dry leeward flows stand bare for millennia): about 500 years at 2,000 mm of rain a year,
     /// as the rain to the -1.5. Each layer's lava blended into the coarser ones' as their
     /// surfaces are (their flows took their own ways), read at a point jittered within a cell
-    /// and warped, so the flows' edges are ragged rather than the cells' squares. None where
-    /// no lava has flowed.
+    /// and warped, so the flows' edges are ragged. None where no lava has flowed.
     fn lava(&self, d: &Vector3<f64>, h: f64, n: &dyn Fn(f64, f64) -> f64) -> Option<(Color, Shares, f64)> {
         use crate::graph::{Field, LAVA_NEVER};
         let rain = self.wandering_climate(d, h, 0.).map_or(1000., |c| c.precipitation).max(50.);
@@ -1547,9 +1546,10 @@ impl Ground {
             if w <= 0. { continue; }
             rest -= w;
             let cell = l.spacing;
-            let warp = |o: f64| cell * (1.2 * (n(2. * cell, o) - 0.5) + 0.75 * (rand() - 0.5));
+            let warp = |o: f64| cell * (1.6 * (n(2. * cell, o) - 0.5) + (rand() - 0.5));
             let j = (d + (t1 * warp(0.29) + t2 * warp(0.53)) / r).normalize();
-            if l.class_at(&j) != LAVA { continue; }
+            // (By its age, interpolated between the cells' corners, not the cells' classes,
+            // whose squares show from afar: past the flows' edges it rises steeply to never.)
             let age = l.fields.at(&l.domain, Field::LavaAge, &j, h).unwrap_or(LAVA_NEVER);
             if age >= LAVA_NEVER { continue; }
             let aa = l.fields.at(&l.domain, Field::Aa, &j, h).unwrap_or(1.);

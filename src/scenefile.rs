@@ -938,6 +938,7 @@ impl SceneFile {
             let start = web_time::Instant::now();
             let name = format!("{}{}", obj["type"].as_str().unwrap_or("?"),
                 obj["src"].as_str().or(obj["item"]["src"].as_str()).map_or(String::new(), |s| format!(" {}", s)));
+            crate::report::enter(format!("build: objects[{}] ({})", i, name));
             let built: Vec<Arc<SceneObject>> = if obj["type"] == "tree" {
                 SceneFile::parse_tree(&obj, materials, media)
             } else if obj["type"] == "forest" {

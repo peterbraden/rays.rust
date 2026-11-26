@@ -204,6 +204,70 @@ fn source_revision() -> (Option<String>, Option<bool>) {
     (commit, dirty)
 }
 
+/// The process's memory and the machine's now (`report::Reading`). macOS: the footprint and
+/// its lifetime peak and page-ins by `proc_pid_rusage`; free memory as `memory_pressure`
+/// gives it (`kern.memorystatus_level`, a percentage, of the machine's); swapping by
+/// `host_statistics64`.
+#[cfg(target_os = "macos")]
+fn read_memory() -> Option<report::Reading> {
+    let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
+    let got = unsafe { libc::proc_pid_rusage(std::process::id() as i32, libc::RUSAGE_INFO_V4, (&mut info as *mut libc::rusage_info_v4).cast()) };
+    if got != 0 {
+        return None;
+    }
+    let mut vm: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    #[allow(deprecated)]
+    let host = unsafe { libc::mach_host_self() };
+    let vm_ok = unsafe { libc::host_statistics64(host, libc::HOST_VM_INFO64, (&mut vm as *mut libc::vm_statistics64).cast(), &mut count) } == 0;
+    let level = sysctl("kern.memorystatus_level").and_then(|b| Some(u32::from_ne_bytes(b.get(..4)?.try_into().ok()?)));
+    let free = level.zip(machine_memory()).map_or(0, |(percent, total)| total / 100 * percent as u64);
+    Some(report::Reading {
+        footprint: info.ri_phys_footprint,
+        peak: info.ri_lifetime_max_phys_footprint,
+        pageins: info.ri_pageins,
+        free,
+        swapins: if vm_ok { vm.swapins } else { 0 },
+        swapouts: if vm_ok { vm.swapouts } else { 0 },
+    })
+}
+
+/// As on macOS, from `/proc`: resident size and its peak, major faults, available memory,
+/// pages swapped.
+#[cfg(target_os = "linux")]
+fn read_memory() -> Option<report::Reading> {
+    let kb = |v: String| v.trim_end_matches("kB").trim().parse::<u64>().ok().map(|k| k * 1024);
+    let vmstat = std::fs::read_to_string("/proc/vmstat").unwrap_or_default();
+    let counter = |name: &str| vmstat.lines().find_map(|l| l.strip_prefix(name).and_then(|v| v.trim().parse::<u64>().ok())).unwrap_or(0);
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    // Fields after the command's closing parenthesis: majflt is the tenth.
+    let majflt = stat.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().nth(9)?.parse().ok()).unwrap_or(0);
+    Some(report::Reading {
+        footprint: proc_field("self/status", "VmRSS").and_then(kb)?,
+        peak: proc_field("self/status", "VmHWM").and_then(kb).unwrap_or(0),
+        pageins: majflt,
+        free: proc_field("meminfo", "MemAvailable").and_then(kb).unwrap_or(0),
+        swapins: counter("pswpin "),
+        swapouts: counter("pswpout "),
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn read_memory() -> Option<report::Reading> {
+    None
+}
+
+/// Read memory into the run's report every `report::memory_interval()` seconds, for as long as
+/// the program runs.
+fn start_memory_sampler() {
+    std::thread::spawn(|| loop {
+        if let Some(r) = read_memory() {
+            report::log_memory(r);
+        }
+        std::thread::sleep(Duration::from_secs_f64(report::memory_interval()));
+    });
+}
+
 /// What a run is made with: the program, the machine.
 fn run_context() -> report::Context {
     let (commit, dirty) = source_revision();
@@ -271,6 +335,9 @@ fn main() {
     report::record();
     let mut run = report::Run::starting();
     run.context = run_context();
+    report::set_probe(read_memory);
+    report::enter("build");
+    start_memory_sampler();
     let build_start = Instant::now();
     let mut doc = scenefile::SceneFile::read_document(&args.scene).unwrap_or_else(|e| {
         eprintln!("{}", e);
@@ -295,7 +362,7 @@ fn main() {
         seed: args.seed,
     });
     // Reading the scene and building its objects, each a part of it.
-    run.phases.push(report::Phase { name: "build".into(), seconds: build_start.elapsed().as_secs_f64() });
+    run.phases.push(report::Phase { name: "build".into(), seconds: build_start.elapsed().as_secs_f64(), footprint: report::read().map(|r| r.footprint) });
     run.phases.extend(report::take_phases());
 
     let mut rc = RenderContext::new(
@@ -321,8 +388,9 @@ fn main() {
         run.decision.refused.push(report::Refusal { integrator: integrator.into(), reason });
     };
     let lap = |run: &mut report::Run, name: &str, since: Instant| {
-        run.phases.push(report::Phase { name: name.into(), seconds: since.elapsed().as_secs_f64() });
+        run.phases.push(report::Phase { name: name.into(), seconds: since.elapsed().as_secs_f64(), footprint: report::read().map(|r| r.footprint) });
     };
+    report::enter("flatten");
     let flatten_start = Instant::now();
     let flat = if s.render.integrator != scene::Integrator::Path {
         match wavefront::flat::FlatScene::build(&s) {
@@ -359,6 +427,8 @@ fn main() {
     #[cfg(feature = "gpu")]
     let gpu_start = Instant::now();
     #[cfg(feature = "gpu")]
+    report::enter("gpu set-up");
+    #[cfg(feature = "gpu")]
     let mut gpu = match (&flat, try_gpu) {
         (Some(f), true) => match gpu::GpuRenderer::new(&s, f) {
             Ok(g) => {
@@ -366,14 +436,16 @@ fn main() {
                 let parts: Vec<String> = g.setup.iter().map(|(what, seconds)| format!("{} {:.0} ms", what, seconds * 1e3)).collect();
                 println!("- GPU set up in {:.0} ms: {}", g.setup.iter().map(|p| p.1).sum::<f64>() * 1e3, parts.join(", "));
                 lap(&mut run, "gpu set-up", gpu_start);
-                run.phases.extend(g.setup.iter().map(|(what, seconds)| report::Phase { name: format!("gpu set-up: {}", what), seconds: *seconds }));
+                run.phases.extend(report::take_phases());
                 let adapter = g.adapter_name.trim_end_matches(", tracing by ray queries").to_string();
-                run.decision.gpu = Some(report::Gpu { adapter, ray_queries: g.ray_queries(), lanes: g.lanes });
+                let buffers = g.buffers.iter().map(|&(name, bytes)| report::GpuBuffer { name: name.into(), bytes }).collect();
+                run.decision.gpu = Some(report::Gpu { adapter, ray_queries: g.ray_queries(), lanes: g.lanes, buffers });
                 Some(g)
             },
             Err(e) => {
                 println!("- The GPU can't render this scene ({}); rendering with the wavefront integrator", e);
                 lap(&mut run, "gpu set-up", gpu_start);
+                run.phases.extend(report::take_phases());
                 refuse(&mut run, "gpu", e);
                 None
             },
@@ -390,6 +462,7 @@ fn main() {
         refuse(&mut run, "gpu", "this build has no GPU support".into());
     }
     // Without the GPU the kernels run here, over the same buffers.
+    report::enter("kernel buffers");
     let buffers_start = Instant::now();
     let buffers = match flat.as_ref().filter(|_| !on_gpu).map(|f| kernels::Buffers::build(&s, f)) {
         Some(Ok(b)) => Some(b),
@@ -466,7 +539,8 @@ fn main() {
 
     let kernels = flat.as_ref().zip(buffers).map(|(f, b)| wavefront::integrator::Kernels::with(&s, f, b));
     let render_start = Instant::now();
-    rc.run.phases.push(report::Phase { name: "render".into(), seconds: 0. });
+    rc.run.phases.push(report::Phase { name: "render".into(), seconds: 0., footprint: None });
+    report::enter("render");
     let rcmtx = Mutex::new(rc);
 
     println!("{}",
@@ -540,6 +614,7 @@ fn main() {
     let mut rc = rcmtx.lock().unwrap();
     if let Some(render) = rc.run.phases.iter_mut().rfind(|p| p.name == "render") {
         render.seconds = render_start.elapsed().as_secs_f64();
+        render.footprint = report::read().map(|r| r.footprint);
     }
     if rc.samples_rendered > 0 {
         save_state(&state_path, &rc.encode_state(key));

@@ -159,6 +159,9 @@ pub struct GpuRenderer {
     /// What setting up took, part by part, in seconds: the render's start, which a short
     /// render is mostly made of (plan.md section 12).
     pub setup: Vec<(&'static str, f64)>,
+    /// The buffers it made, by name, and their sizes in bytes (not the acceleration structures,
+    /// whose sizes wgpu doesn't give).
+    pub buffers: Vec<(&'static str, u64)>,
     /// The render's origin, which the scene's buffers are laid out about (`kernels::origin`):
     /// the camera's, when the scene was uploaded. Rays from a camera since moved are still
     /// given in this frame.
@@ -249,6 +252,8 @@ impl GpuRenderer {
         let mut lap = |setup: &mut Vec<(&'static str, f64)>, what: &'static str| {
             let now = web_time::Instant::now();
             setup.push((what, (now - clock).as_secs_f64()));
+            // And for the render's report, with the memory then.
+            crate::report::phase(format!("gpu set-up: {}", what), (now - clock).as_secs_f64());
             clock = now;
         };
         #[allow(unused_mut)]
@@ -525,7 +530,15 @@ impl GpuRenderer {
             layout: &start_layout,
             entries: &[entry(0, &params_buffers[1]), entry(1, &rays_buffer), entry(2, &paths_buffer), entry(3, &queue_buffer)],
         });
-        Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline, start_group, rays_buffer,
+        let mut buffers: Vec<(&'static str, u64)> = vec![("prims", prims_buffer.size()), ("nodes", nodes_buffer.size()),
+            ("materials", materials_buffer.size()), ("lights", lights_buffer.size()), ("tables", tables_buffer.size()),
+            ("params", 2 * params_buffers[0].size()), ("queues", queue_buffer.size()), ("paths", paths_buffer.size()),
+            ("camera rays", rays_buffer.size()), ("sky queries", queries_buffer.size()), ("accum", accum_buffer.size()),
+            ("rounds", rounds_buffer.size()), ("readback", readback.size())];
+        if let Some(h) = &host_queue {
+            buffers.extend([("host gathered", h.gathered.size()), ("host readback", h.readback.size())]);
+        }
+        Ok(GpuRenderer { device, queue, buffers, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline, start_group, rays_buffer,
             round_groups, add_group, params, params_buffers,
             queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name,
             #[cfg(not(target_arch = "wasm32"))]

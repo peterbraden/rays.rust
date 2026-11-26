@@ -60,6 +60,7 @@ fn sphere_box(p: &GpuPrim) -> [f32; 6] {
 /// one: a scene of millions of primitives otherwise holds gigabytes more than the BVH, of
 /// what may be a machine's shared memory.
 pub(super) fn build(device: &wgpu::Device, queue: &wgpu::Queue, prims: &[GpuPrim]) -> Acceleration {
+    let began = web_time::Instant::now();
     let (triangles, boxes) = split(prims);
     let mut buffers = Vec::new();
     let flags = wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE;
@@ -135,6 +136,10 @@ pub(super) fn build(device: &wgpu::Device, queue: &wgpu::Queue, prims: &[GpuPrim
         b.prepare_compaction_async(|_| {});
     }
     device.poll(wgpu::PollType::wait_indefinitely()).expect("the bottom-level structures built");
+    // (wgpu doesn't say how large the structures are: the report's footprints, here and once
+    // compacted, do.)
+    crate::report::phase("gpu set-up: the acceleration structures: built", began.elapsed().as_secs_f64());
+    let compacting = web_time::Instant::now();
     let blas: Vec<(wgpu::Blas, u32)> = built.into_iter()
         .map(|(b, kind)| (if b.ready_for_compaction() { queue.compact_blas(&b) } else { b }, kind))
         .collect();
@@ -145,6 +150,8 @@ pub(super) fn build(device: &wgpu::Device, queue: &wgpu::Queue, prims: &[GpuPrim
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("top-level structure") });
     encoder.build_acceleration_structures(std::iter::empty(), std::iter::once(&tlas));
     queue.submit(Some(encoder.finish()));
+    device.poll(wgpu::PollType::wait_indefinitely()).expect("the top-level structure built");
+    crate::report::phase("gpu set-up: the acceleration structures: compacted", compacting.elapsed().as_secs_f64());
     Acceleration { tlas, _blas: blas.into_iter().map(|(b, _)| b).collect() }
 }
 

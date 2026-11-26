@@ -56,10 +56,11 @@
 //! its eruptions are larger and tube-fed, so run tens of kilometres down its flanks), each
 //! along its own perturbed path, laid its vent's flow thickness deep across its width
 //! (`FLOW_WIDTH`, `SHIELD_FLOW_WIDTH`: the cells beside the path, out to half the width either
-//! side, `lateral`, so a flow is as thick on any grid), running as far as its volume lasts, up
-//! to about `FLOW_LENGTH` (`SHIELD_FLOW_LENGTH`). In a hollow, often raised ahead of it by its
-//! own lava beside it, a flow ponds and spills over the hollow's lowest side, never back the
-//! way it came. Over many steps the flows spread down different valleys, building a lava
+//! side, `lateral`, so a flow is as thick on any grid; as far as the ground beside stays below
+//! the flow's top, so confined to a valley it lies deeper, up to `CONFINED` thicknesses, and
+//! runs farther: flows fill the lows between earlier ones, stacking compensationally), up to
+//! about `FLOW_LENGTH` (`SHIELD_FLOW_LENGTH`) as its volume lasts. In a hollow a flow fills
+//! to the lip and spills over the hollow's lowest side, never back the way it came. Over many steps the flows spread down different valleys, building a lava
 //! apron. A flow stops at the sea or the edge of a patch: lava
 //! running into the sea or out of the domain is lost to it (no longer ponded at its edge).
 

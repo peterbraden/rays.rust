@@ -131,7 +131,7 @@ impl pathtrace::HostShapes for Kernels<'_> {
         crate::shapes::leaving::with(None, || {
             self.buffers.host_shapes.iter().any(|&k| {
                 let began = web_time::Instant::now();
-                let occluded = self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64);
+                let occluded = self.flat.shapes[k].0.geometry.occludes_rest(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64);
                 let seconds = began.elapsed().as_secs_f64();
                 crate::scheduler::count_object(crate::kernels::host::shape_key(self.flat, k), |o| {
                     o.shadow_rays += 1;
@@ -163,7 +163,7 @@ impl<M: pathtrace::Media> pathtrace::Finder for WithHost<'_, M> {
             let mut nearest = None;
             for &shape in self.host_shapes {
                 let began = web_time::Instant::now();
-                let x = self.kernels.flat.shapes[shape].0.geometry.intersects_range(&r, crate::wavefront::flat::MIN_SHAPE, reach);
+                let x = self.kernels.flat.shapes[shape].0.geometry.intersects_rest(&r, crate::wavefront::flat::MIN_SHAPE, reach);
                 let seconds = began.elapsed().as_secs_f64();
                 crate::scheduler::count_object(crate::kernels::host::shape_key(self.kernels.flat, shape), |o| {
                     o.rays += 1;

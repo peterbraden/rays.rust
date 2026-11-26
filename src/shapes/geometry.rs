@@ -136,6 +136,15 @@ pub trait Geometry: Sync{
     // (`wavefront::flat`); None if it can't be.
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { None }
 
+    // For a shape of parts of which some are primitives and some aren't (`group::Group`: a
+    // landscape's mesh and its displaced patches), when it can't `flatten` whole: the parts
+    // that can, as primitives, each with the `face` the shape's own hit there would report. The
+    // others are left to the shape's own code, `intersects_rest` and `occludes_rest`, which
+    // test only them: for a shape without such parts, all of it.
+    fn flatten_parts(&self) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> { None }
+    fn intersects_rest(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> { self.intersects_range(r, min, max) }
+    fn occludes_rest(&self, r: &Ray, min: f64, max: f64) -> bool { self.occludes(r, min, max) }
+
     // Whether a hit's `face` is which of `flatten`'s primitives was hit, as a mesh's is (its
     // triangle, for `uv`); otherwise the flat scene's hits report face 0, as the shape's do.
     fn faces_are_primitives(&self) -> bool { false }
@@ -252,6 +261,9 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 { (**self).transmittance(r, min, max) }
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color { (**self).transmittance_color(r, min, max) }
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { (**self).flatten() }
+    fn flatten_parts(&self) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> { (**self).flatten_parts() }
+    fn intersects_rest(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> { (**self).intersects_rest(r, min, max) }
+    fn occludes_rest(&self, r: &Ray, min: f64, max: f64) -> bool { (**self).occludes_rest(r, min, max) }
     fn kind(&self) -> &'static str { (**self).kind() }
     fn ocean(&self) -> Option<&crate::ocean::Ocean> { (**self).ocean() }
     fn medium(&self) -> Option<&crate::volume::Volume> { (**self).medium() }

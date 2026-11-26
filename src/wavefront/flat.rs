@@ -349,6 +349,17 @@ impl FlatScene {
             let index = materials.len() as u32;
             materials.push(m);
             let Some(prims) = prims else {
+                // Some of its parts primitives (a landscape's mesh), the kernels' to intersect,
+                // the rest its own code's (`Geometry::flatten_parts`, `intersects_rest`): unless
+                // its medium has parts, which a primitive doesn't record.
+                if o.medium.part(1).is_none() && let Some(parts) = o.geometry.flatten_parts() {
+                    for (p, face) in parts {
+                        match p {
+                            Prim::Plane { .. } => planes.push((p, index)),
+                            _ => bounded.push((p, index, face)),
+                        }
+                    }
+                }
                 shapes.push((o.clone(), index));
                 continue;
             };
@@ -415,9 +426,10 @@ impl FlatScene {
         }
         let geometry = &self.shapes[prim as usize - listed].0.geometry;
         // (Well beyond what f32 rounded the distance by, and where it rounded the ray's start.)
+        // Of the parts left to its own code: the rest were found as primitives.
         let slack = 1e-4 * near.abs() + 1e-3;
-        let x = geometry.intersects_range(r, (near - slack).max(MIN_SHAPE), near + slack)
-            .or_else(|| geometry.intersects_range(r, MIN_SHAPE, f64::INFINITY))?;
+        let x = geometry.intersects_rest(r, (near - slack).max(MIN_SHAPE), near + slack)
+            .or_else(|| geometry.intersects_rest(r, MIN_SHAPE, f64::INFINITY))?;
         Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading: x.normal, prim, face: x.face, part: x.part })
     }
 

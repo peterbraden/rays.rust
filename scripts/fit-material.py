@@ -688,6 +688,10 @@ def free_params(preset, taken=(), hold=()):
     otherwise trade for a better palette."""
     params, tied = [], {}
     taken = {tuple(t) for t in taken}
+    # A bump ("normal") isn't rendered for a fit, so its numbers aren't searched; but where it
+    # repeats a node the albedo has (a stone's `height` beside its `mask`), it moves with it,
+    # or the fitted stones lose their relief.
+    bump, bumps = False, []
 
     def held(node, k, seed):
         return any(h.get("node", node) == node and h.get("field", k) == k and h.get("seed", seed) == seed
@@ -699,6 +703,8 @@ def free_params(preset, taken=(), hold=()):
         if key is not None and key in tied:
             tied[key]["paths"].append(list(path))
             return
+        if bump:
+            return  # a bump's own numbers aren't searched: it isn't rendered (strip_relief)
         if kind == "length":
             p = {"min": abs(v) / 4., "max": abs(v) * 4., "log": True} if v > 0 else None
         elif kind == "factor":
@@ -728,8 +734,9 @@ def free_params(preset, taken=(), hold=()):
             return
         node, seed = o.get("node"), o.get("seed")
         for k, v in o.items():
-            if k == "normal":
-                continue  # bump: not rendered for a fit (strip_relief)
+            if k == "normal" and not bump:
+                bumps.append((v, path + [k]))
+                continue  # walked after the rest, below
             here = path + [k]
             if held(node, k, seed):
                 continue
@@ -761,7 +768,7 @@ def free_params(preset, taken=(), hold=()):
                         add(here + [i], x, "factor" if node == "multiply" else "offset")
             elif k == "color_map" and isinstance(v, list):
                 stops = [here + [i, 0] for i, e in enumerate(v) if isinstance(e, list) and number(e[0])]
-                if len(stops) >= 2 and not any(tuple(s) in taken for s in stops):
+                if len(stops) >= 2 and not bump and not any(tuple(s) in taken for s in stops):
                     params.append({"kind": "stops", "paths": stops, "free": "stops"})
             walk(v, here)
 
@@ -770,6 +777,9 @@ def free_params(preset, taken=(), hold=()):
             add(["variables", name], v, "count")
     walk(preset.get("variables", {}), ["variables"])
     walk(preset.get("material", {}), ["material"])
+    bump = True
+    for v, path in bumps:
+        walk(v, path)
     return params
 
 

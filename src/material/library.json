@@ -6796,13 +6796,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.006,
+                  "cell": 0.009,
                   "size": [
-                    0.003,
-                    0.009
+                    0.0015,
+                    0.0239
                   ],
-                  "width": 0.75,
-                  "density": 2.5,
+                  "width": 0.8893,
+                  "density": 1.2777,
                   "seed": 1311,
                   "output": "height"
                 }
@@ -6815,13 +6815,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.012,
+                  "cell": 0.0064,
                   "size": [
-                    0.008,
-                    0.02
+                    0.0074,
+                    0.0174
                   ],
-                  "width": 0.75,
-                  "density": 1.4,
+                  "width": 0.9102,
+                  "density": 3.4374,
                   "seed": 1321,
                   "output": "height"
                 }
@@ -6834,13 +6834,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.04,
+                  "cell": 0.0754,
                   "size": [
-                    0.02,
-                    0.05
+                    0.0443,
+                    0.0725
                   ],
-                  "width": 0.75,
-                  "density": 0.5,
+                  "width": 0.8728,
+                  "density": 1.057,
                   "seed": 1331,
                   "output": "height"
                 }
@@ -7987,7 +7987,7 @@
     },
     "references": [
       {
-        "source": "polyhaven:brown_mud_02",
+        "source": "polyhaven:brown_mud",
         "licence": "CC0",
         "size": 1.3,
         "usage": {},
@@ -8068,77 +8068,7 @@
             ],
             "chroma": 0.1
           }
-        ],
-        "fit": {
-          "loss": {
-            "start": 1949.463193,
-            "fitted": 14.051681
-          },
-          "iterations": 60,
-          "resolution": 128,
-          "samples": 1,
-          "loss_kind": "floor+detail+solved+free+roam",
-          "judged": {
-            "fitted": 2.221907,
-            "author_solved": 81.869199,
-            "patches": 3,
-            "chosen": "the search's mean"
-          },
-          "date": "2026-11-26",
-          "applied": false,
-          "values": {
-            "scale": 1.1361,
-            "material.layers.0.material.albedo.color_map.0.1": [
-              0.0689,
-              0.0586,
-              0.048
-            ],
-            "material.layers.0.material.albedo.color_map.1.1": [
-              0.1168,
-              0.0962,
-              0.0748
-            ],
-            "material.layers.1.material.albedo.color_map.0.1.color_map.0.1": [
-              0.0707,
-              0.0533,
-              0.0331
-            ],
-            "material.layers.1.material.albedo.color_map.0.1.color_map.1.1": [
-              0.2438,
-              0.2016,
-              0.1441
-            ],
-            "material.layers.1.material.albedo.color_map.1.1": [
-              0.0224,
-              0.0176,
-              0.0107
-            ],
-            "material.layers.2.material.albedo": [
-              0.018,
-              0.0173,
-              0.015
-            ],
-            "variables.lie.scale": 0.8222,
-            "variables.lie.smallest": 0.0195,
-            "variables.lie.roughness": 0.7872,
-            "variables.cracks.from": 0.3099,
-            "variables.cracks.input.amount": 0.0547,
-            "variables.cracks.input.scale": 0.0449,
-            "variables.cracks.input.input.scale": 0.0241,
-            "material.layers.0.material.albedo.pattern.scale": 0.869,
-            "material.layers.0.material.albedo.color_map.0.0": -0.868,
-            "material.layers.0.material.albedo.color_map.1.0": 0.2684,
-            "material.layers.1.material.albedo.color_map.0.0": 0.4484,
-            "material.layers.1.material.albedo.color_map.1.0": 1.0824,
-            "material.layers.1.material.albedo.color_map.0.1.pattern.scale": 0.077,
-            "material.layers.1.material.albedo.color_map.0.1.color_map.0.0": -0.255,
-            "material.layers.1.material.albedo.color_map.0.1.color_map.1.0": 0.8431,
-            "material.layers.1.mask.from": 0.3516,
-            "material.layers.1.mask.to": 0.1409,
-            "material.layers.2.mask.from": -0.1223,
-            "material.layers.2.mask.to": -0.2862
-          }
-        }
+        ]
       }
     ]
   },
@@ -8622,7 +8552,7 @@
                   "input": {
                     "node": "cells",
                     "style": "stones",
-                    "scale": 0.012,
+                    "scale": 0.0469,
                     "seed": 723
                   }
                 }
@@ -10417,13 +10347,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.04,
+                  "cell": 0.0243,
                   "size": [
-                    0.03,
-                    0.09
+                    0.0149,
+                    0.0971
                   ],
-                  "width": 0.75,
-                  "density": 0.9,
+                  "width": 0.5761,
+                  "density": 0.7079,
                   "seed": 931,
                   "output": "height"
                 }
@@ -10436,13 +10366,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.07,
+                  "cell": 0.0443,
                   "size": [
-                    0.09,
-                    0.24
+                    0.023,
+                    0.0607
                   ],
-                  "width": 0.72,
-                  "density": 1.3,
+                  "width": 0.4759,
+                  "density": 1.8257,
                   "seed": 941,
                   "output": "height"
                 }
@@ -14135,13 +14065,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.012,
+                  "cell": 0.0479,
                   "size": [
-                    0.006,
-                    0.022
+                    0.0097,
+                    0.0799
                   ],
-                  "width": 0.7,
-                  "density": 1.5,
+                  "width": 0.5865,
+                  "density": 2.2376,
                   "seed": 961,
                   "output": "height"
                 }
@@ -14154,13 +14084,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.05,
+                  "cell": 0.1038,
                   "size": [
-                    0.04,
-                    0.16
+                    0.0196,
+                    0.244
                   ],
-                  "width": 0.6,
-                  "density": 1.8,
+                  "width": 0.5367,
+                  "density": 4.4685,
                   "seed": 971,
                   "output": "height"
                 }
@@ -14854,13 +14784,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.05,
+                  "cell": 0.1087,
                   "size": [
-                    0.01,
-                    0.03
+                    0.0084,
+                    0.0121
                   ],
-                  "width": 0.7,
-                  "density": 0.35,
+                  "width": 0.8623,
+                  "density": 0.1787,
                   "seed": 1011,
                   "output": "height"
                 }
@@ -14873,13 +14803,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.14,
+                  "cell": 0.0351,
                   "size": [
-                    0.025,
-                    0.07
+                    0.0187,
+                    0.035
                   ],
-                  "width": 0.7,
-                  "density": 0.3,
+                  "width": 0.7212,
+                  "density": 0.1365,
                   "seed": 1021,
                   "output": "height"
                 }
@@ -14892,13 +14822,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.2,
+                  "cell": 0.0586,
                   "size": [
-                    0.02,
-                    0.06
+                    0.0094,
+                    0.1965
                   ],
-                  "width": 0.7,
-                  "density": 0.15,
+                  "width": 0.7216,
+                  "density": 0.1348,
                   "seed": 1051,
                   "output": "height"
                 }
@@ -14914,14 +14844,14 @@
                   "to": 0.0,
                   "input": {
                     "node": "warp",
-                    "amount": 0.01,
-                    "scale": 0.03,
+                    "amount": 0.009,
+                    "scale": 0.0079,
                     "seed": 1042,
                     "octaves": 2,
                     "input": {
                       "node": "cells",
                       "style": "edges",
-                      "scale": 0.05,
+                      "scale": 0.0727,
                       "seed": 1041
                     }
                   }
@@ -15925,7 +15855,7 @@
                   "to": 0.0,
                   "input": {
                     "node": "warp",
-                    "amount": 0.008,
+                    "amount": 0.0084,
                     "scale": 0.084,
                     "seed": 1212,
                     "octaves": 2,
@@ -15949,7 +15879,7 @@
                   "to": 0.025,
                   "input": {
                     "node": "warp",
-                    "amount": 0.008,
+                    "amount": 0.0084,
                     "scale": 0.084,
                     "seed": 1212,
                     "octaves": 2,
@@ -15973,7 +15903,7 @@
                   "to": 0.0,
                   "input": {
                     "node": "warp",
-                    "amount": 0.005,
+                    "amount": 0.0141,
                     "scale": 0.036,
                     "seed": 1222,
                     "octaves": 2,

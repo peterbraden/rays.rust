@@ -330,11 +330,13 @@ impl BreakerWater {
     /// undulation half a metre across.
     fn relief(&self, p: &Vector3<f64>) -> f64 {
         let n = |x: f64, y: f64, z: f64| self.noise.noise(x, y, z);
-        let ripples = 0.0012 * n(p.x / 0.03, p.y / 0.03, p.z / 0.03)
-            + 0.0006 * n(p.x / 0.015 + 7.1, p.y / 0.015, p.z / 0.015)
-            + 0.0025 * n(p.x / 0.08 + 3.3, p.y / 0.08, p.z / 0.08);
-        let streaks = 0.004 * n(p.x / 0.06 + 11.9, p.y / 0.9, p.z / 0.9);
-        let swell = 0.02 * n(p.x / 0.5 + 21.4, p.y / 0.5, p.z / 0.5);
+        // (Small: a breaking wave's face is glassy, and stronger ripples smeared everything seen
+        // through or in it.)
+        let ripples = 0.00024 * n(p.x / 0.03, p.y / 0.03, p.z / 0.03)
+            + 0.00012 * n(p.x / 0.015 + 7.1, p.y / 0.015, p.z / 0.015)
+            + 0.0005 * n(p.x / 0.08 + 3.3, p.y / 0.08, p.z / 0.08);
+        let streaks = 0.002 * n(p.x / 0.06 + 11.9, p.y / 0.9, p.z / 0.9);
+        let swell = 0.01 * n(p.x / 0.5 + 21.4, p.y / 0.5, p.z / 0.5);
         ripples + streaks + swell
     }
 

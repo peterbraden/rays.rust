@@ -8102,7 +8102,7 @@
       1,
       0
     ],
-    "doc": "Old oak bark: thick grey-brown ridges split by deep vertical furrows and broken across, green with algae on the side turned from the sun (\"shade\", a direction).",
+    "doc": "Old oak bark: thick grey-brown ridges split by deep vertical furrows and broken across, green with algae on the side turned from the sun (\"shade\", a direction); pale grey-green crusts of lichen in patches over it.",
     "variables": {
       "shade": [
         0,
@@ -8275,6 +8275,63 @@
               }
             ]
           }
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.02,
+                "seed": 717
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.38,
+                    0.4,
+                    0.33
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.52,
+                    0.54,
+                    0.46
+                  ]
+                ]
+              ]
+            }
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "smoothstep",
+                "from": 0.02,
+                "to": 0.12,
+                "input": {
+                  "node": "fractal",
+                  "scale": 0.08,
+                  "seed": 719,
+                  "smallest": 0.003,
+                  "roughness": 0.6
+                }
+              },
+              {
+                "node": "smoothstep",
+                "from": -0.35,
+                "to": 0.05,
+                "input": {
+                  "node": "fractal",
+                  "scale": 0.25,
+                  "seed": 720
+                }
+              }
+            ]
+          }
         }
       ]
     },
@@ -8344,6 +8401,26 @@
                 "color_map",
                 1,
                 1
+              ],
+              [
+                "material",
+                "layers",
+                2,
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "layers",
+                2,
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
               ]
             ],
             "chroma": 0.1
@@ -8355,70 +8432,7 @@
             "node": "transform",
             "field": "scale"
           }
-        ],
-        "fit": {
-          "loss": {
-            "start": 11.559422,
-            "fitted": 0.732682
-          },
-          "iterations": 60,
-          "resolution": 128,
-          "samples": 1,
-          "loss_kind": "floor+detail+solved+free+roam",
-          "judged": {
-            "fitted": 0.938167,
-            "author_solved": 2.383999,
-            "patches": 3,
-            "chosen": "generation 33's best"
-          },
-          "date": "2026-11-26",
-          "applied": false,
-          "values": {
-            "scale": 0.782,
-            "material.layers.0.material.albedo.color_map.0.1": [
-              0.0434,
-              0.0359,
-              0.0305
-            ],
-            "material.layers.0.material.albedo.color_map.1.1": [
-              0.0509,
-              0.0296,
-              0.0093
-            ],
-            "material.layers.0.material.albedo.color_map.2.1": [
-              0.306,
-              0.2486,
-              0.1709
-            ],
-            "material.layers.1.material.albedo.color_map.0.1": [
-              0.0269,
-              0.0192,
-              0.0049
-            ],
-            "material.layers.1.material.albedo.color_map.1.1": [
-              0.1534,
-              0.1489,
-              0.0609
-            ],
-            "variables.ridges.amount": 0.0043,
-            "variables.ridges.scale": 0.1829,
-            "variables.ridges.input.input.scale": 0.0316,
-            "variables.ridges.input.input.smallest": 0.0017,
-            "variables.ridges.input.input.roughness": 0.4737,
-            "variables.breaks.from": 0.1989,
-            "variables.breaks.input.input.scale": 0.0897,
-            "material.layers.0.material.albedo.pattern.b.inputs.0": 0.2726,
-            "material.layers.0.material.albedo.color_map.0.0": -0.2887,
-            "material.layers.0.material.albedo.color_map.1.0": 0.2501,
-            "material.layers.0.material.albedo.color_map.2.0": 0.7889,
-            "material.layers.1.material.albedo.pattern.scale": 0.1574,
-            "material.layers.1.material.albedo.color_map.0.0": -0.0529,
-            "material.layers.1.material.albedo.color_map.1.0": 0.5645,
-            "material.layers.1.mask.inputs.1.from": 0.6082,
-            "material.layers.1.mask.inputs.1.to": 0.8052,
-            "material.layers.1.mask.inputs.1.input.inputs.1.scale": 0.524
-          }
-        }
+        ]
       }
     ]
   },

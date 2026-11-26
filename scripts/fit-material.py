@@ -1105,6 +1105,12 @@ def scene(usage, library_path, size, resolution, samples, seed, view="ground", l
     }
 
 
+def sig(x):
+    """x to five significant figures, as a fit records it: places would round a millimetre's
+    cell by a few percent, and could push a bombing's stones past the four cells it allows."""
+    return float("%.5g" % x) if isinstance(x, float) else x
+
+
 def strip_relief(o):
     """o without its bump maps (every "normal" key), and matte: a glossy layer (`plastic`, wet
     sand and mud) seen straight down with the sun behind the camera mirrors the sun into it, a
@@ -1371,13 +1377,13 @@ def main():
                 if "paths" in p:
                     for path in p["paths"]:
                         v = get(fitted, path)
-                        values[".".join(map(str, path))] = [round(c, 4) for c in v] if isinstance(v, list) else round(v, 4)
+                        values[".".join(map(str, path))] = [sig(c) for c in v] if isinstance(v, list) else sig(v)
                     continue
                 if "field" in p:
-                    values[p["field"]] = round(fitted_usage[p["field"]], 4)
+                    values[p["field"]] = sig(fitted_usage[p["field"]])
                 else:
                     v = get(fitted, p["path"])
-                    values[".".join(map(str, p["path"]))] = [round(c, 4) for c in v] if isinstance(v, list) else round(v, 4)
+                    values[".".join(map(str, p["path"]))] = [sig(c) for c in v] if isinstance(v, list) else sig(v)
             library = json.load(open(library_path))
             name, index = reference_at
             library[name]["references"][index]["fit"] = {

@@ -114,7 +114,7 @@ use web_time::Instant;
 
 /// In every key: raise it when a stage's computation changes, so that what was built before
 /// isn't taken for what would be built now.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 /// A running stage saves where it has got to this often, seconds.
 pub const CHECKPOINT: f64 = 30.;
 /// `print` says how far a stage has got when nothing has been printed for this long, seconds.
@@ -360,8 +360,10 @@ pub enum Site {
     Coast,
     /// ... a plateau of flat strata in the subtropics (mesa country), ...
     Plateau,
-    /// ... or a stretched province of fault blocks in the subtropics (basin and range).
+    /// ... a stretched province of fault blocks in the subtropics (basin and range), ...
     Rift,
+    /// ... or a hotspot's young shield volcano, the one standing highest above the sea.
+    Hotspot,
 }
 
 /// Samples of the planet a site is chosen from.
@@ -377,6 +379,7 @@ impl Site {
             Site::Coast => planet.most_coastal(SITE_SAMPLES),
             Site::Plateau => planet.most_plateau(SITE_SAMPLES),
             Site::Rift => planet.most_rifted(SITE_SAMPLES),
+            Site::Hotspot => planet.young_shield().unwrap_or_else(|| planet.most_volcanic(SITE_SAMPLES)),
         }
     }
 }
@@ -600,7 +603,7 @@ impl Builder<'_> {
         let mut outcome = None;
         let crust = crate::terrain::tectonics::crust_from(tp, params.seed, params.radius, || {
             if let Some(saved) = self.store.read::<CrustState>(&file, &key)
-                && let Some(c) = Crust::from_state(saved.state, tp.cells, params.radius) {
+                && let Some(c) = Crust::from_state(saved.state, tp.cells, tp.hotspots, params.radius) {
                 outcome = Some((true, saved.seconds, Some(format!("Tectonics: the crust of {} cells read from {}", c.plate.len(), file))));
                 return c;
             }
@@ -1002,9 +1005,9 @@ mod tests {
 
     #[test]
     fn test_keys_are_fnv_and_keep_their_parts_apart() {
-        // FNV-1a of "1" (the format), a zero byte and "a", worked by hand from the definition.
+        // FNV-1a of the format, a zero byte and "a", worked by hand from the definition.
         let mut h: u64 = 0xcbf29ce484222325;
-        for b in [b'1', 0, b'a'] { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
+        for b in FORMAT.to_string().bytes().chain([0, b'a']) { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
         assert_eq!(key(&["a"]), format!("{:016x}", h));
         assert_ne!(key(&["ab", "c"]), key(&["a", "bc"]));
         assert_ne!(key(&["a", ""]), key(&["a"]));
@@ -1084,7 +1087,7 @@ mod tests {
         let radius = d.params.planet.radius;
         let stage = w.manifest.stage("plates").unwrap();
         let saved = store.read::<CrustState>(stage.file.as_ref().unwrap(), stage.key.as_ref().unwrap()).unwrap();
-        let crust = Crust::from_state(saved.state, 12, radius).unwrap();
+        let crust = Crust::from_state(saved.state, 12, d.params.planet.tectonics.as_ref().unwrap().hotspots, radius).unwrap();
         let ours = w.planet.crust.as_ref().unwrap();
         assert_eq!(serde_json::to_string(&crust.state()).unwrap(), serde_json::to_string(&ours.state()).unwrap());
         let stage = w.manifest.stage("climate").unwrap();
@@ -1101,7 +1104,7 @@ mod tests {
         // A file of another key, or of another grid, isn't taken for this one.
         assert!(store.read::<CrustState>(w.manifest.stage("plates").unwrap().file.as_ref().unwrap(), "0000000000000000").is_none());
         let saved = store.read::<CrustState>(w.manifest.stage("plates").unwrap().file.as_ref().unwrap(), w.manifest.stage("plates").unwrap().key.as_ref().unwrap()).unwrap();
-        assert!(Crust::from_state(saved.state, 16, radius).is_none());
+        assert!(Crust::from_state(saved.state, 16, d.params.planet.tectonics.as_ref().unwrap().hotspots, radius).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

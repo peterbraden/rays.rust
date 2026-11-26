@@ -99,6 +99,13 @@ pub struct Vent {
     cell: Option<usize>,
     /// The cells its cone covers, with their weights.
     cone: Vec<(usize, f64)>,
+    /// Its cone's radius (m), the share of what it erupts that flows away as lava, and how
+    /// thick its flows are (m): `VolcanoParams`' for most, a shield's own for a hotspot's.
+    cone_radius: f64,
+    lava_fraction: f64,
+    flow_thickness: f64,
+    /// Where its flows start besides its own cell: a shield's rift zones.
+    rifts: Vec<usize>,
 }
 
 /// The vents that can affect `domain`.
@@ -126,15 +133,52 @@ pub fn vents(planet: &Planet, domain: &Domain, p: &VolcanoParams) -> Vec<Vent> {
             seed: ((k as u64) << 32) ^ rng.next_u32() as u64,
             cell: None,
             cone: vec![],
+            cone_radius: p.cone_radius,
+            lava_fraction: p.lava_fraction,
+            flow_thickness: p.flow_thickness,
+            rifts: vec![],
         };
-        place(&mut vent, domain, p);
+        place(&mut vent, domain);
+        if !vent.cone.is_empty() { vents.push(vent); }
+    }
+    // The hotspots' young shields, building: basalt erupted many times as fast as an arc
+    // volcano's, mostly as thin, long flows of pāhoehoe from the summit and the rift zones.
+    for (k, s) in planet.shields().list.iter().enumerate() {
+        let activity = crate::terrain::hotspot::activity(s.age);
+        if activity < 0.05 { continue; }
+        let mut vent = Vent {
+            dir: s.dir,
+            start: 0.,
+            end: f64::INFINITY,
+            rate: HOTSPOT_RATE * s.height / crate::terrain::hotspot::HEIGHT * activity,
+            seed: 0x6873_0000_0000 ^ k as u64,
+            cell: None,
+            cone: vec![],
+            cone_radius: 0.5 * s.radius,
+            lava_fraction: 0.8,
+            flow_thickness: 4.,
+            rifts: vec![],
+        };
+        place(&mut vent, domain);
+        // (Cells holding a point of a rift zone; on a patch, `cell_at` gives the nearest edge
+        // cell for points beyond it.)
+        vent.rifts = s.rift_points(radius).iter().filter_map(|d| {
+            let c = domain.cell_at(d);
+            (radius * domain.dirs[c].angle(d) <= domain.area[c].sqrt()).then_some(c)
+        }).collect();
         if !vent.cone.is_empty() { vents.push(vent); }
     }
     vents
 }
 
+/// A hotspot's supply of basalt, cubic metres per year, for a full-height shield in its main
+/// stage: Hawaii's is about 0.1 to 0.2 km³ a year in all, shared between two or three active
+/// shields (Robinson and Eakins, "Estimated magma supply rates for the Hawaiian Islands",
+/// JVGR 151, 2006).
+pub const HOTSPOT_RATE: f64 = 5e7;
+
 /// Find the vent's cell and the cells its cone covers.
-fn place(vent: &mut Vent, domain: &Domain, p: &VolcanoParams) {
+fn place(vent: &mut Vent, domain: &Domain) {
     let distance = |c: usize| domain.radius * vent.dir.angle(&domain.dirs[c]);
     let start = domain.cell_at(&vent.dir);
     // On a patch, cell_at gives the nearest edge cell for vents beyond the edge.
@@ -144,7 +188,7 @@ fn place(vent: &mut Vent, domain: &Domain, p: &VolcanoParams) {
     let mut queue = VecDeque::from([start]);
     while let Some(c) = queue.pop_front() {
         let d = distance(c);
-        let w = 1. - d / p.cone_radius;
+        let w = 1. - d / vent.cone_radius;
         if w > 0. { vent.cone.push((c, w)); }
         else if Some(c) == vent.cell { vent.cone.push((c, 1.)); } // cells larger than the cone
         if w <= 0. { continue; }
@@ -167,9 +211,9 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
 
         // The cone's weights integrate to π R² / 3 over the whole cone; only the part of it in
         // the domain is built. (Cells larger than the cone take all of it.)
-        let cone = volume * (1. - p.lava_fraction);
+        let cone = volume * (1. - vent.lava_fraction);
         let in_domain: f64 = vent.cone.iter().map(|&(c, w)| w * domain.area[c]).sum();
-        let weight = in_domain.max(std::f64::consts::PI * p.cone_radius * p.cone_radius / 3.);
+        let weight = in_domain.max(std::f64::consts::PI * vent.cone_radius * vent.cone_radius / 3.);
         for &(c, w) in &vent.cone {
             let h = cone * w / weight;
             ground[c] += h;
@@ -177,11 +221,13 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
             total += h * domain.area[c];
         }
 
-        // Lava flows only from vents in the domain.
-        let Some(mut c) = vent.cell else { continue };
-        let mut remaining = volume * p.lava_fraction;
-        total += remaining;
+        // Lava flows only from vents in the domain: from the vent, or one of its rift zones.
         let mut rng = Pcg32::new(vent.seed, t.to_bits());
+        let pick = (rng.next_f64() * (1 + vent.rifts.len()) as f64) as usize;
+        let start = if pick == 0 { vent.cell } else { vent.rifts.get(pick - 1).copied() };
+        let Some(mut c) = start.or(vent.cell) else { continue };
+        let mut remaining = volume * vent.lava_fraction;
+        total += remaining;
         for _ in 0..domain.len() {
             if remaining <= 0. { break; }
             // The steepest way down over ground perturbed by up to `roughness`.
@@ -189,7 +235,7 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
                 .map(|l| (l.to, (ground[c] - ground[l.to] - p.roughness * rng.next_f64()) / l.dist))
                 .filter(|&(_, s)| s > 0.)
                 .max_by(|a, b| a.1.total_cmp(&b.1));
-            let lay = if next.is_none() || fixed[c] { remaining } else { remaining.min(p.flow_thickness * domain.area[c]) };
+            let lay = if next.is_none() || fixed[c] { remaining } else { remaining.min(vent.flow_thickness * domain.area[c]) };
             ground[c] += lay / domain.area[c];
             lava[c] += lay / domain.area[c];
             remaining -= lay;

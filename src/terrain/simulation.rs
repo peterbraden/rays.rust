@@ -223,6 +223,10 @@ pub struct Terrain {
     pub settled: Vec<f64>,
     /// Thickness of volcanic rock beneath the sediment, metres.
     pub lava: Vec<f64>,
+    /// How much of it the landscape started with, metres: the hotspots' shields
+    /// (`hotspot`), old basalt weathered and grown over like any rock; the rest erupted in its
+    /// time (`fresh_lava`).
+    pub shield: Vec<f64>,
     /// Sediment flux leaving each cell in rivers at the last step, m³/yr.
     pub sediment_flux: Vec<f64>,
     /// Ice thickness, metres.
@@ -325,6 +329,9 @@ impl Terrain {
         let latitude = domain.dirs.iter().map(|d| d.y.clamp(-1., 1.).asin()).collect();
         let n = domain.len();
         let sea = bed.iter().map(|&b| b < 0.).collect();
+        // The hotspots' shields are basalt (`hotspot`).
+        let lava: Vec<f64> = domain.dirs.par_iter().map(|d| planet.shield_thickness(d, finest)).collect();
+        let shield = lava.clone();
         let vents = match &params.volcano { Some(v) => vents(&planet, &domain, v), None => vec![] };
         let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
         let ela = climate.as_ref().map(|climate| domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect());
@@ -340,7 +347,7 @@ impl Terrain {
         let mut t = Terrain {
             precipitation: base_precipitation.clone(), base_precipitation, wind, temperature,
             domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], channel: vec![], latitude, sea, vents, rivers: Rivers::default(),
-            sediment: vec![0.; n], till: vec![0.; n], sand: vec![0.; n], settled: vec![], lava: vec![0.; n], sediment_flux: vec![0.; n],
+            sediment: vec![0.; n], till: vec![0.; n], sand: vec![0.; n], settled: vec![], lava, shield, sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         // The noise topography may stand steeper than its rock can: it is cut down to what the
@@ -408,6 +415,12 @@ impl Terrain {
             }
         }
         outlet
+    }
+
+    /// The lava at cell `i` erupted in the landscape's time, metres, beyond what it started
+    /// with (the hotspots' old shields): fresh, bare rock where no sediment covers it.
+    pub fn fresh_lava(&self, i: usize) -> f64 {
+        (self.lava[i] - self.shield[i]).max(0.)
     }
 
     /// Elevation of the top of the bedrock, beneath sediment and lava, metres.
@@ -953,7 +966,7 @@ impl Terrain {
             if fixed[k] { return k; }
             ((j - dy).clamp(0, n - 1) * n + (i - dx).clamp(0, n - 1)) as usize
         }).collect();
-        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.sand, &mut self.settled, &mut self.lava, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
+        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.sand, &mut self.settled, &mut self.lava, &mut self.shield, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
             if f.len() != source.len() { continue; }
             let old = f.clone();
             for (k, &s) in source.iter().enumerate() { f[k] = old[s]; }

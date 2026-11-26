@@ -2241,7 +2241,7 @@
               "kind": "enum",
               "default": "mountains",
               "doc": "Patch without lat/lon: centre it on the most such place.",
-              "options": ["mountains", "volcanoes", "coast", "plateau", "rift"]
+              "options": ["mountains", "volcanoes", "coast", "plateau", "rift", "hotspot"]
             }
           ]
         },
@@ -2327,6 +2327,7 @@
         },
         {"name": "rift_rate", "kind": "number", "default": 0.0004, "doc": "How fast tilted fault blocks' crests rise relative to their basins in stretched provinces (basin and range), m/yr."},
         {"name": "rift_relief", "kind": "number", "default": 1200, "doc": "How far the fault blocks' crests stand above their basins at time zero, m."},
+        {"name": "hotspot_volcanoes", "kind": "boolean", "default": true, "doc": "Whether hotspots build chains of shield volcanoes, ageing into eroded islands, atolls and seamounts along the plate's motion."},
         {"name": "rift_spacing", "kind": "number", "default": 25000, "doc": "Spacing of the normal faults, m: a range and a basin."},
         {
           "name": "tectonics",

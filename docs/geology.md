@@ -200,6 +200,39 @@ In a dry climate the basins are closed (above): their floors fill with the range
 and their lowest ground, against the fault where the hanging wall is tilted down, is a playa,
 as Death Valley's is against the Black Mountains.
 
+## Hotspots: shield volcanoes and their chains
+
+Volcanoes erupt where the planet's volcanism is high (`terrain::volcano`: vents on a 30 km
+lattice, each erupting for its own tens of thousands of years, building a cone and sending lava
+down the slopes, which stands as hard basalt). Hotspots do more (`terrain::hotspot`): plumes
+fixed beneath the moving plates (the tectonics' own, which now keeps the motion of the plate
+over each, or without tectonics eight drawn from the seed), each leaving a chain of **shield
+volcanoes** behind it along its plate's motion, a shield every 55 km or so, the oldest kept 70
+million years old. On ocean crust only: beneath continents plumes erupt as calderas and lava
+plains instead, not yet drawn.
+
+- **Young shields** grow over about a million years to stand 3.2 km above the sea (by the
+  square root of the hotspot's strength, which broadens them more than it raises them, so
+  that their summits stand 2 to 4 km up, as Hawaii's, Tenerife's and Réunion's do), whatever
+  the floor's depth: about 9 km above a deep sea floor, eight times as wide. Convex, level at
+  the summit, with a summit caldera, two or three rift zones stretching them into ridges, and
+  an apron at the foot. The youngest erupt through the landscape's run: lava many times as
+  fast as an arc volcano's, mostly as thin, long flows from the summit and the rift zones
+  (`volcano::HOTSPOT_RATE`). Bare rock is only what has erupted in the landscape's time
+  (`Terrain::fresh_lava`); the old basalt of the shields weathers and grows over like any rock.
+- **Older shields** sink under their weight and as the plate cools (two kilometres in their
+  first few million years, five and a half in all), and their height above the sea wears down
+  with a time constant of six million years, so a chain steps down: Kauaʻi-like islands at
+  five million years, low islands at ten.
+- **Atolls**: in the tropics coral keeps pace with the sinking, so an island worn and sunk to
+  the sea leaves a reef about its old shoreline, standing in islets, around a lagoon 25 m deep.
+  Beyond 28° of latitude (the Darwin point), and for shields that never rose above the sea,
+  none: they drown as seamounts, and those planed off by the waves sink on as flat-topped
+  guyots.
+
+Patches `"near": "hotspot"` are centred on the young shield standing highest above the sea,
+in the tropics if any is; `"hotspot_volcanoes": false` leaves the chains out.
+
 ## Deposits: till, moraines and sand
 
 What erosion takes is laid down again somewhere, and the sediment remembers how. Glaciers

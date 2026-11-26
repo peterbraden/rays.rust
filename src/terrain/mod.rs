@@ -18,6 +18,7 @@ pub mod flow;
 pub mod fluvial;
 pub mod glacier;
 pub mod volcano;
+pub mod hotspot;
 pub mod marine;
 pub mod channel;
 pub mod simulation;

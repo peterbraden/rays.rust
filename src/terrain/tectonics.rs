@@ -495,6 +495,7 @@ impl Tectonics {
             volcanism: corner(&|g| self.volcanism[g]),
             plate: self.current.iter().map(|c| c.plate).collect(),
             continental: self.current.iter().map(|c| c.continental).collect(),
+            hotspots: self.hotspots.iter().map(|h| (*h, self.plates[self.current[self.domain.cell_at(h)].plate as usize].omega)).collect(),
             domain: self.domain,
         }
     }
@@ -522,6 +523,10 @@ pub struct Crust {
     /// Each cell's plate, and whether it is continent.
     pub plate: Vec<u16>,
     pub continental: Vec<bool>,
+    /// The hotspots, and the angular velocity of the plate over each (radians per million
+    /// years, about the planet's centre): what their tracks of volcanoes follow
+    /// (`terrain::hotspot`).
+    pub hotspots: Vec<(Vector3<f64>, Vector3<f64>)>,
 }
 
 impl Crust {
@@ -546,6 +551,9 @@ pub struct CrustState {
     volcanism: Vec<f64>,
     plate: Vec<u16>,
     continental: Vec<bool>,
+    /// Each hotspot's direction and its plate's angular velocity: x, y, z, ωx, ωy, ωz.
+    #[serde(default)]
+    hotspots: Vec<[f64; 6]>,
 }
 
 impl Crust {
@@ -554,13 +562,15 @@ impl Crust {
         CrustState {
             cells: n, elevation: self.elevation.clone(), orogeny: self.orogeny.clone(), activity: self.activity.clone(),
             margin: self.margin.clone(), volcanism: self.volcanism.clone(), plate: self.plate.clone(), continental: self.continental.clone(),
+            hotspots: self.hotspots.iter().map(|(h, w)| [h.x, h.y, h.z, w.x, w.y, w.z]).collect(),
         }
     }
 
     /// The crust a state was taken from, on a planet of `radius`; None if the state isn't of a
-    /// grid of `cells` along a face's edge.
-    pub fn from_state(s: CrustState, cells: usize, radius: f64) -> Option<Crust> {
-        if s.cells != cells { return None; }
+    /// grid of `cells` along a face's edge with `hotspots` hotspots (a state saved before they
+    /// were kept has none).
+    pub fn from_state(s: CrustState, cells: usize, hotspots: usize, radius: f64) -> Option<Crust> {
+        if s.cells != cells || s.hotspots.len() != hotspots { return None; }
         let domain = Domain::sphere(cells, radius);
         let (corners, n) = (domain.corners.len(), domain.len());
         let fields = [&s.elevation, &s.orogeny, &s.activity, &s.margin, &s.volcanism];
@@ -568,6 +578,7 @@ impl Crust {
         Some(Crust {
             domain, elevation: s.elevation, orogeny: s.orogeny, activity: s.activity, margin: s.margin,
             volcanism: s.volcanism, plate: s.plate, continental: s.continental,
+            hotspots: s.hotspots.iter().map(|h| (Vector3::new(h[0], h[1], h[2]), Vector3::new(h[3], h[4], h[5]))).collect(),
         })
     }
 }
@@ -662,5 +673,10 @@ mod tests {
         let sea = e.iter().filter(|&&x| x < -1000.).count();
         let land = e.iter().filter(|&&x| x > 0.).count();
         assert!(sea > 400 && land > 150, "sea {} land {}", sea, land);
+        // Its hotspots, each with the motion of the plate over it, kept through a save.
+        assert_eq!(a.hotspots.len(), small().hotspots);
+        assert!(a.hotspots.iter().all(|(h, w)| (h.norm() - 1.).abs() < 1e-9 && w.norm() > 0.));
+        let back = Crust::from_state(a.state(), small().cells, small().hotspots, 6.371e6).unwrap();
+        assert_eq!(back.hotspots, a.hotspots);
     }
 }

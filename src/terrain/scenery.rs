@@ -252,7 +252,7 @@ impl Layer {
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
             else if t.bed[i] < 0. { SEA_FLOOR }
-            else if t.lava[i] > 1. && t.sediment[i] < map::ALLUVIUM { LAVA }
+            else if t.fresh_lava(i) > 1. && t.sediment[i] < map::ALLUVIUM { LAVA }
             else if map::is_till(&t, i) { TILL }
             else if t.sediment[i] > map::ALLUVIUM { ALLUVIUM }
             else { LAND }

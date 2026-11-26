@@ -344,6 +344,14 @@ Scores on the three fresh patches, the presets applied before against the roamin
 
 A fit's score on its own patch is no longer the measure; one on fresh ground is.
 
+Three presets were then written with the new blocks and fitted the same way (judged on fresh
+patches, as written with colours solved → fitted): desert_pavement 2.84 → 1.08 (`stone` chips
+on a crust crazed by `cells` edges), dark_stony_soil 8.21 → 2.43 (grit and stones in patches) and
+cracked_riverbed 8.58 → 1.44 (plates with lighter lips and finer cracks within). Their fits are
+right in tone and from afar, less so close up: desert_pavement's larger stones went dark where
+the scan's are pale, dark_stony_soil's grit is too regular, and cracked_riverbed's plates came
+out smaller and lumpier than the scan's.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)
@@ -371,6 +379,9 @@ preset's `references`:
 | `caliche_ground` | coral_gravel | Brown gravelly soil with ragged patches of pale lime crust |
 | `stony_bank` | river_small_rocks | Grey-beige silt with small flat stones bedded in it |
 | `leaf_litter_gravel` | leaf_scattered_gravel | Dark gravel with small brown leaves, pointed, ribbed and each its own shade (`bombing`), heaped between the stones and a few lying on them |
+| `desert_pavement` | dry_ground_rocks | An ochre crust crazed by fine cracks, with angular chips and stones scattered over it (`stone` sprites) |
+| `dark_stony_soil` | brown_mud_rocks_01 | Dark peaty earth thick with grit and small angular stones in patches |
+| `cracked_riverbed` | mud_cracked_dry_riverbed_002 | Silty mud split into plates with lighter curled lips and finer cracks within |
 
 Cliffs are fitted as walls (`"view": "wall"`), so their beds and streaks run along y as on a
 landscape's cliffs.

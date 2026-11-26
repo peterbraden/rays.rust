@@ -1071,7 +1071,7 @@ def scene(usage, library_path, size, resolution, samples, seed, view="ground", l
     # Lit by a sun behind the camera, of irradiance pi so a matte surface facing it shows its
     # albedo, under a black sky: each point's light is then exact (a white sky's is sampled,
     # and its noise, a tenth of the albedo at a sample a pixel, reads as grain to the spectra).
-    # The scans are albedo maps, lit evenly; `strip_relief` takes the preset's bump off so the
+    # The scans are albedo maps, lit evenly; `strip_relief` takes the preset's bump and gloss off so the
     # sun doesn't shade it (under the white sky a matte surface showed its albedo regardless).
     toward = [0, 0, -1] if view == "wall" else [0, 1, 0]
     light = {"background": [0, 0, 0], "sun": {"direction": toward, "intensity": math.pi, "angular_radius": 0.01}} \
@@ -1096,8 +1096,13 @@ def scene(usage, library_path, size, resolution, samples, seed, view="ground", l
 
 
 def strip_relief(o):
-    """o without its bump maps (every "normal" key)."""
+    """o without its bump maps (every "normal" key), and matte: a glossy layer (`plastic`, wet
+    sand and mud) seen straight down with the sun behind the camera mirrors the sun into it, a
+    white sheet the scan, an albedo map, never shows; so it is drawn as `lambertian` in its own
+    albedo."""
     if isinstance(o, dict):
+        if o.get("type") == "plastic" and "albedo" in o:
+            return {"type": "lambertian", "albedo": strip_relief(o["albedo"])}
         return {k: strip_relief(v) for k, v in o.items() if k != "normal"}
     if isinstance(o, list):
         return [strip_relief(v) for v in o]

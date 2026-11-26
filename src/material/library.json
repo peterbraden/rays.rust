@@ -7386,9 +7386,9 @@
     },
     "references": [
       {
-        "source": "polyhaven:dense_sand",
+        "source": "ambientcg:Ground098",
         "licence": "CC0",
-        "size": 1.8,
+        "size": 2.0,
         "usage": {},
         "params": [
           {
@@ -7425,52 +7425,7 @@
             ],
             "chroma": 0.1
           }
-        ],
-        "fit": {
-          "loss": {
-            "start": 1436.115616,
-            "fitted": 48.747583
-          },
-          "iterations": 60,
-          "resolution": 128,
-          "samples": 1,
-          "loss_kind": "floor+detail+solved+free+roam",
-          "judged": {
-            "fitted": 29.343286,
-            "author_solved": 55.173303,
-            "patches": 3,
-            "chosen": "generation 42's best"
-          },
-          "date": "2026-11-26",
-          "applied": false,
-          "values": {
-            "scale": 1.2481,
-            "material.albedo.color_map.0.1": [
-              0.4,
-              0.3,
-              0.18
-            ],
-            "material.albedo.color_map.1.1": [
-              0.2255,
-              0.1578,
-              0.082
-            ],
-            "material.albedo.color_map.2.1": [
-              0.3767,
-              0.2916,
-              0.1798
-            ],
-            "variables.ripples.inputs.1.wavelength": 0.1295,
-            "variables.ripples.inputs.1.spread": 0.3144,
-            "variables.tone.scale": 6.5944,
-            "variables.tone.smallest": 0.0394,
-            "material.albedo.pattern.inputs.0.inputs.0": 0.4732,
-            "material.albedo.pattern.inputs.1.inputs.0": 0.4299,
-            "material.albedo.color_map.0.0": -2.3696,
-            "material.albedo.color_map.1.0": -0.9558,
-            "material.albedo.color_map.2.0": 0.7722
-          }
-        }
+        ]
       }
     ]
   },

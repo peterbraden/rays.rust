@@ -416,7 +416,9 @@ impl GpuRenderer {
             label: Some(label), contents: bytes, usage: wgpu::BufferUsages::STORAGE,
         });
         let prims_buffer = storage("prims", bytemuck::cast_slice(&prims));
-        let nodes_buffer = storage("nodes", bytemuck::cast_slice(&nodes));
+        // The kernels built for ray queries don't read the BVH: one node fills its binding.
+        let nodes_buffer = storage("nodes", bytemuck::cast_slice(if ray_query { &nodes[..1] } else { &nodes }));
+        drop((prims, nodes));
         let materials_buffer = storage("materials", bytemuck::cast_slice(&materials));
         let lights_buffer = storage("lights", bytemuck::cast_slice(&lights));
         let tables_buffer = storage("tables", bytemuck::cast_slice(&tables));

@@ -18,11 +18,12 @@ use pathtrace::glam::Vec4;
 use crate::kernels::GpuPrim;
 use wgpu::util::DeviceExt;
 
-/// What has to be kept for as long as the kernels trace through it.
+/// What has to be kept for as long as the kernels trace through it: the top-level structure
+/// and the compacted bottom-level ones it holds. Not the primitives they were built from,
+/// which the device has no more use for.
 pub(super) struct Acceleration {
     pub tlas: wgpu::Tlas,
     _blas: Vec<wgpu::Blas>,
-    _buffers: Vec<wgpu::Buffer>,
 }
 
 /// Whether to trace by ray queries on this adapter.
@@ -54,12 +55,15 @@ fn sphere_box(p: &GpuPrim) -> [f32; 6] {
     [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]]
 }
 
-/// Build the structures over the bounded primitives `prims`, on the device, now.
+/// Build the structures over the bounded primitives `prims`, on the device, now. The
+/// bottom-level structures are built, compacted, and only then gathered into the top-level
+/// one: a scene of millions of primitives otherwise holds gigabytes more than the BVH, of
+/// what may be a machine's shared memory.
 pub(super) fn build(device: &wgpu::Device, queue: &wgpu::Queue, prims: &[GpuPrim]) -> Acceleration {
     let (triangles, boxes) = split(prims);
     let mut buffers = Vec::new();
-    let mut blas = Vec::new();
     let flags = wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE;
+    let blas_flags = flags | wgpu::AccelerationStructureFlags::ALLOW_COMPACTION;
     let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
         label: Some("scene"), flags, update_mode: wgpu::AccelerationStructureUpdateMode::Build, max_instances: 2,
     });
@@ -85,7 +89,7 @@ pub(super) fn build(device: &wgpu::Device, queue: &wgpu::Queue, prims: &[GpuPrim
         buffers.push(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("triangles"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::BLAS_INPUT,
         }));
-        device.create_blas(&wgpu::CreateBlasDescriptor { label: Some("triangles"), flags, update_mode: wgpu::AccelerationStructureUpdateMode::Build },
+        device.create_blas(&wgpu::CreateBlasDescriptor { label: Some("triangles"), flags: blas_flags, update_mode: wgpu::AccelerationStructureUpdateMode::Build },
             wgpu::BlasGeometrySizeDescriptors::Triangles { descriptors: vec![triangle_size.clone()] })
     });
     let triangle_buffer = triangle_blas.as_ref().map(|_| buffers.len() - 1);
@@ -94,14 +98,13 @@ pub(super) fn build(device: &wgpu::Device, queue: &wgpu::Queue, prims: &[GpuPrim
         buffers.push(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("boxes"), contents: bytemuck::cast_slice(&aabbs), usage: wgpu::BufferUsages::BLAS_INPUT,
         }));
-        device.create_blas(&wgpu::CreateBlasDescriptor { label: Some("boxes"), flags, update_mode: wgpu::AccelerationStructureUpdateMode::Build },
+        device.create_blas(&wgpu::CreateBlasDescriptor { label: Some("boxes"), flags: blas_flags, update_mode: wgpu::AccelerationStructureUpdateMode::Build },
             wgpu::BlasGeometrySizeDescriptors::AABBs { descriptors: vec![box_size.clone()] })
     });
     let box_buffer = box_blas.as_ref().map(|_| buffers.len() - 1);
 
     let mut entries = Vec::new();
     if let (Some(b), Some(i)) = (&triangle_blas, triangle_buffer) {
-        tlas[0] = Some(wgpu::TlasInstance::new(b, identity, pathtrace::ray_query::TRIANGLES, 0xff));
         entries.push(wgpu::BlasBuildEntry {
             blas: b,
             geometry: wgpu::BlasGeometries::TriangleGeometries(vec![wgpu::BlasTriangleGeometry {
@@ -111,7 +114,6 @@ pub(super) fn build(device: &wgpu::Device, queue: &wgpu::Queue, prims: &[GpuPrim
         });
     }
     if let (Some(b), Some(i)) = (&box_blas, box_buffer) {
-        tlas[1] = Some(wgpu::TlasInstance::new(b, identity, pathtrace::ray_query::BOXES, 0xff));
         entries.push(wgpu::BlasBuildEntry {
             blas: b,
             geometry: wgpu::BlasGeometries::AabbGeometries(vec![wgpu::BlasAabbGeometry {
@@ -119,13 +121,31 @@ pub(super) fn build(device: &wgpu::Device, queue: &wgpu::Queue, prims: &[GpuPrim
             }]),
         });
     }
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("acceleration structures") });
-    encoder.build_acceleration_structures(entries.iter(), std::iter::once(&tlas));
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bottom-level structures") });
+    encoder.build_acceleration_structures(entries.iter(), std::iter::empty());
     queue.submit(Some(encoder.finish()));
     drop(entries);
-    blas.extend(triangle_blas);
-    blas.extend(box_blas);
-    Acceleration { tlas, _blas: blas, _buffers: buffers }
+    // The inputs are wgpu's to free once the build is done, as is its scratch space.
+    drop(buffers);
+
+    // Each structure copied to the size it turned out to need; the originals freed.
+    let built: Vec<(wgpu::Blas, u32)> = [(triangle_blas, pathtrace::ray_query::TRIANGLES), (box_blas, pathtrace::ray_query::BOXES)]
+        .into_iter().filter_map(|(b, kind)| Some((b?, kind))).collect();
+    for (b, _) in &built {
+        b.prepare_compaction_async(|_| {});
+    }
+    device.poll(wgpu::PollType::wait_indefinitely()).expect("the bottom-level structures built");
+    let blas: Vec<(wgpu::Blas, u32)> = built.into_iter()
+        .map(|(b, kind)| (if b.ready_for_compaction() { queue.compact_blas(&b) } else { b }, kind))
+        .collect();
+
+    for (b, kind) in &blas {
+        tlas[*kind as usize] = Some(wgpu::TlasInstance::new(b, identity, *kind, 0xff));
+    }
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("top-level structure") });
+    encoder.build_acceleration_structures(std::iter::empty(), std::iter::once(&tlas));
+    queue.submit(Some(encoder.finish()));
+    Acceleration { tlas, _blas: blas.into_iter().map(|(b, _)| b).collect() }
 }
 
 #[cfg(test)]

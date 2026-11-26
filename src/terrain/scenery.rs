@@ -1091,7 +1091,7 @@ fn lava_material(kind: Bare, seed: u64) -> serde_json::Value {
         _ => {
             serde_json::json!({"type": "lambertian",
                 "albedo": {"pattern": {"node": "fractal", "scale": 0.8, "smallest": 0.02, "seed": seed}, "interpolation": "smooth",
-                    "color_map": [[0, [0.06, 0.052, 0.045]], [0.5, [0.09, 0.078, 0.066]], [0.68, [0.11, 0.1, 0.09]], [0.75, [0.24, 0.24, 0.22]], [1, [0.3, 0.3, 0.28]]]},
+                    "color_map": [[0, [0.06, 0.052, 0.045]], [0.5, [0.09, 0.078, 0.066]], [0.7, [0.1, 0.092, 0.082]], [0.78, [0.17, 0.17, 0.16]], [1, [0.22, 0.22, 0.2]]]},
                 "normal": {"graph": {"node": "cells", "style": "stones", "plan": true, "scale": 2, "seed": seed + 1}, "amount": 0.3}})
         }
     }
@@ -1099,7 +1099,7 @@ fn lava_material(kind: Bare, seed: u64) -> serde_json::Value {
 /// Fresh lava's albedos, seen from afar: pāhoehoe, ʻaʻā, and old lava, weathered and lichened.
 const PAHOEHOE: [f64; 3] = [0.04, 0.04, 0.045];
 const AA: [f64; 3] = [0.05, 0.042, 0.036];
-const OLD_LAVA: [f64; 3] = [0.11, 0.1, 0.09];
+const OLD_LAVA: [f64; 3] = [0.08, 0.074, 0.067];
 
 const FIELDS: [f64; 3] = [0.13, 0.13, 0.07];
 const GRAVEL: [f64; 3] = [0.24, 0.23, 0.21];

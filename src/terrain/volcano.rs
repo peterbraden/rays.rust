@@ -64,6 +64,7 @@
 //! running into the sea or out of the domain is lost to it (no longer ponded at its edge).
 
 use crate::geometry::Pcg32;
+use std::collections::HashMap;
 use crate::na::Vector3;
 use crate::terrain::domain::{sphere_dir, Domain, Layout};
 use crate::procedural::nubis_clouds::smoothstep;
@@ -314,34 +315,50 @@ const MAX_FLOWS: usize = 64;
 pub const FLOW_WIDTH: f64 = 1500.;
 /// The longest a flow runs, metres, give or take half.
 pub const FLOW_LENGTH: f64 = 20e3;
+/// How many flow thicknesses deep a flow confined to a valley lies.
+const CONFINED: f64 = 3.;
 /// The longest a shield's flow runs, metres, give or take half.
 pub const SHIELD_FLOW_LENGTH: f64 = 35e3;
 
 /// The cells a flow of `width` metres covers across its path at cell `c`, heading to `next`
 /// (the path's cell, and those beside it out to half the width either way, walked across the
-/// grid square to the flow's way, stopping at `fixed` cells).
-fn lateral(domain: &Domain, c: usize, next: Option<usize>, width: f64, fixed: &[bool]) -> Vec<usize> {
+/// grid square to the flow's way, stopping at `ground` higher than the path's by more than the
+/// flow's `thickness`), and the share of its width beyond `fixed` cells (into the sea or out of
+/// the domain).
+fn lateral(domain: &Domain, c: usize, next: Option<usize>, width: f64, fixed: &[bool], ground: &dyn Fn(usize) -> f64, thickness: f64) -> (Vec<usize>, f64) {
     let mut cells = vec![c];
     let cell = domain.area[c].sqrt();
-    let Some(next) = next else { return cells };
-    let reach = (0.5 * width / cell).round() as usize;
-    if reach == 0 { return cells; }
+    let Some(next) = next else { return (cells, 0.) };
+    if 0.5 * width < cell { return (cells, 0.); }
     let up = domain.dirs[c];
-    let across = up.cross(&(domain.dirs[next] - up)).normalize();
+    let along = (domain.dirs[next] - up).normalize();
+    let across = up.cross(&along).normalize();
+    // Each step the edge neighbour furthest across, less how far it strays from the line
+    // square to the flow through the path's cell.
+    let score = |n: usize, side: f64| {
+        let o = domain.dirs[n] - up;
+        side * o.dot(&across) - 2. * o.dot(&along).abs()
+    };
+    let half = 0.5 * width / domain.radius;
+    let mut gone = 0.;
     for side in [1., -1.] {
-        let (mut at, mut gone) = (c, 0.);
-        while gone + 0.5 * cell < 0.5 * width {
-            // The edge neighbour most nearly square to the flow, this side.
-            let Some(l) = domain.edges(at).iter()
-                .max_by(|a, b| (side * (domain.dirs[a.to] - domain.dirs[at]).dot(&across)).total_cmp(&(side * (domain.dirs[b.to] - domain.dirs[at]).dot(&across))))
-                else { break };
-            if side * (domain.dirs[l.to] - domain.dirs[at]).dot(&across) <= 0. || fixed[l.to] { break; }
-            gone += l.dist * ((domain.dirs[l.to] - domain.dirs[at]).normalize().dot(&across)).abs();
+        let mut at = c;
+        loop {
+            let reached = side * (domain.dirs[at] - up).dot(&across);
+            let Some(l) = domain.edges(at).iter().max_by(|a, b| score(a.to, side).total_cmp(&score(b.to, side))) else { break };
+            let o = domain.dirs[l.to] - up;
+            if side * o.dot(&across) <= reached || side * o.dot(&across) > half { break; }
+            if fixed[l.to] {
+                gone += (half - reached) / (2. * half);
+                break;
+            }
+            // (Lava doesn't climb the side of its valley above its own top.)
+            if ground(l.to) > ground(c) + thickness { break; }
             at = l.to;
             cells.push(at);
         }
     }
-    cells
+    (cells, gone)
 }
 
 /// A hotspot's supply of basalt, cubic metres per year, for a full-height shield in its main
@@ -443,10 +460,13 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
             let start = if pick == 0 { summit.or(vent.cell) } else { vent.rifts.get(pick - 1).copied() };
             let Some(mut c) = start.or(vent.cell) else { break };
             let per_metre = vent.flow_thickness * width;
-            let length = (lava_volume / flows as f64 / per_metre).min(longest * (0.5 + rng.next_f64()));
+            // The flow's lava, used as it goes; and how far it has run.
+            let mut left = (lava_volume / flows as f64).min(per_metre * longest * (0.5 + rng.next_f64()));
             let mut run = 0.;
             let mut came = None;
-            while run < length {
+            // What this flow has laid, so the ground it meets beside it is the ground it found.
+            let mut own: HashMap<usize, f64> = HashMap::new();
+            while left > 0. {
                 if fixed[c] { break; } // into the sea, or beyond the domain
                 // Down the steepest way; or, in a hollow (often of the flow's own making, its
                 // lava beside it raising the way ahead), ponding and spilling over its lowest
@@ -455,14 +475,29 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
                     .filter(|l| Some(l.to) != came)
                     .map(|l| (l.to, (ground[c] - ground[l.to] - p.roughness * rng.next_f64()) / l.dist, l.dist))
                     .max_by(|a, b| a.1.total_cmp(&b.1));
-                // The flow's volume over this step along it: on the cell, and on those beside
-                // it where the flow is wider than the cell.
-                let step = next.map_or(domain.area[c].sqrt(), |(_, _, dist)| dist).min(length - run).max(0.);
-                let laid = per_metre * step;
-                // Across the flow's width: the cells beside the path, out to half the width
-                // either side, walked across the grid square to the flow (on cells wider than
-                // the flow, the path's cell alone).
-                let across = lateral(domain, c, next.map(|(to, _, _)| to), width, fixed);
+                // In a hollow, the flow ponds: its lava fills the cell to the lip it spills over
+                // (a metre above the lowest neighbour) before going on, as much as it has left.
+                if let Some((to, slope, _)) = next && slope <= 0. {
+                    let fill = ((ground[to] - ground[c] + 1.) * domain.area[c]).min(left).max(0.);
+                    ground[c] += fill / domain.area[c];
+                    lava[c] += fill / domain.area[c];
+                    mark(c, 0.);
+                    total += fill;
+                    left -= fill;
+                    if left <= 0. { break; }
+                }
+                // The flow's volume over this step along it, across its width: the cells
+                // beside the path, out to half the width either side, walked across the grid
+                // square to the flow, as far as the ground beside stays below the flow's top
+                // (on cells wider than the flow, the path's cell alone). Confined to a valley,
+                // it lies deeper there, up to `CONFINED` flow thicknesses, and runs farther.
+                let step = next.map_or(domain.area[c].sqrt(), |(_, _, dist)| dist);
+                let laid = (per_metre * step).min(left);
+                let found = |n: usize| ground[n] - own.get(&n).copied().unwrap_or(0.);
+                // (The share of its width that runs into the sea or out of the domain is lost.)
+                let (across, gone) = lateral(domain, c, next.map(|(to, _, _)| to), width, fixed, &found, vent.flow_thickness);
+                left -= laid * gone;
+                let laid = laid * (1. - gone);
                 let aa = match vent.form {
                     Form::Shield => {
                         let slope = next.map_or(0., |(_, s, _)| s);
@@ -476,8 +511,15 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
                     lava[c] += v / domain.area[c];
                     mark(c, aa);
                 };
-                for &n in &across { lay(n, laid / across.len() as f64); }
-                total += laid;
+                let mut used = 0.;
+                for &n in &across {
+                    let v = (laid / across.len() as f64).min(CONFINED * vent.flow_thickness * domain.area[n]);
+                    lay(n, v);
+                    *own.entry(n).or_default() += v / domain.area[n];
+                    used += v;
+                }
+                total += used;
+                left -= used;
                 run += step;
                 match next {
                     Some((to, _, _)) if step > 0. => { came = Some(c); c = to; }

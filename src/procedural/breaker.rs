@@ -268,11 +268,32 @@ impl crate::shapes::geometry::Geometry for BreakerSurface {
 /// through the surface: `BreakerSurface`); reflections off the outside still do.
 pub struct BreakerWater {
     noise: crate::noise::PerlinNoise,
+    /// The trough's level and the wave's height, for where foam lies.
+    trough: f64,
+    height: f64,
 }
 
 impl BreakerWater {
-    pub fn new(seed: u64) -> BreakerWater {
-        BreakerWater { noise: crate::noise::PerlinNoise::shuffled(seed.wrapping_add(0x5717)) }
+    pub fn new(breaker: &Breaker) -> BreakerWater {
+        BreakerWater {
+            noise: crate::noise::PerlinNoise::shuffled(breaker.seed.wrapping_add(0x5717)),
+            trough: breaker.center.y - TROUGH * breaker.height,
+            height: breaker.height,
+        }
+    }
+
+    /// How much of the surface at `p`, of normal `normal`, is foam, 0 or 1 but at its edges:
+    /// the lace earlier waves left on the water, a third of it in patches a metre or so across
+    /// and holes between, where the water lies nearly level (the trough in front, the still
+    /// water behind), none up the face, low on the wave.
+    fn foam(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> f64 {
+        let n = |x: f64, y: f64, z: f64| self.noise.noise(x, y, z);
+        let level = crate::math::smoothstep(0.85, 0.97, normal.y);
+        let low = crate::math::smoothstep(0.25, 0.1, (p.y - self.trough) / self.height);
+        if level * low <= 0. { return 0.; }
+        // The lace: two octaves, its edges sharpened.
+        let lace = 0.65 * n(p.x / 0.9 + 31.7, p.y / 0.9, p.z / 0.9) + 0.35 * n(p.x / 0.3 + 5.2, p.y / 0.3, p.z / 0.3);
+        (level * low * crate::math::smoothstep(0.05, 0.15, lace)).clamp(0., 1.)
     }
 
     /// The surface's small relief at `p` (m): capillary ripples a few centimetres long, in three
@@ -310,6 +331,26 @@ impl crate::material::model::MaterialModel for BreakerWater {
         let tilted = self.rippled(&intersection.point, &intersection.normal);
         let normal = if tilted.dot(&r.rd).signum() == intersection.normal.dot(&r.rd).signum() { tilted } else { intersection.normal };
         let rippled = crate::intersection::Intersection { normal, ..*intersection };
+        // Foam floating on the surface, seen from above it: a thin layer of bubbles, sending
+        // back diffusely 0.4 of the light and letting 0.4 through, diffusely, into the water
+        // (so it is lit from below by the water's glow as well as by the sky), one or the other
+        // by half: each weighted twice.
+        let foam = self.foam(&intersection.point, &intersection.normal);
+        if foam > 0. && r.rd.dot(&intersection.normal) < 0. && crate::geometry::rand() < foam {
+            let up = intersection.normal;
+            let offset = crate::material::functions::surface_offset(intersection, s).max(1e-4);
+            let albedo = crate::color::Color::new(0.8, 0.82, 0.81).as_reflectance();
+            if crate::geometry::rand() < 0.5 {
+                return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal: up }, r, &(intersection.point + up * offset), s);
+            }
+            let d = -up + crate::geometry::point_on_unit_sphere(crate::geometry::rand(), crate::geometry::rand());
+            let rd = if d.norm() < 1e-9 { -up } else { d.normalize() };
+            return crate::material::model::ScatteredRay {
+                ray: Some(crate::ray::Ray { ro: intersection.point - up * offset, rd }),
+                attenuate: albedo, emit: crate::color::Color::black(),
+                light_sampling: crate::material::model::LightSampling::None,
+            };
+        }
         let mut out = crate::material::functions::scatter_dielectric(crate::ocean::WATER_INDEX, crate::color::Color::white(), r, &rippled,
             crate::material::functions::surface_offset(intersection, s));
         let leaving = r.rd.dot(&intersection.normal) > 0.;

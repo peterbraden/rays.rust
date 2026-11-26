@@ -141,6 +141,10 @@ impl Geometry for Transform {
         self.item.flatten()?.iter().map(|p| p.transformed(&self.transform)).collect()
     }
 
+    fn flatten_faces(&self) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> {
+        self.item.flatten_faces()?.iter().map(|(p, face)| Some((p.transformed(&self.transform)?, *face))).collect()
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         // Intersect in object space, then map the hit back into world space.
         self.item.intersects(&self.to_object(r)).map(|i| self.to_world(r, i))

@@ -30,6 +30,13 @@ impl Group {
         Group { parts, bounds, flat: std::sync::OnceLock::new() }
     }
 
+    /// Parts' primitives, each face marked with its part.
+    fn numbered(parts: Vec<Option<Vec<(crate::wavefront::flat::Prim, u32)>>>) -> Vec<(crate::wavefront::flat::Prim, u32)> {
+        parts.into_iter().enumerate().flat_map(|(k, prims)| {
+            prims.into_iter().flatten().map(move |(p, face)| (p, (face & ((1 << FACE_BITS) - 1)) | ((k as u32) << FACE_BITS)))
+        }).collect()
+    }
+
     /// The parts left to the group's own code: all, unless some were flattened.
     fn rest(&self) -> impl Iterator<Item = (usize, &(dyn Geometry + Send + Sync))> {
         let flat = self.flat.get();
@@ -78,21 +85,27 @@ impl Geometry for Group {
         self.parts.iter().any(|p| p.occludes(r, min, max))
     }
 
-    /// The parts that `flatten` whole, as primitives, each hit reporting its part as `nearest`
-    /// numbers it (and its primitive, if the part's faces are its primitives); None unless some
-    /// parts can and some can't.
+    /// Every part, if every part flattens: each primitive with its part's face, and the part
+    /// in the face's top bits, as `nearest` numbers hits.
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        Some(self.flatten_faces()?.into_iter().map(|(p, _)| p).collect())
+    }
+
+    fn flatten_faces(&self) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> {
+        let parts = self.parts.iter().map(|p| p.flatten_faces()).collect::<Option<Vec<_>>>()?;
+        Some(Group::numbered(parts.into_iter().map(Some).collect()))
+    }
+
+    /// The parts that flatten, as primitives, numbered as `flatten_faces` numbers them; None
+    /// unless some parts can and some can't. The rest are `intersects_rest`'s.
     fn flatten_parts(&self) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> {
-        let flattened: Vec<Option<Vec<crate::wavefront::flat::Prim>>> = self.parts.iter().map(|p| p.flatten()).collect();
+        let flattened: Vec<Option<Vec<(crate::wavefront::flat::Prim, u32)>>> = self.parts.iter().map(|p| p.flatten_faces()).collect();
         let flat: Vec<bool> = flattened.iter().map(Option::is_some).collect();
         if flat.iter().all(|&f| f) || !flat.iter().any(|&f| f) {
             return None;
         }
         let _ = self.flat.set(flat);
-        Some(flattened.into_iter().enumerate().flat_map(|(k, prims)| {
-            let by_face = self.parts[k].faces_are_primitives();
-            prims.into_iter().flatten().enumerate()
-                .map(move |(i, p)| (p, (if by_face { i as u32 } else { 0 }) | ((k as u32) << FACE_BITS)))
-        }).collect())
+        Some(Group::numbered(flattened))
     }
 
     fn intersects_rest(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
@@ -156,11 +169,12 @@ mod tests {
 
     #[test]
     fn test_the_parts_that_flatten_are_given_up_and_the_rest_kept() {
-        // A sphere, which flattens, nearer than a group of one, which doesn't (as a landscape's
-        // mesh and its displaced patches).
+        // A sphere, which flattens, nearer than a torus about the ray's start, which doesn't
+        // (as a landscape's mesh and a shape only its own code intersects); the ray meets the
+        // torus's inside at 9.
         let g = Group::new(vec![
             Box::new(Sphere::new(Vector3::new(0., 0., 5.), 1.)),
-            Box::new(Group::new(vec![Box::new(Sphere::new(Vector3::new(0., 0., 10.), 1.))])),
+            Box::new(crate::shapes::algebraic::Torus::new(10., 1.)),
         ]);
         let r = Ray { ro: Vector3::zeros(), rd: Vector3::z() };
         // Until flattened, the rest is all of it.
@@ -173,10 +187,12 @@ mod tests {
         assert!((rest.dist - 9.).abs() < 1e-9 && rest.face >> FACE_BITS == 1);
         assert!(!g.occludes_rest(&r, 0., 6.) && g.occludes_rest(&r, 0., 9.5));
         assert!((g.intersects(&r).unwrap().dist - 4.).abs() < 1e-9);
-        // A group whose parts all flatten, or none, gives none up.
-        let all = Group::new(vec![Box::new(Sphere::new(Vector3::new(0., 0., 5.), 1.))]);
+        // A group whose parts all flatten flattens whole, its parts numbered as its hits are;
+        // one of none, not at all; neither gives parts up.
+        let all = Group::new(vec![Box::new(Sphere::new(Vector3::new(0., 0., 5.), 1.)), Box::new(Sphere::new(Vector3::new(0., 0., 10.), 1.))]);
         assert!(all.flatten_parts().is_none());
-        let none = Group::new(vec![Box::new(Group::new(vec![Box::new(Sphere::new(Vector3::new(0., 0., 5.), 1.))]))]);
-        assert!(none.flatten_parts().is_none());
+        assert_eq!(all.flatten_faces().unwrap().iter().map(|(_, f)| f >> FACE_BITS).collect::<Vec<_>>(), vec![0, 1]);
+        let none = Group::new(vec![Box::new(crate::shapes::algebraic::Torus::new(10., 1.))]);
+        assert!(none.flatten_parts().is_none() && none.flatten().is_none());
     }
 }

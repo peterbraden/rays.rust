@@ -921,6 +921,63 @@ impl Geometry for DisplacedTerrain {
     fn primitives(&self) -> u64 {
         (self.cells.len() * 2) as u64
     }
+
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        Some(self.flatten_faces()?.into_iter().map(|(p, _)| p).collect())
+    }
+
+    /// Every cell diced, as it would be once a ray met it (to its level for the camera, coarser
+    /// out of its view), as triangles with the dicing's normals: for the kernels, which can't
+    /// dice as they go. Each triangle's face is its cell, as a hit's is, so `undisplaced` finds
+    /// its tile, which stays diced. Only within `FLATTEN_TRIANGLES`: a terrain the camera sees
+    /// up close, diced finely where it looks, can come to hundreds of millions of triangles
+    /// over all its cells (`displaced-terrain.json`: 200 million), of which rays meet a few.
+    fn flatten_faces(&self) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> {
+        self.flatten_within(FLATTEN_TRIANGLES)
+    }
+}
+
+/// The most triangles a displaced terrain flattens to (`flatten_faces`); beyond them it stays
+/// its own code's to intersect, diced as rays meet it. A landscape's patches about a camera
+/// near the ground come to some 3 million (`terrain-alpine`: 5.3 million primitives in all, at
+/// a peak of 6.9 GB on the GPU).
+pub const FLATTEN_TRIANGLES: u64 = 6_000_000;
+
+impl DisplacedTerrain {
+    /// The triangles it would dice to, over every cell.
+    pub fn diced_triangles(&self) -> u64 {
+        self.cells.iter().map(|&k| 2u64 << (2 * self.levels[k as usize] as u64)).sum()
+    }
+
+    /// `flatten_faces`, if within `budget` triangles.
+    fn flatten_within(&self, budget: u64) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> {
+        use rayon::prelude::*;
+        if self.diced_triangles() > budget {
+            return None;
+        }
+        let triangles = |k: usize| -> Vec<(crate::wavefront::flat::Prim, u32)> {
+            let tile = self.tile(k);
+            let n = tile.n;
+            let at = |i: usize, j: usize| j * (n + 1) + i;
+            let normal = |x: usize| Vector3::new(tile.nrm[x][0] as f64, tile.nrm[x][1] as f64, tile.nrm[x][2] as f64);
+            let mut out = Vec::with_capacity(2 * n * n);
+            for j in 0 .. n {
+                for i in 0 .. n {
+                    let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
+                    // Wound so the geometric normal points up the base's normal, as the
+                    // dicing's do: (c - a) x (b - a) with x and z increasing along b and c.
+                    for [p, q, s] in [[a, c, b], [d, b, c]] {
+                        out.push((crate::wavefront::flat::Prim::Triangle {
+                            v: [tile.pos[p], tile.pos[q], tile.pos[s]],
+                            n: Some([normal(p), normal(q), normal(s)]),
+                        }, k as u32));
+                    }
+                }
+            }
+            out
+        };
+        Some(self.cells.par_iter().map(|&k| triangles(k as usize)).flatten().collect())
+    }
 }
 
 #[cfg(test)]
@@ -1030,6 +1087,39 @@ mod tests {
             // A point on no cell's surface has no answer.
             assert!(t.undisplaced(&Vector3::new(0., 50., 0.), 0).is_none());
         }
+    }
+
+    #[test]
+    fn test_flattened_cells_are_the_diced_surface() {
+        // The triangles a terrain flattens to (for the kernels) are hit where the terrain is,
+        // facing up, each numbered by its cell, whose tile `undisplaced` then reads.
+        let g = json!({"node": "fractal", "scale": 3, "smallest": 0.5, "amplitude": 0.3});
+        let t = DisplacedTerrain::new(grid(8, 8.), Graph::parse(&g).unwrap(), false, &Detail { level: 4, min_spacing: Some(0.05), ..Default::default() }).unwrap();
+        // Counted before dicing, so a terrain too fine to hold whole (`FLATTEN_TRIANGLES`) isn't
+        // diced to find out.
+        assert!(t.flatten_within(t.diced_triangles() - 1).is_none());
+        assert!(t.tiles.iter().all(|tile| tile.get().is_none()));
+        let prims = t.flatten_faces().unwrap();
+        let diced: usize = t.cells.iter().map(|&k| 2 * t.tile(k as usize).n.pow(2)).sum();
+        assert_eq!((prims.len(), prims.len() as u64), (diced, t.diced_triangles()));
+        let mut rng = crate::geometry::Pcg32::new(5, 2);
+        let mut tested = 0;
+        for _ in 0 .. 300 {
+            let ro = Vector3::new(rng.next_f64() * 7. - 3.5, 5., rng.next_f64() * 7. - 3.5);
+            let r = Ray { ro, rd: Vector3::new(rng.next_f64() - 0.5, -2., rng.next_f64() - 0.5) };
+            let Some(hit) = t.intersects(&r) else { continue };
+            // The nearest of the triangles, by brute force.
+            let nearest = prims.iter().filter_map(|(p, face)| match p {
+                crate::wavefront::flat::Prim::Triangle { v, .. } => intersect_triangle(&r, v[0], v[1], v[2]).map(|(d, _, _)| (d, *face, (v[1] - v[0]).cross(&(v[2] - v[0])).y)),
+                _ => None,
+            }).filter(|x| x.0 > 0.).min_by(|a, b| a.0.total_cmp(&b.0)).expect("the triangles are hit where the terrain is");
+            assert!((nearest.0 * r.rd.norm() - hit.dist).abs() < 1e-9, "{} against {}", nearest.0 * r.rd.norm(), hit.dist);
+            assert_eq!(nearest.1, hit.face);
+            assert!(nearest.2 > 0., "wound to face up: the geometric normal, (v1 - v0) x (v2 - v0), along +y");
+            assert!(t.undisplaced(&hit.point, nearest.1).is_some());
+            tested += 1;
+        }
+        assert!(tested > 200, "{} rays hit", tested);
     }
 
     /// With no displacement, rays straight down land on the smooth base surface.

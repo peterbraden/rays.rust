@@ -136,6 +136,15 @@ pub trait Geometry: Sync{
     // (`wavefront::flat`); None if it can't be.
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { None }
 
+    // `flatten`'s primitives, each with the `face` a hit on it reports to the shape's materials
+    // (`uv`, `undisplaced`): by default its index if the shape's faces are its primitives
+    // (`faces_are_primitives`), else 0. A shape whose faces are something else (a displaced
+    // terrain's cells) says so here.
+    fn flatten_faces(&self) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> {
+        let by_face = self.faces_are_primitives();
+        Some(self.flatten()?.into_iter().enumerate().map(|(i, p)| (p, if by_face { i as u32 } else { 0 })).collect())
+    }
+
     // For a shape of parts of which some are primitives and some aren't (`group::Group`: a
     // landscape's mesh and its displaced patches), when it can't `flatten` whole: the parts
     // that can, as primitives, each with the `face` the shape's own hit there would report. The
@@ -261,6 +270,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 { (**self).transmittance(r, min, max) }
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color { (**self).transmittance_color(r, min, max) }
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { (**self).flatten() }
+    fn flatten_faces(&self) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> { (**self).flatten_faces() }
     fn flatten_parts(&self) -> Option<Vec<(crate::wavefront::flat::Prim, u32)>> { (**self).flatten_parts() }
     fn intersects_rest(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> { (**self).intersects_rest(r, min, max) }
     fn occludes_rest(&self, r: &Ray, min: f64, max: f64) -> bool { (**self).occludes_rest(r, min, max) }

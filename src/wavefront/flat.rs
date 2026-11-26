@@ -310,7 +310,7 @@ impl FlatScene {
                 }
                 continue;
             }
-            let prims = match o.geometry.flatten() {
+            let prims = match o.geometry.flatten_faces() {
                 Some(prims) => Some(prims),
                 None if o.medium.material_at(Vector3::zeros()).is_sky() => {
                     sky = Some(o.clone());
@@ -363,9 +363,7 @@ impl FlatScene {
                 shapes.push((o.clone(), index));
                 continue;
             };
-            let by_face = o.geometry.faces_are_primitives();
-            for (face, p) in prims.into_iter().enumerate() {
-                let face = if by_face { face } else { 0 };
+            for (p, face) in prims {
                 match p {
                     Prim::Plane { .. } => planes.push((p, index)),
                     _ => bounded.push((p, index, face as u32)),

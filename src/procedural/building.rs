@@ -45,6 +45,8 @@ pub enum Part {
     LogsAlongZ,
     /// The logs' sawn ends.
     LogEnds,
+    /// Moss stuffed between the logs.
+    Chinking,
     Stone,
     Mortar,
     Roof,
@@ -59,7 +61,7 @@ pub enum Part {
 }
 
 impl Part {
-    pub const ALL: [Part; 13] = [Part::LogsAlongX, Part::LogsAlongZ, Part::LogEnds, Part::Stone, Part::Mortar, Part::Roof,
+    pub const ALL: [Part; 14] = [Part::LogsAlongX, Part::LogsAlongZ, Part::LogEnds, Part::Chinking, Part::Stone, Part::Mortar, Part::Roof,
         Part::Trim, Part::Door, Part::Iron, Part::Snow, Part::Icicles, Part::Wreath, Part::Ribbon];
 
     /// Its name in a scene's `"materials"`.
@@ -67,6 +69,7 @@ impl Part {
         match self {
             Part::LogsAlongX | Part::LogsAlongZ => "logs",
             Part::LogEnds => "log_ends",
+            Part::Chinking => "chinking",
             Part::Stone => "stone",
             Part::Mortar => "mortar",
             Part::Roof => "roof",
@@ -150,11 +153,69 @@ pub fn cuboid(m: &mut IndexedMesh, c: V, a: V, b: V, e: V) {
     }
 }
 
-/// An axis-aligned box from `lo` to `hi`, in frame `f` (coordinates along u, v, n).
+/// A flat triangle, its own vertices, facing `towards`.
+fn triangle(m: &mut IndexedMesh, corners: [V; 3], towards: V) {
+    let n = (corners[1] - corners[0]).cross(&(corners[2] - corners[0]));
+    let n = if n.dot(&towards) >= 0. { n } else { -n };
+    let n = n.try_normalize(1e-15).unwrap_or(towards);
+    let k = m.positions.len();
+    for c in corners {
+        m.positions.push(c);
+        m.normals.push(n);
+    }
+    facing(m, k, k + 1, k + 2, &n);
+}
+
+/// A box like `cuboid`, its edges and corners chamfered by `bevel`: nothing made by hand has
+/// a perfectly sharp edge, and the chamfers catch the light along it.
+pub fn bevelled(m: &mut IndexedMesh, c: V, a: V, b: V, e: V, bevel: f64) {
+    let axes = [a, b, e];
+    let bevel = bevel.min(0.45 * axes.iter().map(|x| x.norm()).fold(f64::INFINITY, f64::min));
+    if bevel <= 0. {
+        return cuboid(m, c, a, b, e);
+    }
+    let unit = axes.map(|x| x.normalize());
+    // The corner with signs `s`, pulled in from it along the two axes other than `face`.
+    let at = |s: [f64; 3], face: usize| -> V {
+        let mut p = c + a * s[0] + b * s[1] + e * s[2];
+        for k in 0 .. 3 {
+            if k != face { p -= unit[k] * (s[k] * bevel); }
+        }
+        p
+    };
+    let signs = [-1., 1.];
+    for face in 0 .. 3 {
+        let (j, k) = ((face + 1) % 3, (face + 2) % 3);
+        for sf in signs {
+            let corner = |sj: f64, sk: f64| { let mut s = [0.; 3]; s[face] = sf; s[j] = sj; s[k] = sk; at(s, face) };
+            quad(m, [corner(-1., -1.), corner(1., -1.), corner(1., 1.), corner(-1., 1.)], unit[face] * sf);
+        }
+    }
+    // The chamfers along the edges: between faces `p` and `q`, running along the third axis.
+    for (p, q, r) in [(0, 1, 2), (1, 2, 0), (2, 0, 1)] {
+        for sp in signs {
+            for sq in signs {
+                let s = |sr: f64| { let mut s = [0.; 3]; s[p] = sp; s[q] = sq; s[r] = sr; s };
+                quad(m, [at(s(-1.), p), at(s(1.), p), at(s(1.), q), at(s(-1.), q)], unit[p] * sp + unit[q] * sq);
+            }
+        }
+    }
+    for sx in signs {
+        for sy in signs {
+            for sz in signs {
+                let s = [sx, sy, sz];
+                triangle(m, [at(s, 0), at(s, 1), at(s, 2)], unit[0] * sx + unit[1] * sy + unit[2] * sz);
+            }
+        }
+    }
+}
+
+/// An axis-aligned box from `lo` to `hi`, in frame `f` (coordinates along u, v, n), its edges
+/// eased as a joiner's are.
 fn block(m: &mut IndexedMesh, f: &Frame, lo: V, hi: V) {
     let c = (lo + hi) / 2.;
     let h = (hi - lo) / 2.;
-    cuboid(m, f.at(c.x, c.y, c.z), f.u * h.x, f.v * h.y, f.n * h.z);
+    bevelled(m, f.at(c.x, c.y, c.z), f.u * h.x, f.v * h.y, f.n * h.z, 0.007);
 }
 
 /// Unit vectors at right angles to `d` (a unit vector).
@@ -167,17 +228,17 @@ fn perpendiculars(d: &V) -> (V, V) {
 /// A tube from `a` to `b`, its radius `radius(s, angle)` at `s` from 0 to 1 along it; closed
 /// by flat caps where the radius isn't zero.
 fn tube(m: &mut IndexedMesh, a: V, b: V, around: usize, along: usize, radius: impl Fn(f64, f64) -> f64) {
-    tube_into(m, None, a, b, around, along, V::zeros(), radius)
+    tube_into(m, None, a, b, around, along, &|_| V::zeros(), radius)
 }
 
-/// As `tube`, its axis bowed by `bow` at its middle (and less towards its ends), and its caps,
+/// As `tube`, its axis moved by `bend(s)` at `s` along it, and its caps,
 /// if `caps`, put in a mesh of their own (a log's sawn ends, in end grain).
 #[allow(clippy::too_many_arguments)]
-fn tube_into(m: &mut IndexedMesh, caps: Option<&mut IndexedMesh>, a: V, b: V, around: usize, along: usize, bow: V,
-             radius: impl Fn(f64, f64) -> f64) {
+fn tube_into(m: &mut IndexedMesh, caps: Option<&mut IndexedMesh>, a: V, b: V, around: usize, along: usize,
+             bend: &dyn Fn(f64) -> V, radius: impl Fn(f64, f64) -> f64) {
     let d = (b - a).normalize();
     let (p, q) = perpendiculars(&d);
-    let axis = |s: f64| a + (b - a) * s + bow * (PI * s).sin();
+    let axis = |s: f64| a + (b - a) * s + bend(s);
     let k = m.positions.len();
     for j in 0 ..= along {
         let s = j as f64 / along as f64;
@@ -584,6 +645,7 @@ impl Cottage {
         let mut logs_x = empty();
         let mut logs_z = empty();
         let mut log_ends = empty();
+        let mut chinking = empty();
         for mut wall in self.walls() {
             let f = wall.frame;
             let mut courses = vec![];
@@ -605,7 +667,7 @@ impl Cottage {
                 if below.is_finite() { o.bottom = below + s / 2.; } else { o.bottom = self.plinth; }
                 if above.is_finite() { o.top = above - s / 2.; }
             }
-            for &(y, half) in &courses {
+            for (index, &(y, half)) in courses.iter().enumerate() {
                 // The log, less the openings it crosses.
                 let mut pieces = vec![(-half, half)];
                 for o in &wall.openings {
@@ -616,6 +678,19 @@ impl Cottage {
                         }).filter(|(p, q)| q - p > 0.1).collect();
                     }
                 }
+                // The whole log, before it was cut for the openings. No two are alike, and none
+                // is straight: thicker or thinner, tapering from butt to top (laid butt to top
+                // course by course, so the wall stays level), bowed in or out of the wall and
+                // sagging a little, out of round, swelling at knots.
+                let thick = r * (1. + (rng.next_f64() - 0.5) * 0.24);
+                let taper = (0.1 + rng.next_f64() * 0.12) * if index % 2 == 0 { 1. } else { -1. };
+                let oval = rng.next_f64() * TAU;
+                let phase = rng.next_f64() * TAU;
+                let span = 2. * half;
+                let bow = f.n * ((rng.next_f64() - 0.5) * 0.06 * (span / 6.).min(1.))
+                    + V::y() * ((rng.next_f64() - 0.5) * 0.015 * (span / 6.).min(1.));
+                let knots: Vec<(f64, f64, f64)> = (0 .. (span * 0.8) as usize + 1)
+                    .map(|_| (rng.next_f64(), rng.next_f64() * TAU, 0.03 + rng.next_f64() * 0.05)).collect();
                 for (mut p, mut q) in pieces {
                     // Ends past the corners aren't sawn to a line: each a little longer or shorter.
                     // (Those cut to the roof's line only shorter.)
@@ -623,26 +698,26 @@ impl Cottage {
                     let jitter = |x: f64| if past { (x - 0.4) * 0.12 } else { -x * 0.06 };
                     if p <= -half + 1e-9 { p -= jitter(rng.next_f64()); }
                     if q >= half - 1e-9 { q += jitter(rng.next_f64()); }
-                    let thick = r * (1. + (rng.next_f64() - 0.5) * 0.14);
-                    let taper = (rng.next_f64() - 0.5) * 0.1;
-                    let oval = rng.next_f64() * TAU;
-                    let phase = rng.next_f64() * TAU;
                     let length = q - p;
-                    // No log is straight: each bows a little in or out of the wall, swells at
-                    // knots, and was hewn out of round.
-                    let bow = f.n * ((rng.next_f64() - 0.5) * 0.025 * (length / 4.).min(1.));
-                    let knots: Vec<(f64, f64, f64)> = (0 .. (length * 0.8) as usize + 1)
-                        .map(|_| (rng.next_f64(), rng.next_f64() * TAU, 0.03 + rng.next_f64() * 0.05)).collect();
+                    // Where along the whole log a point of this piece is.
+                    let whole = |t: f64| ((p + t * length + half) / span).clamp(0., 1.);
                     let mesh = if f.u.x.abs() > 0.5 { &mut logs_x } else { &mut logs_z };
-                    tube_into(mesh, Some(&mut log_ends), f.at(p, y, 0.), f.at(q, y, 0.), 20, ((length / 0.12).ceil() as usize).max(2), bow, |t, a| {
+                    tube_into(mesh, Some(&mut log_ends), f.at(p, y, 0.), f.at(q, y, 0.), 20, ((length / 0.12).ceil() as usize).max(2),
+                        &|t| bow * (PI * whole(t)).sin(), |t, a| {
+                        let t = whole(t);
                         let knot: f64 = knots.iter().map(|&(at, round, size)| {
-                            let along = (t - at) * length / 0.07;
+                            let along = (t - at) * span / 0.07;
                             let angle = (a - round + PI).rem_euclid(TAU) - PI;
                             size * (-(along * along) - angle * angle * 2.5).exp()
                         }).sum();
                         thick * (1. + taper * (t - 0.5)) * (1. + 0.04 * (2. * (a - oval)).cos() + 0.012 * (3. * a + phase).sin())
-                            * (1. + 0.015 * (t * length * 2.3 + phase).sin() + knot)
+                            * (1. + 0.015 * (t * span * 2.3 + phase).sin() + knot)
                     });
+                    // Moss stuffed in the seam under it, seen where logs don't quite meet.
+                    let (a, b) = (p.max(-wall.half + r), q.min(wall.half - r));
+                    if b - a > 0.05 {
+                        block(&mut chinking, &f, V::new(a, y - s * 0.75, -r * 0.45), V::new(b, y - s * 0.25, r * 0.45));
+                    }
                 }
             }
             for o in &wall.openings {
@@ -654,12 +729,13 @@ impl Cottage {
         let reach = self.width / 2. + self.gable_overhang - 0.05;
         for z in [-self.depth / 4., 0., self.depth / 4.] {
             let y = self.under_roof(z) - r * 0.9 / cos;
-            tube_into(&mut logs_x, Some(&mut log_ends), V::new(-reach, y, z), V::new(reach, y, z), 20, 40, V::zeros(),
+            tube_into(&mut logs_x, Some(&mut log_ends), V::new(-reach, y, z), V::new(reach, y, z), 20, 40, &|_| V::zeros(),
                 |_, a| r * 0.9 * (1. + 0.03 * (2. * a).cos()));
         }
         parts.add(Part::LogsAlongX, logs_x);
         parts.add(Part::LogsAlongZ, logs_z);
         parts.add(Part::LogEnds, log_ends);
+        parts.add(Part::Chinking, chinking);
 
         // The plinth.
         masonry(&mut parts, V::new(-self.width / 2. - r * 1.2, -0.3, -self.depth / 2. - r * 1.2),
@@ -693,12 +769,12 @@ impl Cottage {
             // Bargeboards along the gables' edges.
             for end in [-1., 1.] {
                 let centre = ridge + down * (slope / 2.) + up * (thick / 2. - 0.03) + V::x() * (end * (half + 0.015));
-                cuboid(&mut roof, centre, V::x() * 0.015, down * (slope / 2. + 0.01), up * (thick / 2. + 0.06));
+                bevelled(&mut roof, centre, V::x() * 0.015, down * (slope / 2. + 0.01), up * (thick / 2. + 0.06), 0.006);
             }
             if self.snow > 0. {
                 let frame = Frame { origin: crest, u: V::x(), v: down, n: up };
-                snow.append_mesh(snow_pad(&frame, (-half + 0.01, half - 0.01), (0., slope + thick * tan), self.snow,
-                    0.35, 0.35 * self.snow, Some(V::y()), &noise, 0.05));
+                snow.append_mesh(snow_pad(&frame, (-half - 0.03, half + 0.03), (0., slope + thick * tan), self.snow,
+                    0.15, 0.35 * self.snow, Some(V::y()), &noise, 0.03));
             }
             // Icicles along the eave: from under the snow's cornice, where it curls over the
             // edge, or with no snow from under the edge itself.
@@ -727,7 +803,7 @@ impl Cottage {
             masonry(&mut parts, V::new(cx - w, top - 0.3, cz - w), V::new(cx + w, height, cz + w), 0.2, &mut rng, &noise);
             let cap = V::new(cx, height + 0.04, cz);
             let mut slab = empty();
-            cuboid(&mut slab, cap, V::x() * (w + 0.06), V::y() * 0.04, V::z() * (w + 0.06));
+            bevelled(&mut slab, cap, V::x() * (w + 0.06), V::y() * 0.04, V::z() * (w + 0.06), 0.015);
             parts.add(Part::Stone, slab);
             if self.snow > 0. {
                 let frame = Frame { origin: cap + V::y() * 0.04, u: V::x(), v: V::z(), n: V::y() };
@@ -756,10 +832,11 @@ impl Cottage {
             let line = self.overhang + 0.05;
             let gap = (side > 0.).then_some((-door, door));
             snow.append_mesh(drift(&frame, (-reach, reach), gap, |_, v| {
-                let bank = (-((v - line) / 0.5).powi(2)).exp();
-                let foot = (-(v / 0.4).powi(2)).exp() * 0.75;
-                bank.max(foot)
-            }, self.snow * 1.6, (-0.1, line + 1.5), noise));
+                // A ridge where the roof drips, and a little banked against the wall.
+                let bank = (-((v - line) / 0.4).powi(2)).exp();
+                let foot = (-(v / 0.3).powi(2)).exp() * 0.45;
+                bank + foot * (1. - bank)
+            }, self.snow * 1.1, (-0.1, line + 1.3), noise));
         }
         for side in [1., -1.] {
             // The gables: no roof drips there, only snow blown against the wall.
@@ -1040,6 +1117,24 @@ mod tests {
         let top = snow.iter().flat_map(|m| m.positions.iter()).map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
         let crest = c.ridge() + 0.12 / c.tan().atan().cos();
         assert!(top > crest + 0.6 * c.snow && top < crest + 1.5 * c.snow / c.tan().atan().cos(), "{} over {}", top, crest);
+    }
+
+    /// A bevelled box's faces all face out of it, and it encloses the box less its corners.
+    #[test]
+    fn test_bevelled_boxes_face_outwards() {
+        let mut m = empty();
+        let (a, b, e) = (V::new(0.5, 0., 0.), V::new(0., 0.2, 0.1), V::new(0., -0.05, 0.1));
+        bevelled(&mut m, V::new(1., 2., 3.), a, b, e, 0.02);
+        assert_eq!(m.triangles.len(), 6 * 2 + 12 * 2 + 8);
+        let mut volume = 0.;
+        for t in &m.triangles {
+            let [p, q, r] = t.map(|i| m.positions[i] - V::new(1., 2., 3.));
+            let n = (q - p).cross(&(r - p));
+            assert!(n.dot(&(p + q + r)) > -1e-12, "a face looks inwards");
+            volume += p.dot(&q.cross(&r)) / 6.;
+        }
+        let whole = 8. * a.norm() * b.norm() * e.norm();
+        assert!(volume < whole && volume > 0.9 * whole, "{} of {}", volume, whole);
     }
 
     #[test]

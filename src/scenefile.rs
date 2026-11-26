@@ -4235,19 +4235,32 @@ impl SceneFile {
         let logs = |along: [f64; 3]| -> Value {
             use serde_json::json;
             let stretch = |by: f64, input: Value| json!({"node": "transform", "scale": along.map(|a| if a > 1. { by } else { 1. }), "input": input});
-            let grain = stretch(20., json!({"node": "fractal", "scale": 0.05, "smallest": 0.002, "seed": seed + 11}));
-            let checks = json!({"node": "smoothstep", "from": 0.06, "to": 0.0,
-                "input": stretch(14., json!({"node": "cells", "style": "edges", "scale": 0.05, "seed": seed + 13}))});
+            // Fine grain raised by the weather, and a few long thin checks, splits along the
+            // grain where the log dried, some open and some closed.
+            let grain = stretch(40., json!({"node": "fractal", "scale": 0.025, "smallest": 0.002, "seed": seed + 11}));
+            let checks = json!({"node": "multiply", "inputs": [
+                {"node": "smoothstep", "from": 0.018, "to": 0.0,
+                    "input": stretch(12., json!({"node": "cells", "style": "edges", "scale": 0.15, "seed": seed + 13}))},
+                {"node": "smoothstep", "from": 0.05, "to": 0.25, "input": {"node": "fractal", "scale": 0.6, "seed": seed + 21}}]});
             // Weathering over the wall, and each log its own shade.
             let weather = json!({"node": "add", "inputs": [{"node": "fractal", "scale": 0.8, "seed": seed + 12},
                 {"node": "multiply", "inputs": [0.8, {"node": "add", "inputs": [-0.5,
                     stretch(25., json!({"node": "cells", "style": "id", "scale": 0.2, "seed": seed + 15}))]}]}]});
             json!({"type": "lambertian", "albedo": {"pattern": checks.clone(), "color_map": [
-                    [0, {"pattern": {"node": "add", "inputs": [grain.clone(), {"node": "multiply", "inputs": [0.7, weather]}]},
-                         "color_map": [[-0.6, [0.13, 0.11, 0.09]], [0.0, [0.23, 0.2, 0.17]], [0.6, [0.34, 0.31, 0.27]]]}],
+                    [0, {"pattern": {"node": "add", "inputs": [{"node": "multiply", "inputs": [1.0, grain.clone()]}, {"node": "multiply", "inputs": [0.7, weather]},
+                        // Darker in the seams between the logs, where water and dirt lie.
+                        {"node": "multiply", "inputs": [-1.1, {"node": "smoothstep", "from": 0.05, "to": 0.5,
+                            "input": {"node": "occlusion", "radius": 0.1, "rays": 4}}]}]},
+                         "color_map": [[-0.6, [0.1, 0.088, 0.075]], [0.0, [0.19, 0.17, 0.15]], [0.6, [0.29, 0.27, 0.24]]]}],
                     [1, [0.03, 0.025, 0.02]]]},
-                "normal": {"graph": {"node": "add", "inputs": [{"node": "multiply", "inputs": [0.0015, grain]},
-                    {"node": "multiply", "inputs": [-0.004, checks]}]}, "amount": 1}})
+                "normal": {"graph": {"node": "add", "inputs": [{"node": "multiply", "inputs": [0.0008, grain]},
+                    {"node": "multiply", "inputs": [-0.003, checks]}]}, "amount": 1}})
+        };
+        let paint = |dark: [f64; 3], light: [f64; 3], seed: u64| -> Value {
+            serde_json::json!({"type": "lambertian", "albedo": {"pattern": {"node": "add", "inputs": [
+                {"node": "fractal", "scale": 0.3, "seed": seed},
+                {"node": "multiply", "inputs": [0.5, {"node": "fractal", "scale": 0.02, "smallest": 0.002, "seed": seed + 1}]}]},
+                "color_map": [[-0.6, dark], [0.5, light]]}})
         };
         let defaults = |part: Part| -> Value {
             use serde_json::json;
@@ -4255,15 +4268,22 @@ impl SceneFile {
                 Part::LogsAlongX => logs([16., 1., 1.]),
                 Part::LogsAlongZ => logs([1., 1., 16.]),
                 Part::LogEnds => json!({"type": "lambertian", "albedo": {"pattern": {"node": "fractal", "scale": 0.05, "seed": seed + 14},
-                    "color_map": [[-0.5, [0.14, 0.12, 0.1]], [0.5, [0.27, 0.23, 0.18]]]}}),
-                Part::Stone => json!({"type": "snow_cover", "cover": 0.38, "drift": 0.1, "seed": seed + 6,
+                    "color_map": [[-0.5, [0.1, 0.09, 0.075]], [0.5, [0.2, 0.17, 0.14]]]}}),
+                Part::Stone => json!({"type": "snow_cover", "cover": 0.22, "drift": 0.1, "seed": seed + 6,
                     "snow": {"preset": "fresh"}, "material": {"type": "rock", "preset": "granite", "lichen": 0.2, "seed": seed}}),
                 Part::Mortar => json!({"type": "lambertian", "albedo": [0.3, 0.29, 0.27]}),
                 Part::Roof => json!({"type": "lambertian", "albedo": [0.1, 0.075, 0.06]}),
-                Part::Trim => json!({"type": "plastic", "albedo": [0.72, 0.7, 0.65], "roughness": 0.45}),
-                Part::Door => json!({"type": "plastic", "albedo": [0.36, 0.06, 0.04], "roughness": 0.5}),
+                // Paint that has seen some winters: matt, uneven, greyed.
+                Part::Trim => paint([0.53, 0.52, 0.48], [0.68, 0.67, 0.62], seed + 16),
+                Part::Door => paint([0.2, 0.05, 0.035], [0.33, 0.085, 0.05], seed + 17),
+                Part::Chinking => json!({"type": "lambertian", "albedo": {"pattern": {"node": "fractal", "scale": 0.04, "seed": seed + 18},
+                    "color_map": [[-0.5, [0.05, 0.05, 0.03]], [0.5, [0.13, 0.12, 0.07]]]}}),
                 Part::Iron => json!({"type": "plastic", "albedo": [0.03, 0.03, 0.03], "roughness": 0.35}),
-                Part::Snow => json!({"type": "snow", "preset": "fresh", "sparkle": 0.05, "seed": seed}),
+                // Not icing: a fine unevenness where it fell and the wind moved it.
+                Part::Snow => json!({"type": "snow", "preset": "fresh", "sparkle": 0.05, "seed": seed,
+                    "normal": {"graph": {"node": "add", "inputs": [
+                        {"node": "fractal", "scale": 0.25, "smallest": 0.004, "amplitude": 0.005, "seed": seed + 19},
+                        {"node": "fractal", "scale": 0.03, "smallest": 0.002, "amplitude": 0.0008, "seed": seed + 20}]}, "amount": 1}}),
                 Part::Icicles => json!({"type": "ice", "preset": "white"}),
                 Part::Wreath => json!({"type": "lambertian", "albedo": [0.025, 0.07, 0.03]}),
                 Part::Ribbon => json!({"type": "plastic", "albedo": [0.55, 0.03, 0.03], "roughness": 0.25}),

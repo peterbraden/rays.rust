@@ -313,8 +313,36 @@ written.
 
 The fits furthest from their scans are broken stone and crusted ground. The fits move sizes,
 contrasts and colours freely, so what is left is structure the graphs can't make: angular,
-sharp-edged stones lying on one another, and cracks. Those need new sprites (`bombing` with
-angular shapes) rather than more search.
+sharp-edged stones lying on one another, and cracks. Those needed new sprites rather than more search:
+`bombing`'s `stone` shape (below).
+
+### Roaming: fitting on fresh ground
+
+A fit sees one patch of the preset, and with fifty free numbers it can learn that patch: a stone
+just where the scan has one, a blotch that happens to balance the palette. Scored again on three
+patches it never saw (the camera moved by up to 25 of the preset's sizes), some applied fits
+lost much of their gain: weathered_grey_rock 1.90 → 4.55, granite_outcrop 1.00 → 1.95,
+bedded_sandstone 0.81 → 1.44, mossy_slab 0.80 → 1.32.
+
+So fits now roam (the default; `--fixed` keeps the camera still). Each generation of the search
+renders its candidates on a new patch, the same for all of them so they are compared fairly, and
+the search can only keep what holds everywhere. At the end the author's preset (colours solved),
+the best of three late generations and the search's mean are each judged on `--judges` (3) fresh
+patches, and the lowest is chosen if it beats the author's. The record keeps those scores under
+`judged`. The `stone` sprites (angular, faceted, rimmed) rebuilt angular_rubble and stony_bank.
+
+Scores on the three fresh patches, the presets applied before against the roaming fits:
+
+| Preset | Before | Roaming fit | Applied |
+|---|---|---|---|
+| angular_rubble | 10.61 | 1.22 | yes (rebuilt with `stone` sprites) |
+| stony_bank | 2.30 | 2.28 | yes (rebuilt with `stone` sprites) |
+| granite_outcrop | 1.95 | 0.73 | yes |
+| mossy_slab | 1.32 | 0.97 | yes |
+| bedded_sandstone | 1.44 | 1.10 | no: a large dark blotch close up |
+| weathered_grey_rock | 4.55 | 4.56 | no |
+
+A fit's score on its own patch is no longer the measure; one on fresh ground is.
 
 ### Presets modelled on scans
 

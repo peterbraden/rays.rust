@@ -6279,10 +6279,10 @@
         "pattern": {
           "node": "bombing",
           "shape": "stone",
-          "cell": 0.0754,
+          "cell": 0.04,
           "size": [
-            0.0443,
-            0.0725
+            0.02,
+            0.05
           ],
           "width": 0.8728,
           "density": 1.057,
@@ -6652,10 +6652,10 @@
                       {
                         "node": "bombing",
                         "shape": "stone",
-                        "cell": 0.0754,
+                        "cell": 0.04,
                         "size": [
-                          0.0443,
-                          0.0725
+                          0.02,
+                          0.05
                         ],
                         "width": 0.8728,
                         "density": 1.057,
@@ -6671,10 +6671,10 @@
                       {
                         "node": "bombing",
                         "shape": "stone",
-                        "cell": 0.0754,
+                        "cell": 0.04,
                         "size": [
-                          0.0443,
-                          0.0725
+                          0.02,
+                          0.05
                         ],
                         "width": 0.8728,
                         "density": 1.057,
@@ -6696,10 +6696,10 @@
                     "pattern": {
                       "node": "bombing",
                       "shape": "stone",
-                      "cell": 0.0754,
+                      "cell": 0.04,
                       "size": [
-                        0.0443,
-                        0.0725
+                        0.02,
+                        0.05
                       ],
                       "width": 0.8728,
                       "density": 1.057,
@@ -6741,10 +6741,10 @@
                     "pattern": {
                       "node": "bombing",
                       "shape": "stone",
-                      "cell": 0.0754,
+                      "cell": 0.04,
                       "size": [
-                        0.0443,
-                        0.0725
+                        0.02,
+                        0.05
                       ],
                       "width": 0.8728,
                       "density": 1.057,
@@ -6834,10 +6834,10 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.0754,
+                  "cell": 0.04,
                   "size": [
-                    0.0443,
-                    0.0725
+                    0.02,
+                    0.05
                   ],
                   "width": 0.8728,
                   "density": 1.057,
@@ -7102,7 +7102,19 @@
             "material.albedo.color_map.1.1.color_map.2.1.color_map.4.0": 1.0611,
             "material.albedo.color_map.1.1.color_map.2.1.color_map.5.0": 1.1448
           }
-        }
+        },
+        "hold": [
+          {
+            "node": "bombing",
+            "seed": 1331,
+            "field": "cell"
+          },
+          {
+            "node": "bombing",
+            "seed": 1331,
+            "field": "size"
+          }
+        ]
       }
     ],
     "scale": 1.3993

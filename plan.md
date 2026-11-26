@@ -2653,3 +2653,101 @@ paths that only it uses (step 5). What stays, on purpose: `MaterialModel`, `Geom
   frame comes first.
 - Whether `trace` is kept, frozen, as the tests' reference after step 5, or the references
   become stored images.
+
+
+## 16. A render report: what was computed where, kept with the render
+
+The motive (November 2026): finding why the GPU's ray queries lost to its BVH on
+`pebble-beach` took a day of measurements made by hand, because what a render did is printed
+and then lost. The stage table, the GPU's set-up laps, the integrator's reasons and the peak
+memory go to the terminal; `scripts/render-all-stats.py` scrapes them back out of logs; memory
+over time, paging, and which materials and shapes sent work to the host aren't recorded at
+all. The answer, in the end, was memory: 1.3 GB held for the whole render and a 2.4 GB
+transient while the acceleration structures were built, on an 8 GB machine, so the time went
+to swap, not to tracing. A report written by every render would have shown it at once.
+
+### Decisions (taken)
+
+- Contents: all four kinds below (phases and memory; memory over time; where the work ran;
+  decisions and context).
+- Kept in the render's saved state (`<output>.accum`), not beside it: a render's report
+  travels with its samples, and a resumed render adds its run to the report of the runs
+  before, so the state says how every sample in it was made.
+- Built on the BVH branch, so the acceleration structures are reported from the start.
+
+### What we know
+
+- The state is `RAYSACC3`: a 32-byte header (magic, key, width, height), then 56 bytes a
+  pixel; `load_state` refuses any other length (`rendercontext.rs`). A report must come after
+  the pixels, under a new magic, `RAYSACC4`.
+- Collected now, but printed and dropped: `scheduler::Stats` (stages: batches, items,
+  seconds; live paths by round; device seconds), `GpuRenderer::setup` (set-up laps),
+  `gpu::Timers` (kernels by the device's clock), the integrator chosen and the reasons the
+  others refused (`main.rs`), `peak_memory` (`getrusage`, after the build), each object's
+  build time ("Built pebbles in 1.78 s"), and the world builder's progress events
+  (`world::report`, `world::set_reporter`).
+- The CLI alone may read process and system memory: the library must build for wasm32 with
+  no C dependencies (`CLAUDE.md`). So the report's types and recording are the library's; the
+  probes that read the operating system are `main.rs`'s, passed in.
+- What a footprint is on macOS: `phys_footprint` counts the GPU's allocations
+  (`IOAccelerator (graphics)`), as `footprint` showed (1.89 GB of 4.82 GB on
+  `pebble-beach`), so one number covers both devices on unified memory.
+- Run-to-run timing drifts by up to 14% on this M2 (thermal), and paging depends on what
+  else is running; the report must carry the machine's state, or its numbers can't be compared.
+
+### Assumptions (to check before relying on them)
+
+- That `proc_pid_rusage` (`ri_phys_footprint`) is cheap enough to sample every 250 ms from a
+  thread without disturbing the render: `footprint` itself took about half a second a call.
+- That counting per material and per shape on the host costs nothing measurable: a counter
+  in thread-local arrays, merged like `scheduler::Stats`. To be measured on `forest-dense`,
+  whose host stage is the largest.
+- That wgpu tells us the acceleration structures' sizes. It doesn't expose them directly
+  (`Blas` has no size; `compact_blas` discards the compacted size internally); the backend's
+  `size_info` may need a patch to the vendored wgpu, or the sizes estimated from footprints
+  before and after the build.
+- That a report of a few kilobytes a run is small beside the pixels (56 bytes each: 32 MB for
+  a 960x600 render), so keeping every run's is fine.
+
+### What it records
+
+A run (one invocation that added samples), as JSON, appended to the state's list of runs:
+
+1. Decisions and context: the renderer's commit and whether its sources were dirty
+   (`build.rs` can embed them); the machine (CPU, cores, RAM, GPU adapter, ray queries or
+   BVH, lanes); free memory and swap used at the start; the arguments and the samples
+   before and after; the integrator chosen and each refusal's reason.
+2. Phases: each part of set-up (each object's build, the BVH, flattening, the scene's
+   buffers, the device, the shader, the kernels, the acceleration structures) and of the
+   render, with wall and CPU seconds and the footprint before and after; the GPU's buffers by
+   name and size, and the acceleration structures' sizes (see assumptions).
+3. Memory over time: a sample every 250 ms of the footprint, the process's page faults, and
+   the machine's free memory, swap-ins and swap-outs, with the phase it fell in. Kept as a
+   series bounded in length (the full series for a short render, decimated for a long one).
+4. Where the work ran: the stage table, now per device, and below it per material and per
+   shape: vertices shaded and rays intersected by the kernels and by the host, with the
+   host's seconds; per medium, collisions and walks. Names as the scene file gives them
+   (`objects[3] (Stand)`, the material's name), so a report reads against the scene.
+
+### Steps
+
+1. The report's types and the state's new section (`RAYSACC4`; a `RAYSACC3` state loads,
+   with no runs). Test: a state saved and loaded keeps its runs, and a resumed render appends
+   one; an old state still resumes.
+2. Context, decisions and phases, from what is collected already (`Stats`, `setup`, the
+   integrator's reasons, each object's build). Printing reads from the report, so the
+   terminal and the state agree.
+3. The memory sampler (`main.rs`: macOS through `proc_pid_rusage` and `host_statistics64`,
+   Linux through `/proc`), and the GPU's buffer sizes.
+4. Per material and per shape counts on the host, and the cost measured.
+5. `rays --report <output>` prints a state's runs; `scripts/render-all-stats.py` reads the
+   report instead of the logs.
+
+### Open questions
+
+- Whether a report should also be written when a render isn't saved (a preview in the
+  browser builder has no state file): the library could hand the report to the page instead.
+- How much of a world build (`world::Progress`, already keyed and timed in its manifest) to
+  copy into a render's report, or only reference by key.
+- Whether to keep a per-pixel time map in the state too (`--time-map` computes one per run,
+  and it is 8 bytes a pixel).

@@ -203,8 +203,9 @@ as Death Valley's is against the Black Mountains.
 ## Hotspots: shield volcanoes and their chains
 
 Volcanoes erupt where the planet's volcanism is high (`terrain::volcano`: vents on a 30 km
-lattice, each erupting for its own tens of thousands of years, building a cone and sending lava
-down the slopes, which stands as hard basalt). Hotspots do more (`terrain::hotspot`): plumes
+lattice, each erupting for its own tens of thousands of years, building a stratovolcano, concave
+with a summit crater, a fifth of them collapsing into a caldera as they die, with a field of
+cinder cones about it, and sending lava down the slopes, which stands as hard basalt). Hotspots do more (`terrain::hotspot`): plumes
 fixed beneath the moving plates (the tectonics' own, which now keeps the motion of the plate
 over each, or without tectonics eight drawn from the seed), each leaving a chain of **shield
 volcanoes** behind it along its plate's motion, a shield every 55 km or so, the oldest kept 70

@@ -22,7 +22,8 @@
 //!   "volcanoes"`, its most volcanic mountains, with `"near": "plateau"`, a plateau of flat
 //!   strata in the subtropics (mesa country), with `"near": "rift"`, fault blocks in the
 //!   subtropics (basin and range), with `"near": "hotspot"`, the young shield volcano of a
-//!   hotspot standing highest above the sea, or with `"near": "coast"`, a coast with
+//!   hotspot standing highest above the sea, with `"near": "atoll"`, the youngest atoll of a
+//!   hotspot's chain, or with `"near": "coast"`, a coast with
 //!   mountains behind it); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
 //! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes (coloured by the bedrock
@@ -523,6 +524,7 @@ pub fn site_of(d: &Value) -> Site {
         (_, _, Some("plateau")) => Site::Plateau,
         (_, _, Some("rift")) => Site::Rift,
         (_, _, Some("hotspot")) => Site::Hotspot,
+        (_, _, Some("atoll")) => Site::Atoll,
         (_, _, None | Some("mountains")) => Site::Mountains,
         (_, _, Some(x)) => panic!("Unknown terrain domain \"near\": {}", x),
     }

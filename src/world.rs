@@ -114,7 +114,7 @@ use web_time::Instant;
 
 /// In every key: raise it when a stage's computation changes, so that what was built before
 /// isn't taken for what would be built now.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 /// A running stage saves where it has got to this often, seconds.
 pub const CHECKPOINT: f64 = 30.;
 /// `print` says how far a stage has got when nothing has been printed for this long, seconds.
@@ -362,8 +362,10 @@ pub enum Site {
     Plateau,
     /// ... a stretched province of fault blocks in the subtropics (basin and range), ...
     Rift,
-    /// ... or a hotspot's young shield volcano, the one standing highest above the sea.
+    /// ... a hotspot's young shield volcano, the one standing highest above the sea, ...
     Hotspot,
+    /// ... or the youngest atoll of a hotspot's chain.
+    Atoll,
 }
 
 /// Samples of the planet a site is chosen from.
@@ -380,6 +382,7 @@ impl Site {
             Site::Plateau => planet.most_plateau(SITE_SAMPLES),
             Site::Rift => planet.most_rifted(SITE_SAMPLES),
             Site::Hotspot => planet.young_shield().unwrap_or_else(|| planet.most_volcanic(SITE_SAMPLES)),
+            Site::Atoll => planet.atoll().or_else(|| planet.young_shield()).unwrap_or_else(|| planet.most_volcanic(SITE_SAMPLES)),
         }
     }
 }

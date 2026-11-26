@@ -81,9 +81,9 @@ pub const RADIUS_PER_HEIGHT: f64 = 8.;
 pub const EROSION: f64 = 6.;
 /// Beyond this latitude, degrees, coral can't keep up with a sinking island (the Darwin point).
 pub const DARWIN_POINT: f64 = 28.;
-/// A tropical island worn and sunk to within this of the sea, metres, is an atoll: its reef
-/// stands about it, and what is left of the volcano is an islet in the lagoon, if anything.
-const ATOLL: f64 = 30.;
+/// A tropical island worn and sunk below this, metres (the sea), is an atoll: its reef stands
+/// about it, the volcano beneath its lagoon.
+const ATOLL: f64 = 0.;
 /// Depth of an atoll's lagoon, metres.
 const LAGOON: f64 = 25.;
 
@@ -169,9 +169,11 @@ pub fn subsidence(age: f64) -> f64 {
 }
 
 /// How far a shield aged `age` (Myr) has sunk since the waves planed it off, metres: from
-/// about 20 million years old (its height above the sea worn away by then, `EROSION`), on to
-/// a kilometre and a half (the Emperor seamounts' flat tops lie one to two kilometres down).
-pub fn drowned(age: f64) -> f64 { 1500. * smoothstep(20., 70., age) }
+/// about 8 million years old (its height above the sea mostly worn away by then, `EROSION`),
+/// so that Hawaii's are atolls from about 15 million years (French Frigate Shoals, at 12, is
+/// one with a last pinnacle of the volcano standing in it), on to a kilometre and a half (the
+/// Emperor seamounts' flat tops lie one to two kilometres down).
+pub fn drowned(age: f64) -> f64 { 1500. * smoothstep(8., 70., age) }
 
 impl Shield {
     /// Its rise above the surrounding sea floor at `d` (a unit vector), metres, on a planet of
@@ -210,7 +212,7 @@ impl Shield {
 
     /// The reef about it at `d`, if it is an atoll: the elevation its reef, lagoon and fore-reef
     /// hold the ground at, at least (None away from an atoll). `summit` is the shield's worn
-    /// summit's elevation, metres (within `ATOLL` of the sea, or below it, for an atoll).
+    /// summit's elevation, metres (below the sea, `ATOLL`, for an atoll).
     pub fn reef(&self, d: &Vector3<f64>, radius: f64, summit: f64) -> Option<f64> {
         let latitude = self.dir.y.clamp(-1., 1.).asin().to_degrees().abs();
         if !self.emerged || latitude > DARWIN_POINT || self.age < 3. || summit >= ATOLL { return None; }
@@ -355,6 +357,12 @@ impl Shields {
     }
 
     /// The shields that may reach `d`.
+    /// The shields that are atolls: tropical islands worn and sunk to the sea, a reef about
+    /// their lagoon.
+    pub fn atolls(&self) -> impl Iterator<Item = &Shield> {
+        self.list.iter().zip(&self.summits).filter(|(s, z)| s.reef(&s.dir, self.radius, **z).is_some()).map(|(s, _)| s)
+    }
+
     pub fn near(&self, d: &Vector3<f64>) -> impl Iterator<Item = &Shield> {
         let c = crate::terrain::domain::Domain::sphere_cell_at(LATTICE, d);
         self.cells.get(&c).into_iter().flatten().map(|&i| &self.list[i])
@@ -462,9 +470,9 @@ mod tests {
         let mut atolls = 0;
         for (i, s) in list.iter().enumerate().filter(|(_, s)| s.age > 10. && s.age < 45.) {
             if field.summits[i] >= ATOLL || s.dir.y.asin().to_degrees().abs() > DARWIN_POINT { continue; }
-            // A lagoon (or what is left of the island) at its middle, the reef's crest about it.
+            // A lagoon at its middle, the reef's crest about it.
             let (middle, _) = field.elevation(&s.dir, floor);
-            assert!(middle >= -LAGOON - 1. && middle < ATOLL, "its middle at {}", middle);
+            assert!(middle >= -LAGOON - 1. && middle < 0., "its middle at {}", middle);
             let crest = (0..72).map(|k| {
                 let a = k as f64 * 5f64.to_radians();
                 let rim = 0.25 * s.radius;

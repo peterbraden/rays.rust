@@ -458,6 +458,12 @@ impl Planet {
             .map(|(_, d)| (d.y.clamp(-1., 1.).asin().to_degrees(), (-d.z).atan2(d.x).to_degrees()))
     }
 
+    /// The (latitude, longitude) in degrees of the hotspots' youngest atoll; None without any.
+    pub fn atoll(&self) -> Option<(f64, f64)> {
+        self.shields().atolls().min_by(|a, b| a.age.total_cmp(&b.age))
+            .map(|s| (s.dir.y.clamp(-1., 1.).asin().to_degrees(), (-s.dir.z).atan2(s.dir.x).to_degrees()))
+    }
+
     pub fn most_rifted(&self, samples: usize) -> (f64, f64) {
         self.best_site_in(samples, 15. ..40., |d| {
             let e = self.extension(d);

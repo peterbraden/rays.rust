@@ -2241,7 +2241,7 @@
               "kind": "enum",
               "default": "mountains",
               "doc": "Patch without lat/lon: centre it on the most such place.",
-              "options": ["mountains", "volcanoes", "coast", "plateau", "rift", "hotspot"]
+              "options": ["mountains", "volcanoes", "coast", "plateau", "rift", "hotspot", "atoll"]
             }
           ]
         },

@@ -459,8 +459,16 @@ in patches over grey steel), went 4.93 → 0.74, applied: red-brown rust and gre
 scan's, in place of orange over pale grey.
 verdigris_copper (to Metal058C, a turquoise patina streaked down over copper, seen as a wall)
 went 5.40 → 1.64, applied: the scan's turquoise in place of a pale wash, though blotchier and
-less streaked than the scan from afar. chipped_paint and aged_bronze are variants, which the fit
-can't move.
+less streaked than the scan from afar. 
+A variant (a preset whose material is another preset with some of its variables set, as
+grey_granite is granite with its own palette) kept its base's gloss in the fitting render, which
+strips only the materials it sees, so it mirrored the sun and nothing moved. The fit now inlines
+the base with the variant's fields as its variables first (`resolve_variant`), and a variant's
+palette is solved: grey_granite (to Granite002A) 19.0 → 5.40, softer and with less black like the
+slab, and verde_marble (to Marble009) 148 → 2.66, near-black green with faint veins like the slab
+in place of a bright teal; both applied, their structure their bases'. (Judged on the fitting
+patch: with only colours to move there was no search to roam.) The overlay variants
+(weathered_granite, aged_bronze, chipped_paint) need a material under them and aren't fitted.
 
 ### Presets modelled on scans
 

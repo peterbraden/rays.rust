@@ -40,7 +40,9 @@
    1,
    0
   ],
-  "angle": 0.85
+  "angle": 0.85,
+  "aperture": 0.003,
+  "focus_distance": 3
  },
  "sun": {
   "intensity": 4.9

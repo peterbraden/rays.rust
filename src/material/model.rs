@@ -91,6 +91,22 @@ impl Covered {
     pub fn bare(bare: Baked) -> Covered {
         Covered { bare, snow: 0., snow_age: 0., ice: 0., blue: 0., water: 0. }
     }
+
+    /// `t` of `other` blended into this.
+    pub fn mix(&self, other: &Covered, t: f64) -> Covered {
+        let t = t.clamp(0., 1.);
+        let f = |a: f64, b: f64| a * (1. - t) + b * t;
+        Covered { bare: self.bare.mix(&other.bare, t), snow: f(self.snow, other.snow), snow_age: f(self.snow_age, other.snow_age),
+                  ice: f(self.ice, other.ice), blue: f(self.blue, other.blue), water: f(self.water, other.water) }
+    }
+
+    /// Three blended by barycentric weights `w` (summing to 1): across a triangle from its
+    /// corners'.
+    pub fn interpolate(c: [&Covered; 3], w: [f64; 3]) -> Covered {
+        let ab = w[0] + w[1];
+        let first = if ab > 0. { c[0].mix(c[1], w[1] / ab) } else { *c[0] };
+        first.mix(c[2], w[2])
+    }
 }
 
 pub trait MaterialModel: Sync{
@@ -221,5 +237,18 @@ mod tests {
         assert!((both.roughness - 0.4).abs() < 1e-12 && (both.refractive_index - 1.55).abs() < 1e-12);
         // And the ends are the materials themselves.
         assert_eq!(rough.mix(&other, 0.), rough);
+    }
+
+    #[test]
+    fn test_covers_interpolate_across_a_triangle() {
+        let corner = |snow: f64, grey: f64| Covered { snow, ..Covered::bare(Baked::diffuse(Color::new(grey, grey, grey))) };
+        let (a, b, c) = (corner(0., 0.1), corner(1., 0.4), corner(0.5, 0.7));
+        // At each corner, that corner's; at the middle, the mean.
+        for (w, at) in [([1., 0., 0.], &a), ([0., 1., 0.], &b), ([0., 0., 1.], &c)] {
+            let x = Covered::interpolate([&a, &b, &c], w);
+            assert!((x.snow - at.snow).abs() < 1e-12 && (x.bare.albedo.rgb.x - at.bare.albedo.rgb.x).abs() < 1e-12);
+        }
+        let mid = Covered::interpolate([&a, &b, &c], [1. / 3.; 3]);
+        assert!((mid.snow - 0.5).abs() < 1e-12 && (mid.bare.albedo.rgb.x - 0.4).abs() < 1e-12);
     }
 }

@@ -28,6 +28,10 @@ pub trait Medium : Sync{
     fn bake_at(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Option<crate::material::model::Covered> {
         self.material_at(i.point).bake(i, s).map(crate::material::model::Covered::bare)
     }
+    /// Shade the hit `i` from what covers it, `c`, interpolated from its triangle's vertices
+    /// (`bake_at`), rather than by its material there; None to shade it by its material.
+    fn scatter_covered(&self, _r: &crate::ray::Ray, _i: &crate::intersection::Intersection, _c: &crate::material::model::Covered,
+                       _s: &crate::scene::Scene) -> Option<crate::material::model::ScatteredRay> { None }
     /// What the surface knows about itself at its points, for function graphs' `field` nodes
     /// (`graph::Fields`): a landscape's simulation.
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { None }

@@ -364,7 +364,7 @@ pub fn sky_radiance(r: &Ray, s: &Scene, flat: &FlatScene) -> Color {
 /// code for, done one path at a time by code that has. It is why such paths sort last in the
 /// shading stage and are counted apart (`Stage::Host`): what they cost is what porting their
 /// material would save.
-fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::SceneObject>, h: &Hit) {
+fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::SceneObject>, h: &Hit, covered: Option<&crate::material::model::Covered>) {
     let found = Intersection { dist: h.dist, point: h.point, normal: h.shading, face: h.face, object: o, part: h.part };
     // Off the surface, on the side the ray arrived from (`trace::trace_intersection`).
     let bias = s.render.shadow_bias.max(found.spawn_offset());
@@ -390,7 +390,11 @@ fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::S
     crate::volume::resume_path(p.volume.0, p.volume.1, p.scattered);
     crate::volume::at_vertex();
     crate::geometry::begin_sampler(crate::sampler::SampleState::Sobol(p.sampler.clone()));
-    let interaction = o.medium.material_at(hit.point).scatter(&p.ray, &shaded, s);
+    // Shaded from its vertices' covers if it has them (a landscape's ground), else by its material.
+    let interaction = match covered.and_then(|c| o.medium.scatter_covered(&p.ray, &shaded, c, s)) {
+        Some(x) => x,
+        None => o.medium.material_at(hit.point).scatter(&p.ray, &shaded, s),
+    };
     if let Some(crate::sampler::SampleState::Sobol(sampler)) = crate::geometry::take_sampler() {
         p.sampler = sampler;
     }
@@ -454,7 +458,8 @@ pub fn host_vertex(s: &Scene, flat: &FlatScene, v: &mut HostVertex, hit: &Hit, s
         pixel: 0, ray: v.ray, beta: v.beta, l: v.l, weight: 1., depth: v.depth, specular: v.specular, prev_pdf: v.prev_pdf, sampler,
         scattered: v.scattered, lights_counted: v.lights_counted, directional: v.directional, hit: Some(*hit), done: false, volume: v.volume,
     };
-    host_bounce(&mut p, s, o, hit);
+    let covered = (hit.prim as usize) < listed && !flat.prim_cover.is_empty();
+    host_bounce(&mut p, s, o, hit, covered.then(|| flat.covered_at(hit.prim, &hit.point)).flatten().as_ref());
     *v = HostVertex {
         ray: p.ray, beta: p.beta, l: p.l, depth: p.depth, specular: p.specular, lights_counted: p.lights_counted, directional: p.directional, prev_pdf: p.prev_pdf,
         scattered: p.scattered, done: p.done, volume: p.volume,

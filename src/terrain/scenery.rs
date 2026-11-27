@@ -1405,6 +1405,33 @@ impl Medium for LandscapeMedium {
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(&*self.ground) }
 
+    /// Shaded from what its vertices' covers say, interpolated, as `Land::scatter` shades from
+    /// the cover at the hit: one of water, snow, ice or bare ground, by their shares; bare ground
+    /// a plastic for its coated share, else Lambertian, of its baked parameters.
+    fn scatter_covered(&self, r: &Ray, i: &Intersection, c: &crate::material::model::Covered, s: &Scene) -> Option<ScatteredRay> {
+        if !self.own {
+            return None;
+        }
+        if c.water > 0. && rand() < c.water {
+            let water = if self.ground.salt_lake(&i.point) { &self.brine } else { &self.water };
+            return Some(water.scatter(r, i, s));
+        }
+        let facing = &i.facing(r);
+        let g = &self.ground;
+        Some(match crate::material::snow::pick(&[(1. - c.snow - c.ice).max(0.), c.snow, c.ice]) {
+            1 => scatter_bsdf(&g.snow[(rand() < c.snow_age) as usize].bsdf(&facing.point, &facing.normal, Some(s)), r, &facing.point, s),
+            2 => scatter_bsdf(&g.ice[(rand() < c.blue) as usize].bsdf(&facing.normal, Some(s)), r, &facing.point, s),
+            _ => {
+                let b = &c.bare;
+                if b.coat > 0. && rand() < b.coat {
+                    crate::material::plastic::Plastic { albedo: b.albedo.into(), refractive_index: b.refractive_index, roughness: b.roughness, roughness_map: None }.scatter(r, i, s)
+                } else {
+                    crate::material::lambertian::Lambertian { albedo: b.albedo.into() }.scatter(r, i, s)
+                }
+            },
+        })
+    }
+
     /// The ground's cover (`Ground::bake`), wet where a river or lake is: only for the
     /// landscape's own ground, not a scene's material in its place.
     fn bake_at(&self, i: &Intersection, s: &Scene) -> Option<crate::material::model::Covered> {

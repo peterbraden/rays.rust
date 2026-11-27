@@ -231,6 +231,64 @@ impl FlatMaterial {
     }
 }
 
+/// `FlatScene::prim_cover` of a primitive not shaded at its vertices.
+pub const NO_COVER: u32 = u32::MAX;
+
+/// A triangle is shaded at its vertices only if its longest edge spans no more than this many
+/// pixels from the camera: the displaced patches, diced a pixel apart, are; the clipmap's
+/// rings further out, whose vertices are many pixels apart, would blur the cover's edges
+/// (snow, rock bands: a mean FLIP of 0.02 on terrain-alpine), and are shaded at their hits.
+pub const BAKE_PIXELS: f64 = 2.;
+
+/// The covers of the vertices of `prims`, an object's (`o`), baked once a vertex (`covers`
+/// gains them): each triangle's corners' indices into `covers`, in order, or `NO_COVER` for one
+/// too large on the screen (`BAKE_PIXELS`). None if its medium doesn't bake (most don't: only a
+/// landscape's ground is shaded at its vertices), found at the first vertex. Vertices are
+/// shared between triangles by their position, and each is baked with its own normal and its
+/// first triangle's face (for where it was displaced from).
+fn bake_vertices(s: &Scene, o: &std::sync::Arc<crate::sceneobject::SceneObject>, prims: &[(Prim, u32)],
+                 covers: &mut Vec<crate::material::model::Covered>) -> Option<Vec<[u32; 3]>> {
+    use rayon::prelude::*;
+    let corners = |p: &Prim| match p {
+        Prim::Triangle { v, n } => Some((*v, n.unwrap_or_else(|| { let g = (v[1] - v[0]).cross(&(v[2] - v[0])).normalize(); [g, g, g] }))),
+        _ => None,
+    };
+    let at = |point: Vector3<f64>, normal: Vector3<f64>, face: u32| crate::intersection::Intersection { dist: 1., point, normal, face, object: o, part: 0 };
+    // (`RAYS_SHADE_AT_HITS=1` shades every hit by its material, to compare.)
+    if std::env::var_os("RAYS_SHADE_AT_HITS").is_some() {
+        return None;
+    }
+    let (v, n) = prims.iter().find_map(|(p, _)| corners(p))?;
+    o.medium.bake_at(&at(v[0], n[0], prims[0].1), s)?;
+    let began = web_time::Instant::now();
+    // The camera's position and the angle a pixel subtends, at the image's middle.
+    let (w, h) = (s.image.width as f64, s.image.height as f64);
+    let (a, b) = (s.camera.get_ray(w / 2., h / 2., 0.5, 0.5), s.camera.get_ray(w / 2. + 1., h / 2., 0.5, 0.5));
+    let (eye, pixel) = (a.ro, a.rd.normalize().angle(&b.rd.normalize()).max(1e-12));
+    let small = |v: &[Vector3<f64>; 3]| {
+        let size = (v[1] - v[0]).norm().max((v[2] - v[1]).norm()).max((v[0] - v[2]).norm());
+        let distance = ((v[0] + v[1] + v[2]) / 3. - eye).norm();
+        size <= BAKE_PIXELS * pixel * distance
+    };
+    // Each distinct vertex, by its position's bits.
+    let mut index: std::collections::HashMap<[u64; 3], u32> = std::collections::HashMap::new();
+    let mut unique: Vec<(Vector3<f64>, Vector3<f64>, u32)> = Vec::new();
+    let mut out = Vec::with_capacity(prims.len());
+    for (p, face) in prims {
+        let Some((v, n)) = corners(p).filter(|(v, _)| small(v)) else { out.push([NO_COVER; 3]); continue };
+        out.push(std::array::from_fn(|k| {
+            let key = [v[k].x.to_bits(), v[k].y.to_bits(), v[k].z.to_bits()];
+            *index.entry(key).or_insert_with(|| { unique.push((v[k], n[k], *face)); (covers.len() + unique.len() - 1) as u32 })
+        }));
+    }
+    let baked: Vec<crate::material::model::Covered> = unique.par_iter()
+        .map(|&(point, normal, face)| o.medium.bake_at(&at(point, normal, face), s).unwrap_or_else(|| crate::material::model::Covered::bare(crate::material::model::Baked::diffuse(crate::color::Color::black()))))
+        .collect();
+    crate::report::phase(format!("flatten: {} vertices shaded at baking", baked.len()), began.elapsed().as_secs_f64());
+    covers.extend(baked);
+    Some(out)
+}
+
 /// The flattened scene.
 pub struct FlatScene {
     /// Bounded primitives, in the BVH's order, with their materials.
@@ -255,6 +313,12 @@ pub struct FlatScene {
     /// Where there are hosts: each primitive's place among its object's (its face, for
     /// `Geometry::uv`: a mesh flattens to its triangles in order). Empty otherwise.
     pub prim_face: Vec<u32>,
+    /// What covers the ground at each vertex of the triangles shaded at their vertices
+    /// (`Medium::bake_at`; plan.md section 18), each vertex once.
+    pub covers: Vec<crate::material::model::Covered>,
+    /// Where there are any: each primitive's vertices' covers, indices into `covers` (in its
+    /// corners' order), or `NO_COVER` for a primitive shaded at its hits.
+    pub prim_cover: Vec<[u32; 3]>,
     /// Participating media, as data (`volume::Volume::flat`). The GPU's kernels track paths
     /// through them; this crate's own stages don't (`FlatScene::needs_kernels`).
     pub media: Vec<crate::volume::FlatMedium>,
@@ -272,7 +336,10 @@ impl FlatScene {
         }
         let mut sky = None;
         let mut materials: Vec<FlatMaterial> = Vec::new();
-        let mut bounded: Vec<(Prim, u32, u32)> = Vec::new();
+        // (Each with its material, its face, and its vertices' baked covers, if its object's
+        // ground is shaded at vertices: indices into `covers`, `NO_COVER` otherwise.)
+        let mut bounded: Vec<(Prim, u32, u32, [u32; 3])> = Vec::new();
+        let mut covers: Vec<crate::material::model::Covered> = Vec::new();
         let mut hosts = Vec::new();
         let mut shapes = Vec::new();
         let mut planes: Vec<(Prim, u32)> = Vec::new();
@@ -356,17 +423,20 @@ impl FlatScene {
                     for (p, face) in parts {
                         match p {
                             Prim::Plane { .. } => planes.push((p, index)),
-                            _ => bounded.push((p, index, face)),
+                            _ => bounded.push((p, index, face, [NO_COVER; 3])),
                         }
                     }
                 }
                 shapes.push((o.clone(), index));
                 continue;
             };
-            for (p, face) in prims {
+            // A material its own code shades, at vertices if its medium bakes (a landscape's ground).
+            let baked = matches!(materials[index as usize], FlatMaterial::Host { .. })
+                .then(|| bake_vertices(s, o, &prims, &mut covers)).flatten();
+            for (k, (p, face)) in prims.into_iter().enumerate() {
                 match p {
                     Prim::Plane { .. } => planes.push((p, index)),
-                    _ => bounded.push((p, index, face as u32)),
+                    _ => bounded.push((p, index, face, baked.as_ref().map_or([NO_COVER; 3], |b| b[k]))),
                 }
             }
         }
@@ -386,9 +456,10 @@ impl FlatScene {
         if !problems.is_empty() {
             return Err(problems.join("; "));
         }
-        let (bvh, bounded) = BinaryBvh::build(bounded, |(p, _, _)| p.bounds());
+        let (bvh, bounded) = BinaryBvh::build(bounded, |(p, _, _, _)| p.bounds());
         let prim_face = if hosts.is_empty() { Vec::new() } else { bounded.iter().map(|b| b.2).collect() };
-        let (prims, prim_material): (Vec<Prim>, Vec<u32>) = bounded.into_iter().map(|(p, m, _)| (p, m)).unzip();
+        let prim_cover = if covers.is_empty() { Vec::new() } else { bounded.iter().map(|b| b.3).collect() };
+        let (prims, prim_material): (Vec<Prim>, Vec<u32>) = bounded.into_iter().map(|(p, m, _, _)| (p, m)).unzip();
         // Emitters, by power: luminance times area (times two if two-sided).
         let mut emitters = Vec::new();
         let mut powers = Vec::new();
@@ -404,7 +475,25 @@ impl FlatScene {
             }
         }
         let emitter_choice = Distribution1D::new(if powers.is_empty() { vec![1.] } else { powers });
-        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, shapes, hosts, prim_face, media })
+        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, shapes, hosts, prim_face, covers, prim_cover, media })
+    }
+
+    /// What covers the ground at `point` on bounded primitive `prim`, interpolated from its
+    /// corners' baked covers, if it is shaded at its vertices.
+    pub fn covered_at(&self, prim: u32, point: &Vector3<f64>) -> Option<crate::material::model::Covered> {
+        let corners = self.prim_cover.get(prim as usize).filter(|c| c[0] != NO_COVER)?;
+        let Prim::Triangle { v, .. } = &self.prims[prim as usize] else { return None };
+        // Barycentric weights of the point, projected onto the triangle's plane.
+        let (e1, e2, d) = (v[1] - v[0], v[2] - v[0], point - v[0]);
+        let (d11, d12, d22, d1, d2) = (e1.dot(&e1), e1.dot(&e2), e2.dot(&e2), d.dot(&e1), d.dot(&e2));
+        let det = d11 * d22 - d12 * d12;
+        if det <= 0. {
+            return Some(self.covers[corners[0] as usize]);
+        }
+        let b1 = ((d22 * d1 - d12 * d2) / det).clamp(0., 1.);
+        let b2 = ((d11 * d2 - d12 * d1) / det).clamp(0., 1. - b1);
+        let c = |k: usize| &self.covers[corners[k] as usize];
+        Some(crate::material::model::Covered::interpolate([c(0), c(1), c(2)], [1. - b1 - b2, b1, b2]))
     }
 
     pub fn material(&self, prim: u32) -> &FlatMaterial {

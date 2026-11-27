@@ -448,6 +448,14 @@ warm orange granules and dark gaps in place of pale beige. leather (to Leather03
 pebbling is in the bump, which the fit leaves alone), so the fit flattened the grain in the
 colour and its score stays large.
 
+Two more presets were written for ground scans and fitted: forest_sand (Poly Haven's
+forrest_sand_01: grey-beige sand darkened by humus, pine needles in clumps by `bombing` leaves
+drawn thin; 5.62 → 1.27, applied, its needles lying in denser mats than the scan's) and
+shore_gravel (low_tide_rocks: packed centimetre pebbles and shell fragments, by `stone`
+sprites; 11.3 → 1.24, applied, close to the scan from afar, its pebbles softer and less varied
+in colour close up). Metals aren't fitted yet: a `conductor` mirrors the fitting sun as wet
+layers did, and needs a matte stand-in first.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

@@ -64,7 +64,8 @@ and `overlay`):
 
 A reference's `"view": "wall"` renders it on a vertical plane facing the camera, for scans of
 cliffs and walls (taken facing them, their up the scene's up); by default it is ground, seen
-from above.
+from above. A reference's `"rotate"` turns the scan by quarter turns anticlockwise before it
+is compared: a wood scanned with its grain across, for a preset whose grain runs up the wall.
 
 Fit it with `scripts/fit-material.py scree` (its first reference; `scree:1` the second): the
 scan is fetched into references/materials/ if it isn't there (fetch-material-reference.py), and
@@ -130,12 +131,16 @@ def srgb_to_linear(c):
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
+ROTATE = 0  # quarter turns of the scan, anticlockwise: a reference's "rotate", as its preset lies
+
+
 def load_reference(path, resolution, crop=None):
     """The reference albedo, sRGB-encoded in [0, 1], resampled to resolution square (averaged
     in linear light, as the render's pixels average it); or a crop of it, (x, y, width) as
-    fractions of its width."""
+    fractions of its width. Turned by `ROTATE` quarter turns first: a wood scanned with its grain
+    across, for a preset whose grain runs up."""
     im = np.asarray(Image.open(path).convert("RGB"), dtype=np.float64) / 255.
-    lin = srgb_to_linear(im)
+    lin = np.rot90(srgb_to_linear(im), ROTATE)
     if crop:
         n = min(lin.shape[:2])
         x, y, w = (int(round(c * n)) for c in crop)
@@ -1227,6 +1232,8 @@ def main():
     usage = {"type": "library", "name": name, **spec.get("usage", {})}
     size = float(spec["size"])
     args.view = spec.get("view", "ground")
+    global ROTATE
+    ROTATE = int(spec.get("rotate", 0))
     reference = load_reference(os.path.join(base, spec["reference"]), args.resolution)
     details = [load_reference(os.path.join(base, spec["reference"]), args.resolution, t) for t in DETAIL_TILES] \
         if args.detail else []

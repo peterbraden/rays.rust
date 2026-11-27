@@ -1630,7 +1630,60 @@
         },
         "amount": 1
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Wood049",
+        "licence": "CC0",
+        "size": 0.8,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "palette",
+                0,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                1,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                2,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                3,
+                1
+              ],
+              [
+                "variables",
+                "pore_color"
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ],
+        "view": "wall",
+        "rotate": 1
+      }
+    ]
   },
   "pine": {
     "doc": "Pine, matt varnished: pale wood with narrow orange-brown latewood bands, rings wide and wavering.",
@@ -3908,8 +3961,8 @@
         ],
         "fit": {
           "loss": {
-            "start": 3617.277404,
-            "fitted": 3617.277404
+            "start": 19.016988,
+            "fitted": 5.401394
           },
           "iterations": 60,
           "resolution": 128,
@@ -3918,31 +3971,31 @@
           "date": "2026-11-27",
           "applied": false,
           "values": {
-            "scale": 1.0,
+            "scale": 1.1487,
             "material.palette.0.1": [
-              0.025,
-              0.025,
-              0.025
+              0.0554,
+              0.055,
+              0.0546
             ],
             "material.palette.1.1": [
-              0.05,
-              0.05,
-              0.05
+              0.0785,
+              0.0781,
+              0.0778
             ],
             "material.palette.2.1": [
-              0.38,
-              0.38,
-              0.39
+              0.4842,
+              0.4628,
+              0.4412
             ],
             "material.palette.3.1": [
-              0.5,
-              0.5,
-              0.5
+              0.5261,
+              0.5185,
+              0.5067
             ],
             "material.palette.4.1": [
-              0.7,
-              0.69,
-              0.67
+              0.7285,
+              0.6974,
+              0.6568
             ],
             "material.palette.5.1": [
               0.78,
@@ -4768,8 +4821,8 @@
         ],
         "fit": {
           "loss": {
-            "start": 153.593271,
-            "fitted": 14.332552
+            "start": 148.329984,
+            "fitted": 2.655154
           },
           "iterations": 60,
           "resolution": 128,
@@ -4778,21 +4831,21 @@
           "date": "2026-11-27",
           "applied": false,
           "values": {
-            "scale": 1.6818,
+            "scale": 1.8864,
             "material.palette.0.1": [
-              0.0064,
-              0.0164,
-              0.0097
+              0.0924,
+              0.149,
+              0.1322
             ],
             "material.palette.1.1": [
-              0.0068,
-              0.0112,
-              0.0098
+              0.0257,
+              0.0294,
+              0.0255
             ],
             "material.palette.2.1": [
-              0.003,
-              0.003,
-              0.003
+              0.0088,
+              0.0176,
+              0.0157
             ],
             "material.palette.3.1": [
               0.003,
@@ -4800,9 +4853,9 @@
               0.003
             ],
             "material.palette.4.1": [
-              0.0157,
-              0.0516,
-              0.0358
+              0.0161,
+              0.055,
+              0.0385
             ]
           }
         }

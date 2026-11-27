@@ -1851,7 +1851,60 @@
         },
         "amount": 1
       }
-    }
+    },
+    "references": [
+      {
+        "source": "polyhaven:coated_pine",
+        "licence": "CC0",
+        "size": 0.74,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                2,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                3,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ],
+        "view": "wall",
+        "rotate": 1
+      }
+    ]
   },
   "walnut": {
     "doc": "Oiled walnut: dark chocolate brown with a wavy figure, and small pores throughout.",
@@ -5952,7 +6005,53 @@
           ]
         ]
       }
-    }
+    },
+    "references": [
+      {
+        "source": "polyhaven:white_maple_veneer",
+        "licence": "CC0",
+        "size": 1.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                2,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ],
+        "view": "wall",
+        "rotate": 1
+      }
+    ]
   },
   "ebony": {
     "doc": "Ebony, French polished: almost black, with faint brown streaks along the grain.",

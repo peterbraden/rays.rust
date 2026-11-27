@@ -500,6 +500,13 @@ root_mat (roots: ochre earth with dark roots). root_mat's roots, first drawn fro
 came out of their fit as speckle; drawn instead as thin `bombing` leaves warped so they curve,
 it went 4.02 → 1.36, applied, its roots spindlier than the scan's close up.
 
+And three more: petal_strewn_dirt (flower_scattered_dirt: brown dirt strewn with lilac petals by
+`bombing` leaves; 4.40 → 2.01, applied, but for one petal colour the fit had browned, kept lilac
+by hand), dry_grass_mat (withered_grass: straw blades matted flat; 9.48 → 1.80) and tilled_soil
+(farm_soil: dark clods and crumbs; 3.32 → 1.01). The last two took only their fitted colours:
+the search scored better by blowing the blades and clods up to several times their size, which
+a close look rejects.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

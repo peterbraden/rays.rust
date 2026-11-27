@@ -493,6 +493,13 @@ over the plane a surface faces most, projected along the axis nearest its normal
 across the seams, each plane by its own seed; ground facing up sees exactly the sprites it did
 (by the node's own seed on x-z), so the fits stand, and `"plan": true` keeps the old projection.
 
+Three more ground presets: red_clay_ground (Poly Haven's red_mud_stones: rusty red-brown earth,
+fine cracks, a few pale stones; 2.14 → 0.78, applied, its dry patches speckled paler than the
+scan's), dry_leaf_litter (dry_decay_leaves: dry leaves lying thick; 2.92 → 0.93, applied) and
+root_mat (roots: ochre earth with dark roots). root_mat's roots, first drawn from cells' edges,
+came out of their fit as speckle; drawn instead as thin `bombing` leaves warped so they curve,
+it went 4.02 → 1.36, applied, its roots spindlier than the scan's close up.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

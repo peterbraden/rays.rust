@@ -45,6 +45,8 @@ pub struct Breaker {
     /// How far this section's lip's very edge reaches beyond the rest of it, radians round the
     /// cavity (its fingers).
     pub finger: f64,
+    /// How far this section has collapsed into a broken bore's turbulent roller (0 to 1).
+    pub churn: f64,
     /// How many points across a section and sections along the crest.
     pub resolution: (usize, usize),
     pub seed: u64,
@@ -85,6 +87,7 @@ impl Breaker {
             lip: 1.,
             throw: 1.,
             finger: 0.,
+            churn: 0.,
             resolution: (resolution.0.max(60), resolution.1.max(2)),
             seed: SceneFile::parse_int(&o["seed"], 0) as u64,
         }
@@ -134,6 +137,15 @@ impl Breaker {
     /// on the bed and the ends, none near the lip's thin tip (where it could break through
     /// itself), all elsewhere.
     pub fn weighted_section(&self, stage: f64, count: usize) -> (Vec<Vector2<f64>>, Vec<f64>) {
+        let (loop_, weight, _) = self.churned_section(stage, count);
+        (loop_, weight)
+    }
+
+    /// As `weighted_section`, with each point's share of the broken bore's roller (`churn`):
+    /// how far it bulges out, metres, and how much it is churned into lumps (0 to 1): the
+    /// roller's rounded mass high on the bore's front, its lumps over the front, the crest and
+    /// the top of the back, a little over the water before it.
+    pub fn churned_section(&self, stage: f64, count: usize) -> (Vec<Vector2<f64>>, Vec<f64>, Vec<(f64, f64)>) {
         let h = self.height;
         let bed = -self.depth - 0.05 * h;
         let (front, back) = (-12. * h, 8. * h);
@@ -150,6 +162,8 @@ impl Breaker {
         let n_in = count - corners - n_trough - n_still - n_back - n_out;
         let mut loop_ = Vec::with_capacity(count);
         let mut weight = Vec::with_capacity(count);
+        let mut roller: Vec<(f64, f64)> = Vec::with_capacity(count);
+        let churn = self.churn.clamp(0., 1.);
         // Near the lip's tip, by the arc length from it along the cavity.
         let (_, a, b) = self.cavity();
         let reach = 0.5 * (a + b);
@@ -158,6 +172,7 @@ impl Breaker {
         loop_.push(Vector2::new(back, bed));
         loop_.push(Vector2::new(front, bed));
         weight.extend([0., 0.]);
+        roller.extend([(0., 0.), (0., 0.)]);
         // How hollow the face is: a steep slope on the shoulder, before the lip throws, from a
         // toe a wave's height and a half in front of the crest; hollowing into the cavity's
         // wall as the lip throws.
@@ -188,6 +203,7 @@ impl Breaker {
             let u = i as f64 / n_trough as f64;
             loop_.push(Vector2::new(front + (start.x - front) * u, -TROUGH * h));
             weight.push(if i == 0 { 0. } else { 1. });
+            roller.push((0., churn * 0.3 * u.powi(8)));
         }
         // Up the face (the cavity's seaward wall), over its roof and down to the lip's tip.
         // (The face and the lip, drawn smooth by the flow over them, carry a third of the cross
@@ -202,13 +218,19 @@ impl Breaker {
             loop_.push(face(phi));
             let up = ((phi - bottom) / (top - bottom)).clamp(0., 1.);
             weight.push(from_tip(phi) * (GLASSY + (1. - GLASSY) * (1. - up).powi(2)));
+            // (On what is left of the lip, only as it folds away.)
+            let lip_left = if phi > top { 1. - hollow } else { 1. };
+            roller.push((churn * lip_left * 0.25 * h * (-((up - 0.75) / 0.2).powi(2)).exp(), churn * lip_left * (0.3 + 0.7 * up)));
         }
         // Back over the lip's outer surface, thickening from the tip to the roof.
         for i in 0..n_out {
             let phi = fingered(tip - (tip - top) * i as f64 / (n_out - 1) as f64);
             let (p, n) = self.on_cavity(phi);
-            loop_.push(p + n * thickness(phi));
+            // (Folded onto the crest with the lip's inside, as the face is not yet hollow or has
+            // collapsed again.)
+            loop_.push(crest_point + (p + n * thickness(phi) - crest_point) * hollow);
             weight.push(from_tip(phi) * GLASSY);
+            roller.push((churn * (1. - hollow) * 0.15 * h, 0.5 * churn * (1. - hollow)));
         }
         // The crest, and the back of the wave falling to the still water (a smooth step, level
         // at both ends).
@@ -219,20 +241,23 @@ impl Breaker {
             let s = u * u * (3. - 2. * u);
             loop_.push(Vector2::new(crest.x + (fall - crest.x) * u, crest.y * (1. - s)));
             weight.push(GLASSY + (1. - GLASSY) * u);
+            roller.push((churn * 0.15 * h * (1. - u).powi(2), 0.5 * churn * (1. - u).powi(2)));
         }
         // The still water behind, out to the back.
         for i in 1..=n_still {
             let u = i as f64 / n_still as f64;
             loop_.push(Vector2::new(fall + (back - fall) * u, 0.));
             weight.push(if i == n_still { 0. } else { 1. });
+            roller.push((0., 0.));
         }
         debug_assert_eq!(loop_.len(), count);
         // Anticlockwise.
         if signed_area(&loop_) < 0. {
             loop_.reverse();
             weight.reverse();
+            roller.reverse();
         }
-        (loop_, weight)
+        (loop_, weight, roller)
     }
 
     /// The breaker as a closed mesh: sections along the crest, each at its own stage (the
@@ -274,6 +299,10 @@ impl Breaker {
             throw: 1. + v * (0.08 * wander(6., 4.9) + 0.06 * wander(1.5, 9.7) + 0.03 * wander(0.5, 12.1)),
             // The falling water's edge torn into fingers, decimetres across.
             finger: v * 0.15 * (wander(0.3, 16.3) + 0.6 * wander(0.12, 18.1)),
+            // Past the landing, the turbulent roller of the broken bore, settling as it ages.
+            // (From once the lip has mostly folded: on a lip still standing, a few centimetres
+            // thick, lumps a tenth of the height drove its surfaces through each other.)
+            churn: crate::math::smoothstep(1.08, 1.25, raw) * (0.4 + 0.6 * (-((raw - 1.25).max(0.)) / 0.3).exp()),
             ..self.clone()
         };
         // (A peak: its shoulders lagging seaward either side, the line wandering.)
@@ -295,23 +324,58 @@ impl Breaker {
         (place(c), place(tip), stage)
     }
 
+    /// The section at `x` along the crest as scene points, `count` of them, moved by the cross
+    /// waves and the roller (as the mesh has it).
+    pub fn displaced_section(&self, x: f64, count: usize, waves: &CrossWaves, lumps: &crate::noise::PerlinNoise) -> Vec<Vector3<f64>> {
+        let (varied, stage, bend) = self.at(x);
+        let (points, weight, roller) = varied.churned_section(stage, count);
+        let h = varied.height;
+        let n = points.len();
+        (0..n).map(|i| {
+            // Moved along the section's outward normal by the cross waves there.
+            // (The normal from the points 5 cm or more either side along the outline: where the
+            // folded lip's points crowd the crest, near neighbours swing it every way.)
+            let reach = |step: usize| {
+                let mut j = i;
+                for _ in 0..n / 4 {
+                    j = (j + step) % n;
+                    if (points[j] - points[i]).norm() > 0.05 { break; }
+                }
+                points[j]
+            };
+            let (prev, next) = (reach(n - 1), reach(1));
+            let t = next - prev;
+            let out = if t.norm() > 1e-12 { Vector2::new(t.y, -t.x).normalize() } else { Vector2::zeros() };
+            let at = self.center + Vector3::new(x, points[i].y, points[i].x + bend);
+            // And by the roller: its bulge, and lumps of churned water a few decimetres across.
+            let (bulge, rough) = roller[i];
+            let lump = if rough > 0. {
+                // (Three octaves on turned, warped coordinates: at one scale the noise's near
+                // repeat stood along the crest as a row of spikes.)
+                let warp = 0.3 * lumps.noise(at.x / 0.8 + 3.7, at.y / 0.8, at.z / 0.8);
+                let q = Vector3::new(0.8 * at.x + 0.6 * at.z + warp, at.y - warp, -0.6 * at.x + 0.8 * at.z);
+                let n = |s: f64, o: f64| lumps.noise(q.x / s + o, q.y / s, q.z / s);
+                0.1 * h * rough * (n(0.6, 0.) + 0.6 * n(0.25, 5.3) + 0.35 * n(0.1, 11.9))
+            } else { 0. };
+            let q = points[i] + out * (weight[i] * waves.height(&at) + bulge + lump);
+            self.center + Vector3::new(x, q.y, q.x + bend)
+        }).collect()
+    }
+
     fn closed(&self) -> IndexedMesh {
         let (count, along) = self.resolution;
         let waves = CrossWaves::new(self.seed, self.variation);
+        let lumps = crate::noise::PerlinNoise::shuffled(self.seed.wrapping_add(0xc4a5));
+        // (The two end sections as they are, undisplaced, so that their caps' outlines stay
+        // simple loops for clipping.)
         let sections: Vec<Vec<Vector3<f64>>> = (0..=along).map(|j| {
             let x = (j as f64 / along as f64 - 0.5) * self.width;
-            let (varied, stage, bend) = self.at(x);
-            let (points, weight) = varied.weighted_section(stage, count);
-            let n = points.len();
-            (0..n).map(|i| {
-                // Moved along the section's outward normal by the cross waves there.
-                let (prev, next) = (points[(i + n - 1) % n], points[(i + 1) % n]);
-                let t = next - prev;
-                let out = if t.norm() > 1e-12 { Vector2::new(t.y, -t.x).normalize() } else { Vector2::zeros() };
-                let at = self.center + Vector3::new(x, points[i].y, points[i].x + bend);
-                let q = points[i] + out * weight[i] * waves.height(&at);
-                self.center + Vector3::new(x, q.y, q.x + bend)
-            }).collect()
+            if j == 0 || j == along {
+                let (varied, stage, bend) = self.at(x);
+                varied.section(stage, count).iter().map(|p| self.center + Vector3::new(x, p.y, p.x + bend)).collect()
+            } else {
+                self.displaced_section(x, count, &waves, &lumps)
+            }
         }).collect();
         let mut positions: Vec<Vector3<f64>> = sections.concat();
         let at = |j: usize, i: usize| j * count + i % count;
@@ -832,10 +896,12 @@ mod along_probe {
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         let o = v["objects"].as_array().unwrap().iter().find(|o| o["type"] == "breaker").unwrap();
         let w = Breaker::parse(o);
-        let xs = [-25., -15., -8., -4., 0., 4., 10., 25.];
+        let xs: Vec<f64> = std::env::var("RAYS_SECTIONS_AT").map(|v| v.split(',').map(|x| x.parse().unwrap()).collect())
+            .unwrap_or_else(|_| vec![-25., -15., -8., -4., 0., 4., 10., 25.]);
+        let (waves, lumps) = (CrossWaves::new(w.seed, w.variation), crate::noise::PerlinNoise::shuffled(w.seed.wrapping_add(0xc4a5)));
         let out: Vec<serde_json::Value> = xs.iter().map(|&x| {
-            let (varied, stage, bend, raw) = w.at_raw(x);
-            let pts: Vec<[f64; 2]> = varied.section(stage, 360).iter().map(|p| [p.x + bend, p.y]).collect();
+            let (varied, _, _, raw) = w.at_raw(x);
+            let pts: Vec<[f64; 2]> = w.displaced_section(x, w.resolution.0, &waves, &lumps).iter().map(|p| [p.z - w.center.z, p.y - w.center.y]).collect();
             let (centre, tip, _) = w.tube(x);
             serde_json::json!({"x": x, "raw": raw, "height": varied.height, "points": pts,
                 "centre": [centre.x, centre.y, centre.z], "tip": [tip.x, tip.y, tip.z]})

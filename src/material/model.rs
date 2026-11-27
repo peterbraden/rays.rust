@@ -39,6 +39,60 @@ pub struct Water {
     pub foam: Option<Vec<f32>>,
 }
 
+/// A surface's parameters at a point, as a rough plastic's: what the kernels need to shade it
+/// there without its own code, when it is shaded at vertices rather than at each hit
+/// (`MaterialModel::bake`; plan.md section 18). `coat` is the share coated: 0 for a Lambertian
+/// surface, 1 for a plastic, between for a blend of the two.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Baked {
+    pub albedo: Color,
+    pub refractive_index: f64,
+    pub roughness: f64,
+    pub coat: f64,
+}
+
+impl Baked {
+    /// Lambertian, of `albedo`.
+    pub fn diffuse(albedo: Color) -> Baked {
+        Baked { albedo, refractive_index: 1.5, roughness: 1., coat: 0. }
+    }
+
+    /// `t` of `other` blended into this: albedo and coat as the shares of the surface they are,
+    /// the coat's refractive index and roughness weighted by the coat each brings.
+    pub fn mix(&self, other: &Baked, t: f64) -> Baked {
+        let t = t.clamp(0., 1.);
+        let coat = self.coat * (1. - t) + other.coat * t;
+        let (a, b) = (self.coat * (1. - t), other.coat * t);
+        let by_coat = |x: f64, y: f64| if a + b > 0. { (x * a + y * b) / (a + b) } else { x * (1. - t) + y * t };
+        Baked {
+            albedo: self.albedo * (1. - t) + other.albedo * t,
+            refractive_index: by_coat(self.refractive_index, other.refractive_index),
+            roughness: by_coat(self.roughness, other.roughness),
+            coat,
+        }
+    }
+}
+
+/// What covers a surface at a vertex, for shading it there (plan.md section 18): the shares of
+/// snow, glacier ice and water over it, the snow's age (0 settled, 1 firn) and the ice's
+/// blueness (0 white, 1 blue), and the rest bare, `bare`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Covered {
+    pub bare: Baked,
+    pub snow: f64,
+    pub snow_age: f64,
+    pub ice: f64,
+    pub blue: f64,
+    pub water: f64,
+}
+
+impl Covered {
+    /// Bare all over.
+    pub fn bare(bare: Baked) -> Covered {
+        Covered { bare, snow: 0., snow_age: 0., ice: 0., blue: 0., water: 0. }
+    }
+}
+
 pub trait MaterialModel: Sync{
     /// Scatter an intersection ray.
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay;
@@ -66,6 +120,10 @@ pub trait MaterialModel: Sync{
     /// This material as data, for the wavefront integrator (`wavefront::flat`); None if it
     /// can't be.
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
+
+    /// Its parameters at the hit, as a plastic's (`Baked`), for shading at vertices; None for a
+    /// material that isn't a plastic, a Lambertian surface or a blend of them.
+    fn bake(&self, _i: &Intersection, _s: &Scene) -> Option<Baked> { None }
 
     /// The normal to shade with at a hit (whose normal is the surface's, already bumped by
     /// its medium, if that is), if the material tilts it: a material's own bump map
@@ -144,3 +202,24 @@ pub trait BSDFToRename{
 
 }
 */
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_a_blend_takes_its_coat_from_what_is_coated() {
+        let rough = Baked { albedo: Color::new(0.4, 0.4, 0.4), refractive_index: 1.6, roughness: 0.3, coat: 1. };
+        let half = Baked::diffuse(Color::new(0.2, 0.2, 0.2)).mix(&rough, 0.5);
+        // The albedo and the coat by share; the coat's index and roughness all the plastic's,
+        // the Lambertian surface having none.
+        assert!((half.albedo.rgb.x - 0.3).abs() < 1e-12 && (half.coat - 0.5).abs() < 1e-12);
+        assert_eq!((half.refractive_index, half.roughness), (1.6, 0.3));
+        // Two coats, weighted by how much each brings.
+        let other = Baked { albedo: Color::black(), refractive_index: 1.4, roughness: 0.7, coat: 1. };
+        let both = rough.mix(&other, 0.25);
+        assert!((both.roughness - 0.4).abs() < 1e-12 && (both.refractive_index - 1.55).abs() < 1e-12);
+        // And the ends are the materials themselves.
+        assert_eq!(rough.mix(&other, 0.), rough);
+    }
+}

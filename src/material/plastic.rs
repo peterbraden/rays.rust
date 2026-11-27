@@ -76,6 +76,11 @@ impl MaterialModel for Plastic {
         }
     }
 
+    fn bake(&self, i: &Intersection, s: &Scene) -> Option<crate::material::model::Baked> {
+        let roughness = self.roughness_map.as_ref().map_or(self.roughness, |m| crate::color::luminance(&m.eval(i, s)).max(0.));
+        Some(crate::material::model::Baked { albedo: self.albedo.eval(i, s), refractive_index: self.refractive_index, roughness, coat: 1. })
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);

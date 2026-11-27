@@ -23,6 +23,11 @@ pub trait Medium : Sync{
     /// medium that varies (a landscape: water in its rivers, ground elsewhere) is only that
     /// point's.
     fn uniform(&self) -> Option<&(dyn MaterialModel + Sync + Send)> { None }
+    /// What covers the surface at the hit `i`, for shading it at vertices (`Covered`): by
+    /// default, its material there, baked (`MaterialModel::bake`); None if that can't be.
+    fn bake_at(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Option<crate::material::model::Covered> {
+        self.material_at(i.point).bake(i, s).map(crate::material::model::Covered::bare)
+    }
     /// What the surface knows about itself at its points, for function graphs' `field` nodes
     /// (`graph::Fields`): a landscape's simulation.
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { None }

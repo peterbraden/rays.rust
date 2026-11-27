@@ -18,6 +18,10 @@ impl MaterialModel for Lambertian {
         }
     }
 
+    fn bake(&self, i: &Intersection, s: &Scene) -> Option<crate::material::model::Baked> {
+        Some(crate::material::model::Baked::diffuse(self.albedo.eval(i, s)))
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);

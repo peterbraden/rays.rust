@@ -75,6 +75,20 @@ impl SurfaceLayers {
 }
 
 impl MaterialModel for SurfaceLayers {
+    /// The layers blended by what each covers of the point, the top one over the rest, as
+    /// `layer_at` chooses among them hit by hit.
+    fn bake(&self, i: &Intersection, s: &Scene) -> Option<crate::material::model::Baked> {
+        let c = Context::at_hit_in_object(i, s);
+        let mut baked = self.layers[0].material.bake(i, s)?;
+        for layer in &self.layers[1..] {
+            let m = layer.cover(&c).clamp(0., 1.);
+            if m > 0. {
+                baked = baked.mix(&layer.material.bake(i, s)?, m);
+            }
+        }
+        Some(baked)
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let layer = self.layer_at(intersection, s);
         // The intersection's normal is already the base's relief (`shading_normal`); a layer
@@ -148,6 +162,19 @@ mod tests {
         crate::geometry::seed_rand(1, 1);
         let n = 20_000;
         (0..n).map(|_| crate::trace::trace(&r, 0, s).1.rgb.x).sum::<f64>() / n as f64
+    }
+
+    /// Baked (for shading at vertices), the layers blend as rendering chooses among them: the
+    /// same 3/8 A, 3/8 B and 1/4 C as `test_layers_cover_those_below`, an albedo of 0.375.
+    #[test]
+    fn test_baked_layers_blend_as_they_render() {
+        let s = scene(r#""M": { "type": "surface_layers", "layers": [
+            { "material": "A" }, { "material": "B", "mask": 0.5 }, { "material": "C", "mask": 0.5, "coverage": 0.5 } ] }"#);
+        let plane = &s.objects.infinite_items[0];
+        let i = crate::intersection::Intersection { dist: 1., point: Vector3::zeros(), normal: Vector3::y(), face: 0, object: plane, part: 0 };
+        let baked = plane.medium.material_at(i.point).bake(&i, &s).expect("Lambertian layers bake");
+        assert!((baked.albedo.rgb.x - 0.375).abs() < 1e-9, "{:?}", baked);
+        assert_eq!(baked.coat, 0.);
     }
 
     /// Half of B over A, and a quarter of C over that: 3/8 A, 3/8 B, 1/4 C, so an albedo of

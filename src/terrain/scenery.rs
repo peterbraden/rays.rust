@@ -1259,6 +1259,40 @@ impl Ground {
     }
 }
 
+/// Evaluations of the cover a vertex's shading averages (`Ground::bake`): the cover picks its
+/// class and its kind of bare ground at random, as a hit's shading does, blending them over a
+/// pixel's samples; a vertex stands for its own area, so it takes several.
+pub const BAKE_SAMPLES: u32 = 8;
+
+impl Ground {
+    /// What covers the ground at the hit `i` (`Covered`), for shading at vertices: the cover
+    /// averaged over `BAKE_SAMPLES` evaluations, each on a Sobol' point of its own seeded by the
+    /// point, so that a vertex bakes alike whatever thread and order it is baked in; the bare
+    /// ground as its library material bakes there, or its colour.
+    pub fn bake(&self, i: &Intersection, s: &Scene) -> crate::material::model::Covered {
+        use crate::material::model::{Baked, Covered};
+        let seed = [i.point.x, i.point.y, i.point.z].iter().fold(0x6772_6f75_6e64, |h, c| crate::sobol::hash(h, c.to_bits()));
+        let mut out = Covered::bare(Baked::diffuse(Color::black()));
+        for k in 0..BAKE_SAMPLES {
+            crate::geometry::begin_sample(seed, k);
+            let c = self.cover(&i.point, &i.normal);
+            let bare = self.materials.get(c.surface.index()).and_then(|m| m.as_deref())
+                .and_then(|m| m.bake(i, s)).unwrap_or_else(|| Baked::diffuse(c.ground));
+            crate::geometry::end_sample();
+            let w = 1. / (k + 1) as f64;
+            out = Covered {
+                bare: out.bare.mix(&bare, w),
+                snow: out.snow + (c.snow - out.snow) * w,
+                snow_age: out.snow_age + (c.snow_age - out.snow_age) * w,
+                ice: out.ice + (c.ice - out.ice) * w,
+                blue: out.blue + (c.blue - out.blue) * w,
+                water: 0.,
+            };
+        }
+        out
+    }
+}
+
 impl crate::graph::Fields for Ground {
     /// Round the planet, whose centre is the planet's radius below the scene's origin.
     fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> {
@@ -1335,6 +1369,8 @@ impl MaterialModel for Land {
 pub struct LandscapeMedium {
     ground: Arc<Ground>,
     land: Box<dyn MaterialModel + Sync + Send>,
+    /// Whether `land` is the ground's own cover (`Land`), rather than the scene's material.
+    own: bool,
     water: PhysicalOcean,
     /// Terminal lakes: shallow brine over a pale floor, greener and brighter than rivers.
     brine: PhysicalOcean,
@@ -1350,6 +1386,7 @@ impl LandscapeMedium {
     pub fn with_ground(ground: Arc<Ground>, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> LandscapeMedium {
         let centre = ground.frame.centre();
         LandscapeMedium {
+            own: material.is_none(),
             land: material.unwrap_or_else(|| Box::new(Land { ground: ground.clone() })),
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
             water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None },
@@ -1367,6 +1404,19 @@ impl Medium for LandscapeMedium {
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(&*self.ground) }
+
+    /// The ground's cover (`Ground::bake`), wet where a river or lake is: only for the
+    /// landscape's own ground, not a scene's material in its place.
+    fn bake_at(&self, i: &Intersection, s: &Scene) -> Option<crate::material::model::Covered> {
+        if !self.own {
+            return None;
+        }
+        let mut c = self.ground.bake(i, s);
+        if self.ground.wet(&i.point) || self.ground.salt_lake(&i.point) {
+            c.water = 1.;
+        }
+        Some(c)
+    }
 }
 
 #[cfg(test)]
@@ -1418,6 +1468,41 @@ mod tests {
         let coarse = Terrain::new(Domain::patch(lat + 0.01, lon, 16, 4000., params.planet.radius), params.clone());
         let globe = Terrain::new(Domain::sphere(16, params.planet.radius), params);
         (planet, Arc::new(vec![Layer::new(fine, 0.), Layer::new(coarse, 0.), Layer::new(globe, 0.)]), (lat, lon))
+    }
+
+    #[test]
+    fn test_a_vertex_bakes_alike_wherever_it_is_baked() {
+        // The cover's averaged shares and the bare ground's parameters, its library materials
+        // included, for shading at vertices: in range, and the same baked on any thread in any
+        // order (the cover's numbers are the point's own, not the thread's).
+        let (_, layers, (lat, lon)) = layers();
+        let frame = Frame::new(lat, lon, 6.36e6, 1.);
+        let ground = Ground::new(layers, None, GlacierParams::default(), 0., 3, frame.clone(), &SceneryParams::default());
+        let s = crate::scenefile::SceneFile::from_string(r#"{ "camera": { "location": [0, 1, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "m": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "objects": [ { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "m" } ] }"#.to_string());
+        let object = &s.objects.items()[0];
+        let points: Vec<(Vector3<f64>, Vector3<f64>)> = (0..64).map(|k| {
+            let (x, z) = ((k % 8) as f64 * 1700. - 6000., (k / 8) as f64 * 1700. - 6000.);
+            let d = frame.dir(x, z);
+            let up = (frame.to_scene(&d, 1.) - frame.to_scene(&d, 0.)).normalize();
+            // Level, and steep, where the rock shows.
+            let normal = if k % 2 == 0 { up } else { (up + Vector3::new(1., 0., 0.)).normalize() };
+            (frame.to_scene(&d, 500. + 40. * k as f64), normal)
+        }).collect();
+        let bake = |&(point, normal): &(Vector3<f64>, Vector3<f64>)| {
+            let i = Intersection { dist: 1., point, normal, face: 0, object, part: 0 };
+            ground.bake(&i, &s)
+        };
+        let here: Vec<_> = points.iter().map(bake).collect();
+        let elsewhere: Vec<_> = { use rayon::prelude::*; points.par_iter().rev().map(bake).collect::<Vec<_>>().into_iter().rev().collect() };
+        assert_eq!(here, elsewhere);
+        for c in &here {
+            assert!(c.snow >= 0. && c.ice >= 0. && c.snow + c.ice <= 1. + 1e-9 && (0. ..=1.).contains(&c.snow_age) && (0. ..=1.).contains(&c.blue), "{:?}", c);
+            assert!(c.bare.albedo.rgb.iter().all(|a| (0. ..=1.).contains(a)) && (0. ..=1.).contains(&c.bare.coat), "{:?}", c);
+        }
+        // Some of the steep points show coated rock (the library's plastics).
+        assert!(here.iter().any(|c| c.bare.coat > 0.), "no coated rock among {:?}", here.iter().map(|c| c.bare.coat).collect::<Vec<_>>());
     }
 
     #[test]

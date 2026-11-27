@@ -196,6 +196,11 @@ pub struct BumpedMaterial {
 }
 
 impl MaterialModel for BumpedMaterial {
+    /// The material under the bump: at a vertex's scale its normal is the surface's.
+    fn bake(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Option<crate::material::model::Baked> {
+        self.inner.bake(i, s)
+    }
+
     fn scatter(&self, r: &crate::ray::Ray, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> crate::material::model::ScatteredRay {
         self.inner.scatter(r, i, s)
     }

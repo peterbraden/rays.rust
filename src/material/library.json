@@ -16946,34 +16946,34 @@
     "doc": "Weathered sandstone, warm tan and pink, crazed into plates by a network of dark cracks with finer ones between, pitted dark along the cracks; modelled on Poly Haven's rock_boulder_cracked.",
     "variables": {
       "rock": [
-        0.62,
-        0.42,
-        0.3
+        0.6878,
+        0.3561,
+        0.1718
       ],
       "rock2": [
-        0.52,
-        0.34,
-        0.24
+        0.5207,
+        0.3388,
+        0.2416
       ],
       "pale": [
-        0.7,
-        0.55,
-        0.42
+        0.6866,
+        0.4832,
+        0.296
       ],
       "crack": [
-        0.22,
-        0.14,
-        0.1
+        0.2641,
+        0.1625,
+        0.0872
       ],
       "fine": [
-        0.42,
-        0.28,
-        0.2
+        0.4265,
+        0.2737,
+        0.1484
       ],
       "pit": [
-        0.15,
-        0.12,
-        0.1
+        0.1472,
+        0.1137,
+        0.0823
       ]
     },
     "material": {
@@ -16981,103 +16981,103 @@
       "albedo": {
         "pattern": {
           "node": "smoothstep",
-          "from": 0.035,
+          "from": 0.099339,
           "to": 0.0,
           "input": {
             "node": "warp",
-            "amount": 0.03,
-            "scale": 0.12,
+            "amount": 0.02042,
+            "scale": 0.064854,
             "seed": 1412,
             "octaves": 2,
             "input": {
               "node": "cells",
               "style": "edges",
-              "scale": 0.2,
+              "scale": 0.11087,
               "seed": 1411
             }
           }
         },
         "color_map": [
           [
-            0,
+            0.52534,
             {
               "pattern": {
                 "node": "multiply",
                 "inputs": [
                   {
                     "node": "smoothstep",
-                    "from": 0.2,
-                    "to": 0.04,
+                    "from": 0.39383,
+                    "to": -0.14487,
                     "input": {
                       "node": "warp",
-                      "amount": 0.03,
-                      "scale": 0.12,
+                      "amount": 0.02042,
+                      "scale": 0.064854,
                       "seed": 1412,
                       "octaves": 2,
                       "input": {
                         "node": "cells",
                         "style": "edges",
-                        "scale": 0.2,
+                        "scale": 0.11087,
                         "seed": 1411
                       }
                     }
                   },
                   {
                     "node": "smoothstep",
-                    "from": 0.15,
-                    "to": 0.4,
+                    "from": -0.079494,
+                    "to": 0.42263,
                     "input": {
                       "node": "fractal",
-                      "scale": 0.012,
+                      "scale": 0.0052287,
                       "seed": 1431,
-                      "smallest": 0.002
+                      "smallest": 0.0019627
                     }
                   }
                 ]
               },
               "color_map": [
                 [
-                  0,
+                  0.078942,
                   {
                     "pattern": {
                       "node": "smoothstep",
-                      "from": 0.025,
+                      "from": 0.23111,
                       "to": 0.0,
                       "input": {
                         "node": "warp",
-                        "amount": 0.008,
-                        "scale": 0.036,
+                        "amount": 0.00241,
+                        "scale": 0.032462,
                         "seed": 1422,
                         "octaves": 2,
                         "input": {
                           "node": "cells",
                           "style": "edges",
-                          "scale": 0.06,
+                          "scale": 0.047534,
                           "seed": 1421
                         }
                       }
                     },
                     "color_map": [
                       [
-                        0,
+                        -0.075845,
                         {
                           "pattern": {
                             "node": "add",
                             "inputs": [
                               {
                                 "node": "fractal",
-                                "scale": 0.25,
+                                "scale": 0.062909,
                                 "seed": 1441,
-                                "smallest": 0.01
+                                "smallest": 0.0043552
                               },
                               {
                                 "node": "multiply",
                                 "inputs": [
-                                  0.3,
+                                  0.12006,
                                   {
                                     "node": "cells",
                                     "style": "id",
-                                    "scale": 0.0015,
+                                    "scale": 0.0030211,
                                     "seed": 1442
                                   }
                                 ]
@@ -17086,36 +17086,36 @@
                           },
                           "color_map": [
                             [
-                              -0.4,
+                              -0.38832,
                               "$rock2"
                             ],
                             [
-                              0.2,
+                              0.034762,
                               "$rock"
                             ],
                             [
-                              0.6,
+                              0.31681,
                               "$pale"
                             ]
                           ]
                         }
                       ],
                       [
-                        1,
+                        1.2899,
                         "$fine"
                       ]
                     ]
                   }
                 ],
                 [
-                  1,
+                  0.58434,
                   "$pit"
                 ]
               ]
             }
           ],
           [
-            1,
+            1.0259,
             "$crack"
           ]
         ]
@@ -17134,14 +17134,14 @@
                   "to": 0.0,
                   "input": {
                     "node": "warp",
-                    "amount": 0.03,
-                    "scale": 0.12,
+                    "amount": 0.02042,
+                    "scale": 0.064854,
                     "seed": 1412,
                     "octaves": 2,
                     "input": {
                       "node": "cells",
                       "style": "edges",
-                      "scale": 0.2,
+                      "scale": 0.11087,
                       "seed": 1411
                     }
                   }
@@ -17158,14 +17158,14 @@
                   "to": 0.0,
                   "input": {
                     "node": "warp",
-                    "amount": 0.008,
-                    "scale": 0.036,
+                    "amount": 0.00241,
+                    "scale": 0.032462,
                     "seed": 1422,
                     "octaves": 2,
                     "input": {
                       "node": "cells",
                       "style": "edges",
-                      "scale": 0.06,
+                      "scale": 0.047534,
                       "seed": 1421
                     }
                   }
@@ -17232,9 +17232,97 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 41.279169,
+            "fitted": 1.146384
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 1.302148,
+            "author_solved": 4.960496,
+            "patches": 3,
+            "chosen": "the search's mean"
+          },
+          "date": "2026-11-27",
+          "applied": true,
+          "values": {
+            "scale": 1.3922,
+            "variables.rock": [
+              0.6878,
+              0.3561,
+              0.1718
+            ],
+            "variables.rock2": [
+              0.5207,
+              0.3388,
+              0.2416
+            ],
+            "variables.pale": [
+              0.6866,
+              0.4832,
+              0.296
+            ],
+            "variables.crack": [
+              0.2641,
+              0.1625,
+              0.0872
+            ],
+            "variables.fine": [
+              0.4265,
+              0.2737,
+              0.1484
+            ],
+            "variables.pit": [
+              0.1472,
+              0.1137,
+              0.0823
+            ],
+            "material.albedo.pattern.from": 0.099339,
+            "material.albedo.pattern.input.amount": 0.02042,
+            "material.albedo.color_map.0.1.pattern.inputs.0.input.amount": 0.02042,
+            "material.normal.graph.inputs.0.inputs.1.input.amount": 0.02042,
+            "material.albedo.pattern.input.scale": 0.064854,
+            "material.albedo.color_map.0.1.pattern.inputs.0.input.scale": 0.064854,
+            "material.normal.graph.inputs.0.inputs.1.input.scale": 0.064854,
+            "material.albedo.pattern.input.input.scale": 0.11087,
+            "material.albedo.color_map.0.1.pattern.inputs.0.input.input.scale": 0.11087,
+            "material.normal.graph.inputs.0.inputs.1.input.input.scale": 0.11087,
+            "material.albedo.color_map.0.0": 0.52534,
+            "material.albedo.color_map.1.0": 1.0259,
+            "material.albedo.color_map.0.1.pattern.inputs.0.from": 0.39383,
+            "material.albedo.color_map.0.1.pattern.inputs.0.to": -0.14487,
+            "material.albedo.color_map.0.1.pattern.inputs.1.from": -0.079494,
+            "material.albedo.color_map.0.1.pattern.inputs.1.to": 0.42263,
+            "material.albedo.color_map.0.1.pattern.inputs.1.input.scale": 0.0052287,
+            "material.albedo.color_map.0.1.pattern.inputs.1.input.smallest": 0.0019627,
+            "material.albedo.color_map.0.1.color_map.0.0": 0.078942,
+            "material.albedo.color_map.0.1.color_map.1.0": 0.58434,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.from": 0.23111,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.input.amount": 0.00241,
+            "material.normal.graph.inputs.1.inputs.1.input.amount": 0.00241,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.input.scale": 0.032462,
+            "material.normal.graph.inputs.1.inputs.1.input.scale": 0.032462,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.input.input.scale": 0.047534,
+            "material.normal.graph.inputs.1.inputs.1.input.input.scale": 0.047534,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.0": -0.075845,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.0": 1.2899,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.0.scale": 0.062909,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.0.smallest": 0.0043552,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.1.inputs.0": 0.12006,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.1.inputs.1.scale": 0.0030211,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.0": -0.38832,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.0": 0.034762,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.2.0": 0.31681
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.3922
   },
   "mossy_mud": {
     "show": "landscape",

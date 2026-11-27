@@ -1116,10 +1116,13 @@ def strip_relief(o):
     """o without its bump maps (every "normal" key), and matte: a glossy layer (`plastic`, wet
     sand and mud) seen straight down with the sun behind the camera mirrors the sun into it, a
     white sheet the scan, an albedo map, never shows; so it is drawn as `lambertian` in its own
-    albedo."""
+    albedo, and a `conductor` in its `reflectance` (a named metal's, which the JSON doesn't
+    give, as mid grey)."""
     if isinstance(o, dict):
         if o.get("type") == "plastic" and "albedo" in o:
             return {"type": "lambertian", "albedo": strip_relief(o["albedo"])}
+        if o.get("type") == "conductor":  # a metal, likewise: drawn in its reflectance's colour
+            return {"type": "lambertian", "albedo": strip_relief(o.get("reflectance", [0.6, 0.6, 0.6]))}
         return {k: strip_relief(v) for k, v in o.items() if k != "normal"}
     if isinstance(o, list):
         return [strip_relief(v) for v in o]

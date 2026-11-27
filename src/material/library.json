@@ -2119,7 +2119,72 @@
           ]
         ]
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Metal064",
+        "licence": "CC0",
+        "size": 1.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "materials",
+                0,
+                "reflectance"
+              ],
+              [
+                "material",
+                "materials",
+                1,
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "materials",
+                1,
+                "albedo",
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "materials",
+                1,
+                "albedo",
+                "color_map",
+                2,
+                1
+              ],
+              [
+                "material",
+                "materials",
+                1,
+                "albedo",
+                "color_map",
+                3,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
   },
   "verdigris_copper": {
     "doc": "Weathered copper: a pale green patina of verdigris over darkened metal, streaked downwards where rain has run.",

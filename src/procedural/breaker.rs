@@ -312,16 +312,36 @@ impl BreakerWater {
 
     /// How much of the surface at `p`, of normal `normal`, is foam, 0 or 1 but at its edges:
     /// the lace earlier waves left on the water, a third of it in patches a metre or so across
-    /// and holes between, where the water lies nearly level (the trough in front, the still
-    /// water behind), none up the face, low on the wave.
+    /// and holes between, where the water lies nearly level and low on the wave (the trough in
+    /// front); and up the face and over the lip, that foam drawn up by the flow and stretched
+    /// into long thin lines along it (up the face and along the crest, as the wave peels: a
+    /// diagonal), branching and
+    /// joining, a few centimetres wide, more in some stretches of the crest than others; none
+    /// on the back of the wave.
     fn foam(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> f64 {
         let n = |x: f64, y: f64, z: f64| self.noise.noise(x, y, z);
+        let up = (p.y - self.trough) / self.height;
         let level = crate::math::smoothstep(0.85, 0.97, normal.y);
-        let low = crate::math::smoothstep(0.25, 0.1, (p.y - self.trough) / self.height);
-        if level * low <= 0. { return 0.; }
-        // The lace: two octaves, its edges sharpened.
-        let lace = 0.65 * n(p.x / 0.9 + 31.7, p.y / 0.9, p.z / 0.9) + 0.35 * n(p.x / 0.3 + 5.2, p.y / 0.3, p.z / 0.3);
-        (level * low * crate::math::smoothstep(0.05, 0.15, lace)).clamp(0., 1.)
+        let low = crate::math::smoothstep(0.25, 0.1, up);
+        let mut cover = 0.;
+        if level * low > 0. {
+            // The lace: two octaves, its edges sharpened.
+            let lace = 0.65 * n(p.x / 0.9 + 31.7, p.y / 0.9, p.z / 0.9) + 0.35 * n(p.x / 0.3 + 5.2, p.y / 0.3, p.z / 0.3);
+            cover = level * low * crate::math::smoothstep(0.05, 0.15, lace);
+        }
+        // The lines, where the face rises (not the level water, nor the back, which faces
+        // seaward, +z): where a noise stretched along the flow crosses zero, the crest's
+        // coordinate wandering so the lines wind.
+        let face = (1. - level) * crate::math::smoothstep(0.3, -0.1, normal.z);
+        if face > 0. {
+            // (The flow runs along the crest as well as up the face as the wave peels: the lines
+            // lie diagonally, across the crest's coordinate as it rises.)
+            let x = p.x + 1.2 * (p.y - self.trough) + 0.25 * n(p.y / 0.7 + 3.9, p.z / 0.7, p.x / 2.);
+            let line = 1. - (n(x / 0.18 + 41.3, p.y / 1.3, p.z / 1.3) + 0.3 * n(x / 0.07 + 2.2, p.y / 0.5, p.z / 0.5)).abs();
+            let patches = crate::math::smoothstep(0.0, 0.3, n(p.x / 4. + 13.7, p.y / 2., p.z / 2.));
+            cover = cover.max(face * patches * crate::math::smoothstep(0.7, 0.73, line));
+        }
+        cover.clamp(0., 1.)
     }
 
     /// The surface's small relief at `p` (m): capillary ripples a few centimetres long, in three
@@ -373,13 +393,9 @@ impl crate::material::model::MaterialModel for BreakerWater {
             if crate::geometry::rand() < 0.5 {
                 return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal: up }, r, &(intersection.point + up * offset), s);
             }
-            let d = -up + crate::geometry::point_on_unit_sphere(crate::geometry::rand(), crate::geometry::rand());
-            let rd = if d.norm() < 1e-9 { -up } else { d.normalize() };
-            return crate::material::model::ScatteredRay {
-                ray: Some(crate::ray::Ray { ro: intersection.point - up * offset, rd }),
-                attenuate: albedo, emit: crate::color::Color::black(),
-                light_sampling: crate::material::model::LightSampling::None,
-            };
+            // Through it, a diffuse lobe on the water's side, which samples the sun through the
+            // wave behind it (foam on a backlit face glows by what it lets through).
+            return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal: -up }, r, &(intersection.point - up * offset), s);
         }
         let mut out = crate::material::functions::scatter_dielectric(crate::ocean::WATER_INDEX, crate::color::Color::white(), r, &rippled,
             crate::material::functions::surface_offset(intersection, s));

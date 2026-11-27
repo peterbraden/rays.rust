@@ -863,7 +863,67 @@
             ],
             "chroma": 0.1
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 18.036867,
+            "fitted": 6.108429
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 5.518306,
+            "author_solved": 15.0108,
+            "patches": 3,
+            "chosen": "the search's mean"
+          },
+          "date": "2026-11-27",
+          "applied": false,
+          "values": {
+            "scale": 1.994,
+            "variables.palette.0.1": [
+              0.0581,
+              0.0548,
+              0.0512
+            ],
+            "variables.palette.1.1": [
+              0.095,
+              0.0841,
+              0.0744
+            ],
+            "variables.palette.2.1": [
+              0.3161,
+              0.3011,
+              0.3022
+            ],
+            "variables.palette.3.1": [
+              0.3412,
+              0.3845,
+              0.4473
+            ],
+            "variables.palette.4.1": [
+              0.4615,
+              0.3657,
+              0.3061
+            ],
+            "variables.palette.5.1": [
+              0.515,
+              0.479,
+              0.479
+            ],
+            "variables.palette.6.1": [
+              0.6279,
+              0.6217,
+              0.63
+            ],
+            "variables.crystals.amount": 0.0059597,
+            "variables.crystals.scale": 0.001713,
+            "variables.crystals.input.scale": 0.0049433,
+            "variables.glint.scale": 0.0049433
+          }
+        }
       }
     ]
   },

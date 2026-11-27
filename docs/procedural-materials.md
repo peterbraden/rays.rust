@@ -427,6 +427,17 @@ pitted along its cracks; 4.96 → 1.30) and mossy_mud (brown_mud_leaves_01: red-
 patches of small leaves, by `bombing`; 14.4 → 1.06, its smallest leaves a dense litter close up
 where the scan has bare mud between sprigs).
 
+The polished stones were then fitted to ambientCG's slabs of the stones they name, sizes not
+recorded (taken as 1 m and searched): carrara_marble to Marble021 (11.3 → 1.29, applied: near
+white with faint veins and soft mottling, in place of regular grey stripes) and nero_marquina to
+Marble016 (11.1 → 1.43, applied: the slab's dense net of fine white veins in place of one bold
+one). travertine (to Travertine009, 13.0 → 2.77) mottled where the vein-cut slab is banded, and
+granite (to Granite003A, 15.0 → 5.52) went blue-grey, the slab not the pink it looked in a
+thumbnail; neither applied. grey_granite is a variant (a `library` reference to granite with its
+own palette), which the fit's renders don't follow, so nothing moved; it takes granite's
+structure as it is. A palette held in a variable (`"color_map": "$palette"`) is solved like any
+other colours once the reference names its stops.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

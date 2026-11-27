@@ -35,9 +35,19 @@ def local(x, z):
     c, s = math.cos(math.radians(YAW)), math.sin(math.radians(YAW))
     return [round(x * c + z * s, 3), 0, round(-x * s + z * c, 3)]
 
-# The tree, out from the cottage's right-hand gable and back from its front, turned so that
-# its presents (heaped on its -z side) face the camera.
-TREE_AT = local(6.8, -1.6)
+def from_camera(ahead, right):
+    """A point on the ground `ahead` metres along the camera's view and `right` to its right."""
+    eye, at = camera["location"], camera["lookat"]
+    f = [at[0] - eye[0], at[2] - eye[2]]
+    n = math.hypot(*f)
+    f = [f[0] / n, f[1] / n]
+    return [round(eye[0] + f[0] * ahead - f[1] * right, 3), 0, round(eye[2] + f[1] * ahead + f[0] * right, 3)]
+
+
+# The tree, in the foreground to the right, before the cottage's gable, turned so that its
+# presents (heaped on its -z side) face the camera.
+TREE_AHEAD, TREE_RIGHT = (float(x) for x in os.environ.get("TREE", "9.5,3.0").split(","))
+TREE_AT = from_camera(TREE_AHEAD, TREE_RIGHT)
 towards = [camera["location"][0] - TREE_AT[0], camera["location"][2] - TREE_AT[2]]
 TURN = round(math.degrees(math.atan2(-towards[0], -towards[1])), 1)
 

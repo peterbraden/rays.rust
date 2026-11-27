@@ -68,8 +68,8 @@ impl Breaker {
         use crate::scenefile::SceneFile;
         let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
         let resolution = match o["resolution"].as_array() {
-            Some(a) if a.len() == 2 => (a[0].as_u64().unwrap_or(240) as usize, a[1].as_u64().unwrap_or(120) as usize),
-            _ => (240, 120),
+            Some(a) if a.len() == 2 => (a[0].as_u64().unwrap_or(360) as usize, a[1].as_u64().unwrap_or(600) as usize),
+            _ => (360, 600),
         };
         Breaker {
             center: SceneFile::parse_vec3_def(o, "center", Vector3::zeros()),
@@ -81,7 +81,7 @@ impl Breaker {
             variation: n("variation", 1.).max(0.),
             lip: 1.,
             throw: 1.,
-            resolution: (resolution.0.max(40), resolution.1.max(2)),
+            resolution: (resolution.0.max(60), resolution.1.max(2)),
             seed: SceneFile::parse_int(&o["seed"], 0) as u64,
         }
     }
@@ -116,26 +116,48 @@ impl Breaker {
     /// water inside, anticlockwise, `count` points (the same for every stage, so that sections
     /// join into a mesh).
     pub fn section(&self, stage: f64, count: usize) -> Vec<Vector2<f64>> {
+        self.weighted_section(stage, count).0
+    }
+
+    /// As `section`, with each point's share of the cross waves' relief (`CrossWaves`): none
+    /// on the bed and the ends, none near the lip's thin tip (where it could break through
+    /// itself), all elsewhere.
+    pub fn weighted_section(&self, stage: f64, count: usize) -> (Vec<Vector2<f64>>, Vec<f64>) {
         let h = self.height;
         let bed = -self.depth - 0.05 * h;
         let (front, back) = (-8. * h, 8. * h);
         let (bottom, top) = self.extremes();
         let tip = top + THROW * self.throw.clamp(0.5, 1.1) * stage.clamp(0., 1.);
-        // Fixed shares of the points: the face and the lip's underside, the lip's outer
-        // surface, the back of the wave; the rest are the corners.
-        let corners = 4;
-        let n_back = (count - corners) / 5;
-        let n_out = (count - corners) / 4;
-        let n_in = count - corners - n_back - n_out;
+        // Fixed shares of the points: the trough's water in front, the face and the lip's
+        // underside, the lip's outer surface, the back of the wave, the still water behind;
+        // the rest are the bed's two corners.
+        let corners = 2;
+        let n_trough = (count - corners) / 8;
+        let n_still = (count - corners) / 10;
+        let n_back = (count - corners) / 6;
+        let n_out = (count - corners) / 5;
+        let n_in = count - corners - n_trough - n_still - n_back - n_out;
         let mut loop_ = Vec::with_capacity(count);
+        let mut weight = Vec::with_capacity(count);
+        // Near the lip's tip, by the arc length from it along the cavity.
+        let (_, a, b) = self.cavity();
+        let reach = 0.5 * (a + b);
+        let from_tip = |phi: f64| crate::math::smoothstep(0.05, 0.35, (tip - phi).abs() * reach);
         // The bed, front, and the trough's water running in under the lip.
         loop_.push(Vector2::new(back, bed));
         loop_.push(Vector2::new(front, bed));
-        loop_.push(Vector2::new(front, -TROUGH * h));
+        weight.extend([0., 0.]);
+        let start = self.on_cavity(bottom).0;
+        for i in 0..n_trough {
+            let u = i as f64 / n_trough as f64;
+            loop_.push(Vector2::new(front + (start.x - front) * u, -TROUGH * h));
+            weight.push(if i == 0 { 0. } else { 1. });
+        }
         // Up the face (the cavity's seaward wall), over its roof and down to the lip's tip.
         for i in 0..n_in {
             let phi = bottom + (tip - bottom) * i as f64 / (n_in - 1) as f64;
             loop_.push(self.on_cavity(phi).0);
+            weight.push(from_tip(phi));
         }
         // Back over the lip's outer surface, thickening from the tip to the roof.
         let thickness = |phi: f64| {
@@ -146,6 +168,7 @@ impl Breaker {
             let phi = tip - (tip - top) * i as f64 / (n_out - 1) as f64;
             let (p, n) = self.on_cavity(phi);
             loop_.push(p + n * thickness(phi));
+            weight.push(from_tip(phi));
         }
         // The crest, and the back of the wave falling to the still water (a smooth step, level
         // at both ends).
@@ -155,12 +178,21 @@ impl Breaker {
             let u = i as f64 / n_back as f64;
             let s = u * u * (3. - 2. * u);
             loop_.push(Vector2::new(crest.x + (fall - crest.x) * u, crest.y * (1. - s)));
+            weight.push(1.);
         }
-        loop_.push(Vector2::new(back, 0.));
+        // The still water behind, out to the back.
+        for i in 1..=n_still {
+            let u = i as f64 / n_still as f64;
+            loop_.push(Vector2::new(fall + (back - fall) * u, 0.));
+            weight.push(if i == n_still { 0. } else { 1. });
+        }
         debug_assert_eq!(loop_.len(), count);
         // Anticlockwise.
-        if signed_area(&loop_) < 0. { loop_.reverse(); }
-        loop_
+        if signed_area(&loop_) < 0. {
+            loop_.reverse();
+            weight.reverse();
+        }
+        (loop_, weight)
     }
 
     /// The breaker as a closed mesh: sections along the crest, each at its own stage (the
@@ -193,8 +225,9 @@ impl Breaker {
         let stage = raw.clamp(0., 1.);
         let varied = Breaker {
             height: self.height * (1. + v * (0.25 * (stage - self.stage) + 0.1 * wander(9., 1.7))),
-            lip: 1. + 0.35 * v * wander(5., 3.1),
-            throw: 1. + 0.08 * v * wander(6., 4.9),
+            // (Over metres and less too: the falling water isn't even.)
+            lip: 1. + v * (0.35 * wander(5., 3.1) + 0.25 * wander(1.2, 8.3)),
+            throw: 1. + v * (0.08 * wander(6., 4.9) + 0.06 * wander(1.5, 9.7) + 0.03 * wander(0.5, 12.1)),
             ..self.clone()
         };
         let bend = v * (1.0 * wander(20., 6.7) + 0.15 * x * x / self.width.max(1.));
@@ -217,12 +250,21 @@ impl Breaker {
 
     fn closed(&self) -> IndexedMesh {
         let (count, along) = self.resolution;
+        let waves = CrossWaves::new(self.seed, self.variation);
         let sections: Vec<Vec<Vector3<f64>>> = (0..=along).map(|j| {
             let x = (j as f64 / along as f64 - 0.5) * self.width;
             let (varied, stage, bend) = self.at(x);
-            varied.section(stage, count).iter()
-                .map(|p| self.center + Vector3::new(x, p.y, p.x + bend))
-                .collect()
+            let (points, weight) = varied.weighted_section(stage, count);
+            let n = points.len();
+            (0..n).map(|i| {
+                // Moved along the section's outward normal by the cross waves there.
+                let (prev, next) = (points[(i + n - 1) % n], points[(i + 1) % n]);
+                let t = next - prev;
+                let out = if t.norm() > 1e-12 { Vector2::new(t.y, -t.x).normalize() } else { Vector2::zeros() };
+                let at = self.center + Vector3::new(x, points[i].y, points[i].x + bend);
+                let q = points[i] + out * weight[i] * waves.height(&at);
+                self.center + Vector3::new(x, q.y, q.x + bend)
+            }).collect()
         }).collect();
         let mut positions: Vec<Vector3<f64>> = sections.concat();
         let at = |j: usize, i: usize| j * count + i % count;
@@ -580,6 +622,37 @@ impl crate::volume::DensityField for Spray {
     }
 
     fn majorant(&self) -> f64 { 1. }
+}
+
+/// Smaller waves crossing the breaker: the wind's chop, the backwash, waves reflected and
+/// refracted from elsewhere, running every way over the face, the lip and the water about it,
+/// so that the surface is uneven, not a clean curve: a sum of sinusoids of random directions
+/// and phases, wavelengths from 0.4 to 4 m (evenly in their logarithm), each a few percent
+/// steep (their slopes together about a tenth), as the relief the surface is moved along its
+/// normal by.
+pub struct CrossWaves {
+    waves: Vec<(Vector3<f64>, f64, f64)>,
+}
+
+impl CrossWaves {
+    pub fn new(seed: u64, strength: f64) -> CrossWaves {
+        let mut rng = crate::geometry::Pcg32::new(seed.wrapping_add(0xc705), 7);
+        let waves = (0..32).map(|_| {
+            let dir = loop {
+                let v = Vector3::new(rng.next_f64() - 0.5, rng.next_f64() - 0.5, rng.next_f64() - 0.5) * 2.;
+                if v.norm() > 0.2 && v.norm() <= 1. { break v.normalize(); }
+            };
+            let length = 0.4 * 10f64.powf(rng.next_f64());
+            let k = std::f64::consts::TAU / length;
+            (dir * k, 0.006 * length * strength, rng.next_f64() * std::f64::consts::TAU)
+        }).collect();
+        CrossWaves { waves }
+    }
+
+    /// The relief at `p` (m).
+    pub fn height(&self, p: &Vector3<f64>) -> f64 {
+        self.waves.iter().map(|(k, a, phase)| a * (k.dot(p) + phase).sin()).sum()
+    }
 }
 
 /// Twice the signed area of a loop (positive anticlockwise).

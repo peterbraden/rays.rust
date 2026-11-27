@@ -29,8 +29,14 @@ pub trait Medium : Sync{
         self.material_at(i.point).bake(i, s).map(crate::material::model::Covered::bare)
     }
     /// What the kernels need to shade this medium's surface from its vertices' covers
-    /// (`bake_at`), if they can: a landscape's ground.
-    fn ground(&self) -> Option<crate::material::model::GroundExport> { None }
+    /// (`bake_at`), if they can. By default bare all over, with no snow, ice or water, which
+    /// the kernels then read only the bare parameters of (`pathtrace::ground_material`): any
+    /// medium whose material bakes (a procedural rock's pebbles, small on the screen) is shaded
+    /// at its vertices where they are near enough; a landscape's ground says more.
+    fn ground(&self) -> Option<crate::material::model::GroundExport> {
+        let black = crate::color::Color::black();
+        Some(crate::material::model::GroundExport { snow: [black; 2], ice: [black; 2], ice_index: 1.31, ice_roughness: [1.; 2], water: None })
+    }
     /// Shade the hit `i` from what covers it, `c`, interpolated from its triangle's vertices
     /// (`bake_at`), rather than by its material there; None to shade it by its material.
     fn scatter_covered(&self, _r: &crate::ray::Ray, _i: &crate::intersection::Intersection, _c: &crate::material::model::Covered,

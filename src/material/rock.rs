@@ -518,6 +518,13 @@ impl Rock {
 }
 
 impl MaterialModel for Rock {
+    /// Lambertian of its albedo where the hit's point came from, for shading at vertices; its
+    /// bump, which at a vertex's spacing is the surface's own normal, goes. Not a wet rock,
+    /// whose film is a mirror.
+    fn bake(&self, i: &Intersection, _s: &Scene) -> Option<crate::material::model::Baked> {
+        (self.wetness <= 0.).then(|| crate::material::model::Baked::diffuse(self.albedo(i.texture_point().point, i.normal)))
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let geometric = intersection.facing_normal(r);
         // About a pixel's width where the surface is seen, so the fractal detail stops there.
@@ -732,5 +739,28 @@ mod tests {
     #[should_panic(expected = "Unknown rock preset")]
     fn test_unknown_preset() {
         RockStyle::preset("cheese");
+    }
+}
+
+#[cfg(test)]
+mod bake_tests {
+    use super::*;
+
+    #[test]
+    fn test_a_rock_bakes_to_its_albedo_unless_wet() {
+        let s = crate::scenefile::SceneFile::from_string(r#"{ "camera": { "location": [0, 1, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "m": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "objects": [ { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "m" } ] }"#.to_string());
+        let object = &s.objects.items()[0];
+        let mut rock = Rock::new(RockStyle::preset("sandstone"), 0.05, 9);
+        for k in 0..20 {
+            let p = Vector3::new(k as f64 * 0.37, 0.1 * k as f64, -0.2 * k as f64);
+            let i = Intersection { dist: 1., point: p, normal: Vector3::y(), face: 0, object, part: 0 };
+            let baked = rock.bake(&i, &s).expect("a dry rock bakes");
+            assert_eq!((baked.albedo, baked.coat), (rock.albedo(p, Vector3::y()), 0.));
+        }
+        rock.wetness = 0.5;
+        let i = Intersection { dist: 1., point: Vector3::zeros(), normal: Vector3::y(), face: 0, object, part: 0 };
+        assert!(rock.bake(&i, &s).is_none(), "a wet rock's film is a mirror");
     }
 }

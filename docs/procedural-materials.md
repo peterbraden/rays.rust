@@ -507,6 +507,14 @@ by hand), dry_grass_mat (withered_grass: straw blades matted flat; 9.48 → 1.80
 the search scored better by blowing the blades and clods up to several times their size, which
 a close look rejects.
 
+Four more, all applied: trodden_snow (snow_02: grey-white snow with smudges of grime; 1.01 →
+0.68, its scuffs soft blotches where the scan's are thin bootprint edges), coastal_turf
+(coast_sand_rocks_02, 15 m: turf over earth with pale rock breaking through, the rock a mask
+of noise rather than sprites, which drew it as hexagons; 11.8 → 0.77), shell_grit
+(shell_floor_01: grey and buff grit; 10.5 → 2.08, its grains rounder close up than the scan's
+broken shell) and sparse_grass (sparse_grass: green shoots over brown soil, straw across them;
+3.82 → 0.84).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

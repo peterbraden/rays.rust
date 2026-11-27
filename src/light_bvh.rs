@@ -15,7 +15,18 @@
 //!
 //! pbrt also uses the shading normal; ours doesn't, so that `pmf` can be evaluated where only
 //! the previous vertex's position is known (the trace, when a scattered ray hits a light).
+//!
+//! In a medium, the receiver's equivalent of the normal is its phase function, and a strongly
+//! forward-scattering one (fog's g of 0.75 favours some directions 343 times over others)
+//! matters more than the normal ever does: among a tree's hundreds of lamps, those behind a
+//! point of fog, whose light it scatters on towards the camera, deliver far more than those in
+//! front, and chosen as rarely as the others they are fireflies. So a medium's collisions choose
+//! towards a phase lobe (`Lobe`, `sample_towards`, `pmf_towards`): each node's importance also
+//! times the most the phase function gives over the directions to its bounds. Media's
+//! scattered rays skip the lights they hit (`LightSampling::Exclusive`), so only the sampling
+//! itself and its weights against equi-angular sampling need this pmf.
 
+use crate::material::phase::PhaseFunction;
 use crate::na::{Rotation3, Unit, Vector3};
 use crate::shapes::bbox::BBox;
 use std::f64::consts::PI;
@@ -40,31 +51,58 @@ impl LightBounds {
     }
 
     /// How much light these lights could deliver to `p`, up to a constant (pbrt's
-    /// `LightBounds::Importance`, without the receiver's normal).
-    pub fn importance(&self, p: &Vector3<f64>) -> f64 {
+    /// `LightBounds::Importance`, without the receiver's normal), scattered by `lobe` if given.
+    pub fn importance(&self, p: &Vector3<f64>, lobe: Option<&Lobe>) -> f64 {
+        self.importance_in(&Sphere::of(self), p, lobe)
+    }
+
+    /// `importance`, given the bounds' sphere, which the tree keeps with each node.
+    fn importance_in(&self, sphere: &Sphere, p: &Vector3<f64>, lobe: Option<&Lobe>) -> f64 {
         if self.phi <= 0. {
             return 0.;
         }
-        let centre = (self.bounds.min.coords + self.bounds.max.coords) / 2.;
-        let radius = (self.bounds.max - self.bounds.min).norm() / 2.;
+        let (centre, radius) = (sphere.centre, sphere.radius);
         let to = p - centre;
         // Never nearer than half the bounds' diagonal: a point among the lights mustn't make
         // the estimate blow up.
         let d2 = to.norm_squared().max(radius * radius / 4.).max(f64::MIN_POSITIVE);
         let dist = to.norm();
-        // The angle between the cone's axis and the direction to the point.
+        // The angles as cosines and sines, combined by cos(x - y) = cos x cos y + sin x sin y
+        // rather than through acos and cos (pbrt's `LightBounds::Importance`): the light BVH
+        // asks this of two nodes at every level of every choice.
+        let sin_of = |cos: f64| (1. - cos * cos).max(0.).sqrt();
+        // The angle θ_w between the cone's axis and the direction to the point.
         let cos_w = if dist > 0. { self.w.dot(&(to / dist)) } else { 1. };
-        let cos_w = if self.two_sided { cos_w.abs() } else { cos_w };
-        let theta_w = cos_w.clamp(-1., 1.).acos();
-        // The angle the bounds subtend from the point (all directions from inside).
-        let theta_b = if dist <= radius { PI } else { (radius / dist).asin() };
-        let theta_o = self.cos_theta_o.clamp(-1., 1.).acos();
-        let theta = (theta_w - theta_o - theta_b).max(0.);
-        let cos = theta.cos();
+        let cos_w = if self.two_sided { cos_w.abs() } else { cos_w }.clamp(-1., 1.);
+        // The angle θ_b the bounds subtend from the point (all directions from inside).
+        let (cos_b, sin_b) = if dist <= radius { (-1., 0.) } else {
+            let sin_b = radius / dist;
+            ((1. - sin_b * sin_b).sqrt(), sin_b)
+        };
+        let cos_o = self.cos_theta_o.clamp(-1., 1.);
+        // cos max(0, θ_w - θ_o - θ_b): first θ_x = max(0, θ_w - θ_o), then less θ_b.
+        let (cos_x, sin_x) = if cos_w >= cos_o { (1., 0.) } else {
+            let c = cos_w * cos_o + sin_of(cos_w) * sphere.sin_o;
+            (c, sin_of(c))
+        };
+        let cos = if cos_x >= cos_b { 1. } else { cos_x * cos_b + sin_x * sin_b };
         if cos <= self.cos_theta_e {
             return 0.;
         }
-        self.phi * cos / d2
+        let scattered = match lobe {
+            None => 1.,
+            // The phase function's most over the directions from p into the bounds, which lie
+            // within θ_b of the direction to their centre, α from the lobe's: at one end or the
+            // other of [α - θ_b, α + θ_b], as it falls (or, backwards, rises) with the angle.
+            Some(lobe) => {
+                let cos_a = if dist > 0. { (-lobe.d.dot(&(to / dist))).clamp(-1., 1.) } else { 1. };
+                let sin_a = sin_of(cos_a);
+                let near = if cos_a >= cos_b { 1. } else { cos_a * cos_b + sin_a * sin_b };
+                let far = if cos_b <= -cos_a { -1. } else { cos_a * cos_b - sin_a * sin_b };
+                lobe.phase.eval(near).max(lobe.phase.eval(far))
+            },
+        };
+        self.phi * cos * scattered / d2
     }
 
     /// Bounds on both groups.
@@ -113,9 +151,38 @@ fn cone_union(a: (Vector3<f64>, f64), b: (Vector3<f64>, f64)) -> (Vector3<f64>, 
     (w, (theta_o + 1e-7).min(PI).cos())
 }
 
+/// A receiver in a medium, on a ray along `d` (unit): light arriving from direction w (unit,
+/// towards the light) is scattered back down the ray in proportion to `phase` at cos = d · w,
+/// as `VolumeMaterial::direct_lighting` evaluates it.
+pub struct Lobe {
+    pub d: Vector3<f64>,
+    pub phase: PhaseFunction,
+}
+
+/// What `LightBounds::importance` needs of the bounds that doesn't depend on the point: the
+/// sphere about their box, and the sine of the cone of normals' half-angle.
+#[derive(Clone, Debug)]
+struct Sphere {
+    centre: Vector3<f64>,
+    radius: f64,
+    sin_o: f64,
+}
+
+impl Sphere {
+    fn of(b: &LightBounds) -> Sphere {
+        let cos_o = b.cos_theta_o.clamp(-1., 1.);
+        Sphere {
+            centre: (b.bounds.min.coords + b.bounds.max.coords) / 2.,
+            radius: (b.bounds.max - b.bounds.min).norm() / 2.,
+            sin_o: (1. - cos_o * cos_o).max(0.).sqrt(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Node {
     bounds: LightBounds,
+    sphere: Sphere,
     /// A light's index, or the index of the second child (the first follows the node).
     leaf: bool,
     index: usize,
@@ -148,7 +215,7 @@ impl LightBvh {
     /// Build the subtree over `items`, reached by `trail` at `depth`; returns its bounds.
     fn build(&mut self, lights: &[LightBounds], items: &mut [usize], trail: u64, depth: u32) -> LightBounds {
         if items.len() == 1 {
-            self.nodes.push(Node { bounds: lights[items[0]], leaf: true, index: items[0] });
+            self.nodes.push(Node { bounds: lights[items[0]], sphere: Sphere::of(&lights[items[0]]), leaf: true, index: items[0] });
             self.trails[items[0]] = trail;
             return lights[items[0]];
         }
@@ -161,19 +228,25 @@ impl LightBvh {
         let mid = items.len() / 2;
         items.select_nth_unstable_by(mid, |&a, &b| centre(a)[axis].total_cmp(&centre(b)[axis]));
         let at = self.nodes.len();
-        self.nodes.push(Node { bounds: lights[items[0]], leaf: false, index: 0 });
+        self.nodes.push(Node { bounds: lights[items[0]], sphere: Sphere::of(&lights[items[0]]), leaf: false, index: 0 });
         let (first, second) = items.split_at_mut(mid);
         let a = self.build(lights, first, trail, depth + 1);
         self.nodes[at].index = self.nodes.len();
         let b = self.build(lights, second, trail | (1 << depth), depth + 1);
         let bounds = a.union(&b);
         self.nodes[at].bounds = bounds;
+        self.nodes[at].sphere = Sphere::of(&bounds);
         bounds
     }
 
     /// One light chosen for the point `p` with the random number `u`, and the probability of
     /// choosing it; None if no light can reach `p`.
-    pub fn sample(&self, p: &Vector3<f64>, mut u: f64) -> Option<(usize, f64)> {
+    pub fn sample(&self, p: &Vector3<f64>, u: f64) -> Option<(usize, f64)> {
+        self.sample_towards(p, None, u)
+    }
+
+    /// As `sample`, for a receiver in a medium scattering by `lobe`.
+    pub fn sample_towards(&self, p: &Vector3<f64>, lobe: Option<&Lobe>, mut u: f64) -> Option<(usize, f64)> {
         let mut node = 0;
         let mut pmf = 1.;
         loop {
@@ -182,8 +255,9 @@ impl LightBvh {
                 return Some((n.index, pmf));
             }
             let (c0, c1) = (node + 1, n.index);
-            let i0 = self.nodes[c0].bounds.importance(p);
-            let i1 = self.nodes[c1].bounds.importance(p);
+            let (n0, n1) = (&self.nodes[c0], &self.nodes[c1]);
+            let i0 = n0.bounds.importance_in(&n0.sphere, p, lobe);
+            let i1 = n1.bounds.importance_in(&n1.sphere, p, lobe);
             if i0 + i1 <= 0. {
                 return None;
             }
@@ -202,6 +276,11 @@ impl LightBvh {
 
     /// The probability that `sample` from `p` chooses light `light`.
     pub fn pmf(&self, p: &Vector3<f64>, light: usize) -> f64 {
+        self.pmf_towards(p, None, light)
+    }
+
+    /// The probability that `sample_towards` from `p` for `lobe` chooses light `light`.
+    pub fn pmf_towards(&self, p: &Vector3<f64>, lobe: Option<&Lobe>, light: usize) -> f64 {
         if self.nodes.is_empty() || light >= self.trails.len() {
             return 0.;
         }
@@ -215,8 +294,9 @@ impl LightBvh {
                 return if n.index == light { pmf } else { 0. };
             }
             let (c0, c1) = (node + 1, n.index);
-            let i0 = self.nodes[c0].bounds.importance(p);
-            let i1 = self.nodes[c1].bounds.importance(p);
+            let (n0, n1) = (&self.nodes[c0], &self.nodes[c1]);
+            let i0 = n0.bounds.importance_in(&n0.sphere, p, lobe);
+            let i1 = n1.bounds.importance_in(&n1.sphere, p, lobe);
             if i0 + i1 <= 0. {
                 return 0.;
             }
@@ -253,6 +333,81 @@ mod tests {
             for _ in 0..50 {
                 let (i, pmf) = bvh.sample(&p, rand()).unwrap();
                 assert!((pmf - bvh.pmf(&p, i)).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn test_a_phase_lobe_favours_the_lights_it_scatters_on() {
+        // A point of fog in the middle of the grid, on a ray along +z from the camera: the
+        // lights beyond it, whose light it scatters forwards back down the ray to the camera,
+        // are chosen more than those before it; the pmf still matches sampling and sums to one.
+        let lights = grid_of_points(7);
+        let bvh = LightBvh::new(&lights);
+        let p = Vector3::new(3., 0.5, 3.);
+        let lobe = Lobe { d: Vector3::new(0., 0., 1.), phase: PhaseFunction::HenyeyGreenstein { g: 0.75 } };
+        let total: f64 = (0..lights.len()).map(|i| bvh.pmf_towards(&p, Some(&lobe), i)).sum();
+        assert!((total - 1.).abs() < 1e-9, "{}", total);
+        seed_rand(2, 0);
+        for _ in 0..200 {
+            let (i, pmf) = bvh.sample_towards(&p, Some(&lobe), rand()).unwrap();
+            assert!((pmf - bvh.pmf_towards(&p, Some(&lobe), i)).abs() < 1e-12);
+        }
+        // Lights 3 + 7 * 6 (straight ahead, 3 away) and 3 (straight behind), equally bright.
+        let (ahead, behind) = (3 + 7 * 6, 3);
+        let with = |i| bvh.pmf_towards(&p, Some(&lobe), i);
+        assert!(with(ahead) > 5. * with(behind), "{} vs {}", with(ahead), with(behind));
+        assert!((bvh.pmf(&p, ahead) / bvh.pmf(&p, behind) - 1.).abs() < 0.5);
+    }
+
+    /// The importance by angles, as it was first written: what the cosines must agree with.
+    fn importance_by_angles(b: &LightBounds, p: &Vector3<f64>, lobe: Option<&Lobe>) -> f64 {
+        if b.phi <= 0. {
+            return 0.;
+        }
+        let centre = (b.bounds.min.coords + b.bounds.max.coords) / 2.;
+        let radius = (b.bounds.max - b.bounds.min).norm() / 2.;
+        let to = p - centre;
+        let d2 = to.norm_squared().max(radius * radius / 4.).max(f64::MIN_POSITIVE);
+        let dist = to.norm();
+        let cos_w = if dist > 0. { b.w.dot(&(to / dist)) } else { 1. };
+        let cos_w = if b.two_sided { cos_w.abs() } else { cos_w };
+        let theta_w = cos_w.clamp(-1., 1.).acos();
+        let theta_b = if dist <= radius { PI } else { (radius / dist).asin() };
+        let theta_o = b.cos_theta_o.clamp(-1., 1.).acos();
+        let cos = (theta_w - theta_o - theta_b).max(0.).cos();
+        if cos <= b.cos_theta_e {
+            return 0.;
+        }
+        let scattered = lobe.map_or(1., |lobe| {
+            let alpha = (if dist > 0. { -lobe.d.dot(&(to / dist)) } else { 1. }).clamp(-1., 1.).acos();
+            lobe.phase.eval((alpha - theta_b).max(0.).cos()).max(lobe.phase.eval((alpha + theta_b).min(PI).cos()))
+        });
+        b.phi * cos * scattered / d2
+    }
+
+    #[test]
+    fn test_importance_by_cosines_agrees_with_angles() {
+        seed_rand(3, 0);
+        let unit = |v: Vector3<f64>| v.normalize();
+        for _ in 0..20_000 {
+            let lo = Vector3::new(rand() * 4. - 2., rand() * 4. - 2., rand() * 4. - 2.);
+            let size = Vector3::new(rand(), rand(), rand()) * if rand() < 0.3 { 0. } else { 2. };
+            let b = LightBounds {
+                bounds: BBox::new(lo, lo + size),
+                phi: 1. + rand(),
+                w: unit(Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5)),
+                cos_theta_o: [1., -1., rand() * 2. - 1.][(rand() * 3.) as usize],
+                cos_theta_e: [0., rand()][(rand() * 2.) as usize],
+                two_sided: rand() < 0.3,
+            };
+            let p = Vector3::new(rand() * 8. - 4., rand() * 8. - 4., rand() * 8. - 4.);
+            let lobe = Lobe { d: unit(Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5)), phase: PhaseFunction::HenyeyGreenstein { g: rand() * 1.8 - 0.9 } };
+            for l in [None, Some(&lobe)] {
+                let (fast, slow) = (b.importance(&p, l), importance_by_angles(&b, &p, l));
+                // Equal but where a cone's edge grazes the cut-off of θ_e.
+                assert!((fast - slow).abs() <= 1e-6 * slow.max(fast) || (fast == 0.) != (slow == 0.) && (fast - slow).abs() < 1e-3 * slow.max(fast).max(1.),
+                    "{} vs {} for {:?} from {}", fast, slow, b, p);
             }
         }
     }

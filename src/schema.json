@@ -3155,6 +3155,18 @@
           "doc": "Look the sky up in a precomputed table; false integrates every ray exactly."
         },
         {
+          "name": "lut_size",
+          "kind": "vec2",
+          "default": [256, 128],
+          "doc": "The table's columns and rows: smaller is quicker to build and a little less exact (the scene builder's preview uses a quarter of each, within 0.4%)."
+        },
+        {
+          "name": "cache",
+          "kind": "path",
+          "default": null,
+          "doc": "Directory where the sky's tables are kept (sky-<key>.bin, about 19 MB) and reused. By default the scene's landscape's cache, if it has one."
+        },
+        {
           "name": "moonlight",
           "kind": "json",
           "default": null,
@@ -5967,6 +5979,12 @@
           "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
         },
         {
+          "name": "equiangular",
+          "kind": "boolean",
+          "default": false,
+          "doc": "Sample the area and point lights' glow along each camera ray by equi-angular sampling, combined with the medium's collisions by MIS (Kulla and Fajardo 2012): far less noise about lamps in fog. Path tracer only; not for chromatic media or the diffusion approximation."
+        },
+        {
           "name": "diffraction",
           "kind": "object",
           "default": null,
@@ -7832,6 +7850,12 @@
           "kind": "number",
           "default": 35,
           "doc": "Steepest ground trees stand on, degrees."
+        },
+        {
+          "name": "where",
+          "kind": "json",
+          "default": null,
+          "doc": "A graph from 0 to 1 of where trees grow and how thickly, read on the ground (slope, altitude, aspect, noise, an expression of x, y and z; on a landscape its fields and biome); everywhere by default."
         },
         {
           "name": "favour",

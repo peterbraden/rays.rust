@@ -513,8 +513,12 @@ const R2: (f64, f64) = (0.754_877_666_246_692_7, 0.569_840_290_998_053_2);
 /// renders which chunk, nor on how the samples were split between passes or runs.
 /// Returns the rays cast, the samples taken, and their sum and sum of squares.
 pub(crate) fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u64, usize, Color, Color) {
-    let pixels = (s.image.width * s.image.height) as u64;
-    let index = (y * s.image.width + x) as u64;
+    // Where the pixel is in the whole frame, if the image is cropped from it: its rays and
+    // random numbers are those of that pixel of the frame.
+    let (x, y, index) = s.image.in_frame(x, y);
+    let pixels = s.image.frame_pixels() as u64;
+    let index = index as u64;
+    let (width, height) = (s.image.frame.width, s.image.frame.height);
     // This pixel's offset of the sequence.
     seed_rand(s.render.seed ^ 0x9e37_79b9_7f4a_7c15, index);
     let offset = (rand(), rand());
@@ -544,7 +548,7 @@ pub(crate) fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &S
             Sampler::ZSobol => {
                 let planned = s.render.supersamples.max(1).next_power_of_two();
                 if k < planned {
-                    let resolution = s.image.width.max(s.image.height) as u32;
+                    let resolution = width.max(height) as u32;
                     begin_sampler(crate::sampler::SampleState::ZSobol(crate::sampler::ZSobol::new(
                         s.render.seed, x as u32, y as u32, k as u32, planned as u32, resolution)));
                 } else {
@@ -567,11 +571,11 @@ pub(crate) fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &S
         // filters with negative lobes).
         let ((fx, wx), (fy, wy)) = (s.render.filter.sample_weighted(u), s.render.filter.sample_weighted(v));
         let camera_ray = s.camera.get_ray_weighted(
-            x as f64 / (s.image.width as f64),
-            y as f64 / (s.image.height as f64),
+            x as f64 / (width as f64),
+            y as f64 / (height as f64),
             // Measured from the pixel's corner.
-            (0.5 + fx) / (s.image.width as f64),
-            (0.5 + fy) / (s.image.height as f64));
+            (0.5 + fx) / (width as f64),
+            (0.5 + fy) / (height as f64));
         // A ray the lens stops is a black sample.
         let (rays_cast, c) = match camera_ray {
             Some((ray, weight)) => {
@@ -616,6 +620,51 @@ mod tests {
 
     fn render(s: &Scene) -> RenderContext {
         render_layers(s, usize::MAX)
+    }
+
+    #[test]
+    fn test_a_crop_is_the_same_pixels_as_the_frame() {
+        // A lit sphere on a floor through a lens, so pixels differ and the aperture and filter
+        // draw random numbers; each sampler that places samples by the pixel's position.
+        for sampler in ["sobol", "zsobol", "independent"] {
+            let scene = || SceneFile::from_string(format!(r#"{{
+                "width": 12, "height": 8, "supersamples": 6, "max_depth": 2, "sampler": "{}",
+                "filter": "mitchell", "background": [0.2, 0.3, 0.5],
+                "camera": {{ "location": [0, 1, -4], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.6, "aperture": 0.05 }},
+                "materials": {{ "W": {{ "type": "lambertian", "albedo": [0.7, 0.6, 0.5] }} }},
+                "lights": [ {{ "location": [2, 4, -2], "intensity": 20 }} ],
+                "objects": [
+                    {{ "type": "plane", "y": 0, "material": "W" }},
+                    {{ "type": "sphere", "location": [0.3, 0.6, 0], "radius": 0.6, "material": "W" }}
+                ]
+            }}"#, sampler));
+            let whole = scene();
+            let mut cropped = scene();
+            // From the third column and the second row of the written image, whose rows run
+            // down from the top, where the renderer's run up from the bottom: rows 3 to 6 of
+            // the frame's 8.
+            cropped.image.crop(3, 1, 5, 4).unwrap();
+            assert_eq!((cropped.image.width, cropped.image.height), (5, 4));
+            for y in 0..4 {
+                for x in 0..5 {
+                    let a = render_pixel(x, y, 0, 6, &cropped);
+                    let b = render_pixel(x + 3, y + 3, 0, 6, &whole);
+                    assert_eq!((a.0, a.1, a.2.rgb, a.3.rgb), (b.0, b.1, b.2.rgb, b.3.rgb), "{} at ({}, {})", sampler, x, y);
+                }
+            }
+            // The depth image too, row by row from the top: rows 1 to 4 of the frame's.
+            let (dc, dw) = (crate::depth::depth(&cropped), crate::depth::depth(&whole));
+            for r in 0..4 {
+                for c in 0..5 {
+                    assert_eq!(dc[r * 5 + c], dw[(r + 1) * 12 + c + 3], "depth at ({}, {})", c, r);
+                }
+            }
+            // Not merely the same as the frame's pixel at the same place in the image.
+            assert_ne!(render_pixel(0, 0, 0, 6, &cropped).2.rgb, render_pixel(0, 0, 0, 6, &whole).2.rgb);
+            // Beyond the frame isn't a crop.
+            assert!(scene().image.crop(8, 2, 5, 4).is_err());
+            assert!(scene().image.crop(0, 0, 0, 4).is_err());
+        }
     }
 
     /// Render one region at a time, stopping after `layers` passes.

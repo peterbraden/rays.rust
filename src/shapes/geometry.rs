@@ -260,6 +260,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
 
 /// A geometry whose hits report `face`, so a composite object made of many of them (eg. the
 /// triangles of a tree's leaves) can say which part was hit; see `RawIntersection::face`.
+#[derive(Clone)]
 pub struct Tagged<T: Geometry> {
     pub item: T,
     pub face: u32,

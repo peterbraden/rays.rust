@@ -273,32 +273,39 @@ struct Saved<T> { key: String, seconds: f64, state: T }
 #[derive(Serialize)]
 struct Saving<'a, T> { stage: &'a str, key: &'a str, seconds: f64, state: &'a T }
 
-/// The world directory, if there is one.
-struct Store { dir: Option<PathBuf> }
+/// The world directory, if there is one. Where it can't be written (a browser has no
+/// filesystem), what its host has provided of it (`assets::provide`, eg. a world built on
+/// the command line, fetched by the scene builder) is still read, and the rest is built in
+/// memory.
+struct Store { dir: Option<PathBuf>, writable: bool }
 
 impl Store {
     fn open(dir: Option<&Path>) -> Store {
-        let dir = dir.and_then(|d| match std::fs::create_dir_all(d) {
-            Ok(()) => Some(d.to_path_buf()),
-            Err(e) => { eprintln!("World: can't keep anything in {}: {}", d.display(), e); None },
-        });
-        Store { dir }
+        let Some(d) = dir else { return Store { dir: None, writable: false } };
+        match std::fs::create_dir_all(d) {
+            Ok(()) => Store { dir: Some(d.to_path_buf()), writable: true },
+            Err(_) if !crate::assets::provided_in(&d.to_string_lossy()).is_empty() => Store { dir: Some(d.to_path_buf()), writable: false },
+            Err(e) => { eprintln!("World: can't keep anything in {}: {}", d.display(), e); Store { dir: None, writable: false } },
+        }
     }
 
     fn path(&self, file: &str) -> Option<PathBuf> { self.dir.as_ref().map(|d| d.join(file)) }
 
-    fn has(&self, file: &str) -> bool { self.path(file).is_some_and(|p| p.exists()) }
+    fn has(&self, file: &str) -> bool {
+        self.path(file).is_some_and(|p| p.exists() || crate::assets::is_provided(&p.to_string_lossy()))
+    }
 
     /// The result in `file`, if it is there, whole, and of this key.
     fn read<T: serde::de::DeserializeOwned>(&self, file: &str, key: &str) -> Option<Saved<T>> {
-        let f = std::fs::File::open(self.path(file)?).ok()?;
-        let saved: Saved<T> = serde_json::from_reader(std::io::BufReader::new(f)).ok()?;
+        let bytes = crate::assets::read(&self.path(file)?.to_string_lossy()).ok()?;
+        let saved: Saved<T> = serde_json::from_slice(&bytes).ok()?;
         (saved.key == key).then_some(saved)
     }
 
     /// Write `value` as `file` (`pretty`: laid out to be read): under another name first, so
     /// that the file is never there in part. Whether it was written.
     fn write_json<T: serde::Serialize>(&self, file: &str, value: &T, pretty: bool) -> bool {
+        if !self.writable { return false; }
         let Some(path) = self.path(file) else { return false };
         #[cfg(not(target_arch = "wasm32"))]
         let process = std::process::id();
@@ -327,8 +334,12 @@ impl Store {
     /// of the same years.
     fn states(&self, prefix: &str) -> Vec<(u64, bool, String)> {
         let Some(dir) = &self.dir else { return vec![] };
-        let mut found: Vec<(u64, bool, String)> = std::fs::read_dir(dir).into_iter().flatten().flatten().filter_map(|e| {
-            let name = e.file_name().into_string().ok()?;
+        let mut names: Vec<String> = std::fs::read_dir(dir).into_iter().flatten().flatten()
+            .filter_map(|e| e.file_name().into_string().ok()).collect();
+        names.extend(crate::assets::provided_in(&dir.to_string_lossy()));
+        names.sort();
+        names.dedup();
+        let mut found: Vec<(u64, bool, String)> = names.into_iter().filter_map(|name| {
             let rest = name.strip_prefix(prefix)?.strip_suffix(".json")?;
             let (years, part) = match rest.strip_suffix(".part") { Some(y) => (y, true), None => (rest, false) };
             Some((years.parse().ok()?, part, name))
@@ -554,9 +565,11 @@ impl Builder<'_> {
     }
 
     /// The picture `file` of a stage, drawn by `draw` (given its path) if it isn't there.
+    /// None where the directory can't be written and the picture wasn't provided.
     fn picture(&self, file: String, draw: impl FnOnce(&str)) -> Option<String> {
-        let path = self.store.path(&file)?;
-        if !path.exists() { draw(path.to_str()?); }
+        if self.store.has(&file) { return Some(file); }
+        if !self.store.writable { return None; }
+        draw(self.store.path(&file)?.to_str()?);
         Some(file)
     }
 
@@ -572,7 +585,12 @@ impl Builder<'_> {
         let begun = Instant::now();
         let width = l.cells as f64 * l.spacing;
         let snap = |c: f64| (c / (width / 8.)).round() * (width / 8.);
+        // To a billionth of a degree (0.1 mm): trigonometry got them, which differs in the last
+        // bit between platforms (a browser's libm and the system's), and the key below, and so
+        // whether a world built on one is found on another, depends on every digit.
+        let quantise = |degrees: f64| (degrees * 1e9).round() / 1e9;
         let (lat, lon) = Domain::lat_lon(&frame.dir(snap(fx), snap(fz)));
+        let (lat, lon) = (quantise(lat), quantise(lon));
         let mut lp = params.clone();
         if !glaciers { lp.glacier = None; }
         if !channels { lp.channels = None; }
@@ -766,12 +784,34 @@ pub fn build(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&P
     build_with(d, dir, on_progress, CHECKPOINT)
 }
 
+/// Whether the world whose manifest is at `path` can be read whole, without simulating any of
+/// it: the manifest and every stage's file are there, on disk or provided (`assets`), and
+/// every stage is done.
+pub fn readable(path: &Path) -> bool {
+    let Some(manifest) = crate::assets::read(&path.to_string_lossy()).ok().and_then(|b| serde_json::from_slice::<Manifest>(&b).ok()) else { return false };
+    let dir = path.parent().unwrap_or(Path::new(""));
+    manifest.done() && manifest.stages.iter().all(|s| s.file.as_ref().is_none_or(|f| {
+        let p = dir.join(f);
+        p.exists() || crate::assets::is_provided(&p.to_string_lossy())
+    }))
+}
+
+/// The world's key: a hash of its description.
+fn world_key(d: &Description) -> String {
+    key(&["world", &format!("{:?}", d)])
+}
+
+/// The name of the world's manifest in its directory: `world-<key>.json`.
+pub fn manifest_file(d: &Description) -> String {
+    format!("world-{}.json", world_key(d))
+}
+
 fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&Progress) -> bool, checkpoint: f64) -> Result<World, Stopped> {
     let mut b = Builder::new(dir, on_progress);
     b.checkpoint = checkpoint;
-    let world_key = key(&["world", &format!("{:?}", d)]);
+    let world_key = world_key(d);
     b.manifest = Manifest { format: FORMAT, key: world_key.clone(), seed: d.params.planet.seed, stages: d.stages().iter().map(|n| Stage::pending(n)).collect() };
-    b.manifest_file = Some(format!("world-{}.json", world_key));
+    b.manifest_file = Some(manifest_file(d));
     b.save();
 
     let params = &d.params;
@@ -980,6 +1020,27 @@ mod tests {
             assert_eq!(x.sediment, y.sediment);
             assert_eq!(x.drainage, y.drainage);
         }
+    }
+
+    /// A world directory that can't be written, as in a browser, is read from the files its
+    /// host provided: a world built elsewhere is taken whole from them, and nothing is written.
+    #[test]
+    fn test_a_world_is_read_from_provided_files() {
+        let d = tiny(31);
+        let dir = directory("provided");
+        let built = quietly(&d, Some(&dir));
+        // Under a file, so no directory can be made there.
+        let elsewhere = PathBuf::from(format!("Cargo.toml/world-provided-{}", std::process::id()));
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let name = e.file_name().into_string().unwrap();
+            crate::assets::provide(&elsewhere.join(&name).to_string_lossy(), std::fs::read(e.path()).unwrap());
+        }
+        assert!(crate::assets::is_provided(&elsewhere.join(manifest_file(&d)).to_string_lossy()));
+        let again = quietly(&d, Some(&elsewhere));
+        same(&built, &again);
+        assert!(again.manifest.stages.iter().all(|s| s.reused), "{:?}", again.manifest.stages);
+        assert!(again.manifest_path.is_none_or(|p| !p.exists()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

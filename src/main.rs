@@ -35,6 +35,13 @@ struct Args {
     #[arg(long)]
     height: Option<usize>,
 
+    ///Render only part of the frame: the W by H pixels from column X and row Y, counted from the
+    ///top left of the whole (--width by --height) frame. Each pixel is the frame's own, sample
+    ///for sample (but where adaptive sampling stops at the edges), so a detail of a large image
+    ///can be checked without rendering it all. Path tracer only
+    #[arg(long, num_args = 4, value_names = ["X", "Y", "W", "H"])]
+    crop: Option<Vec<usize>>,
+
     ///Write the image here instead of alongside the scene file. The extension selects the
     ///format: .png (8-bit, encoded for display) or .exr (linear floating point)
     #[arg(short, long)]
@@ -218,6 +225,13 @@ fn main() {
         height: args.height,
         seed: args.seed,
     });
+    if let Some(c) = &args.crop {
+        if let Err(e) = s.image.crop(c[0], c[1], c[2], c[3]) {
+            eprintln!("Can't crop: {}", e);
+            std::process::exit(1);
+        }
+        println!("- Cropped to {}x{} at ({}, {}) of the {}x{} frame", c[2], c[3], c[0], c[1], s.image.frame.width, s.image.frame.height);
+    }
 
     let mut rc = RenderContext::new(
             s.image.width,
@@ -231,6 +245,12 @@ fn main() {
     // What renders the scene: the first of the GPU, the kernels on the CPU and the path tracer
     // that can, unless one was asked for.
     if args.path_tracer {
+        s.render.integrator = scene::Integrator::Path;
+    } else if args.crop.is_some() {
+        // The kernels and the GPU number their pixels' random streams within the image.
+        if matches!(s.render.integrator, scene::Integrator::Gpu | scene::Integrator::Wavefront) || args.gpu || args.wavefront {
+            println!("- Only the path tracer renders a crop; rendering with it");
+        }
         s.render.integrator = scene::Integrator::Path;
     } else if args.gpu {
         s.render.integrator = scene::Integrator::Gpu;
@@ -304,6 +324,7 @@ fn main() {
     }
     // Each integrator's samples are its own, so a saved state is one's.
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
+        ^ args.crop.as_ref().map_or(0, |c| c.iter().fold(0x6372_6f70_u64, |h, &v| h.rotate_left(17) ^ (v as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)))
         ^ if on_gpu { 0x6770_7500_0000_0001 } else if buffers.is_some() { 0x7761_7665_6672_6f6e } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {

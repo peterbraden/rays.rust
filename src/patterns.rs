@@ -380,6 +380,105 @@ pub fn brick(p: Vector3<f64>, size: Vector3<f64>, mortar: f64, filter: f64, styl
     }
 }
 
+/// The shapes `Bombing` scatters.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpriteShape {
+    /// A lens, pointed at both ends, widest at its middle: a leaf's blade, with a midrib.
+    Leaf,
+    /// An ellipse (a circle at `width` 1): pebbles, petals, flakes.
+    Disc,
+}
+
+/// What `Bombing` gives at a point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BombingOutput {
+    /// How much of the point the sprites cover, 0 to 1, softened over the footprint.
+    Mask,
+    /// The topmost sprite's random value in [0, 1), 0 where there is none: to colour each its
+    /// own shade.
+    Id,
+    /// 1 on the topmost leaf's midrib, falling to 0 a little way off it.
+    Vein,
+    /// The topmost sprite's height: higher sprites lie on lower ones, each rounded at its edge.
+    Height,
+}
+
+/// Texture bombing (Glanville, "Texture Bombing", GPU Gems, 2004): sprites scattered over the
+/// plane x-z by a grid of cells, each cell holding a Poisson number of them (`density` on
+/// average) at random places, angles and sizes; at a point, the cells about it that could
+/// reach it are searched and the topmost sprite covering it is kept (each sprite has a random
+/// layer). Unlike Voronoi cells, which tile the plane, sprites overlap and leave gaps, and each
+/// has its own orientation: leaves lying every which way on gravel, petals, flakes.
+#[derive(Clone, Debug)]
+pub struct Bombing {
+    pub shape: SpriteShape,
+    /// The grid's cell, metres.
+    pub cell: f64,
+    /// Sprites' lengths, smallest and largest, metres (at most four cells).
+    pub size: (f64, f64),
+    /// Width over length.
+    pub width: f64,
+    pub density: f64,
+    pub seed: u64,
+    pub output: BombingOutput,
+}
+
+impl Bombing {
+    pub fn eval(&self, x: f64, z: f64, filter: f64) -> f64 {
+        let (gx, gz) = (x / self.cell, z / self.cell);
+        let (ci, cj) = (gx.floor() as i64, gz.floor() as i64);
+        // How many cells away a sprite's centre can be and still reach the point.
+        let reach = (0.5 * self.size.1 / self.cell).ceil().max(1.) as i64;
+        let soft = 0.5 * filter;
+        let (mut cover, mut top) = (0f64, None::<(f64, f64, f64, f64, f64)>); // (layer, id, d, across, half width)
+        for i in ci - reach ..= ci + reach {
+            for j in cj - reach ..= cj + reach {
+                let mut rng = CellRng::new(i, 0, j, self.seed);
+                for _ in 0 .. rng.poisson(self.density).min(8) {
+                    let (u, v) = (rng.uniform(), rng.uniform());
+                    let angle = 2. * PI * rng.uniform();
+                    let length = self.size.0 + (self.size.1 - self.size.0) * rng.uniform();
+                    let (layer, id) = (rng.uniform(), rng.uniform());
+                    let (dx, dz) = (x - (i as f64 + u) * self.cell, z - (j as f64 + v) * self.cell);
+                    let (s, c) = angle.sin_cos();
+                    let (along, across) = (dx * c + dz * s, -dx * s + dz * c);
+                    let half = 0.5 * length;
+                    let t = along / half;
+                    if t.abs() >= 1. {
+                        continue;
+                    }
+                    let w = self.width * half * match self.shape {
+                        SpriteShape::Leaf => 1. - t * t,
+                        SpriteShape::Disc => (1. - t * t).sqrt(),
+                    };
+                    // How far inside its edge, metres (across the sprite, which is near
+                    // enough for a narrow one).
+                    let d = w - across.abs();
+                    let m = if soft > 0. { smoothstep(-soft, soft, d) } else if d > 0. { 1. } else { 0. };
+                    cover = cover.max(m);
+                    if d > 0. && top.is_none_or(|(l, ..)| layer > l) {
+                        top = Some((layer, id, d, across, self.width * half));
+                    }
+                }
+            }
+        }
+        match self.output {
+            BombingOutput::Mask => cover,
+            BombingOutput::Id => top.map_or(0., |(_, id, ..)| id),
+            BombingOutput::Vein => top.map_or(0., |(_, _, _, across, w)| {
+                let rib = (0.06 * w).max(soft);
+                1. - smoothstep(0., rib, across.abs())
+            }),
+            BombingOutput::Height => top.map_or(0., |(layer, _, d, _, w)| (0.5 + 0.5 * layer) * (d / (0.3 * w)).min(1.).sqrt()),
+        }
+    }
+
+    /// The finest detail: the narrowest sprite's width.
+    pub fn finest(&self) -> f64 {
+        self.width * self.size.0
+    }
+}
+
 fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
     let t = ((x - lo) / (hi - lo)).clamp(0., 1.);
     t * t * (3. - 2. * t)
@@ -461,6 +560,40 @@ mod tests {
         assert_eq!(checker(Vector3::new(1.5, 0.5, 0.5), 1., 0., false), 1.);
         assert_eq!(checker(Vector3::new(1.5, 1.5, 0.5), 1., 0., false), 0.);
         assert!((checker(Vector3::new(0.3, 0.7, 0.2), 1., 20., false) - 0.5).abs() < 0.05);
+    }
+
+    fn leaves(density: f64, output: BombingOutput) -> Bombing {
+        Bombing { shape: SpriteShape::Leaf, cell: 0.05, size: (0.03, 0.08), width: 0.35, density, seed: 7, output }
+    }
+
+    #[test]
+    fn test_bombing_scatters_overlapping_leaves() {
+        let points: Vec<(f64, f64)> = samples(4000).map(|p| (p.x, p.z)).collect();
+        let cover = |b: &Bombing| points.iter().filter(|(x, z)| b.eval(*x, *z, 0.) > 0.5).count() as f64 / points.len() as f64;
+        // More sprites cover more, and some ground is left between them.
+        let (sparse, dense) = (cover(&leaves(0.5, BombingOutput::Mask)), cover(&leaves(3., BombingOutput::Mask)));
+        assert!(sparse > 0.05 && sparse < dense && dense < 0.95, "{} {}", sparse, dense);
+        // A sprite's id is the same all over it, and the midrib lies along it.
+        let id = leaves(1., BombingOutput::Id);
+        let vein = leaves(1., BombingOutput::Vein);
+        let mut ribs = 0;
+        for (x, z) in &points {
+            let v = id.eval(*x, *z, 0.);
+            if v > 0. {
+                assert_eq!(v, id.eval(x + 1e-5, *z, 0.).max(v).min(v), "id varies across a leaf");
+                if vein.eval(*x, *z, 0.) > 0.5 { ribs += 1 }
+            }
+        }
+        assert!(ribs > 0);
+        // Seen from afar, edges are soft: coverage between 0 and 1.
+        let m = leaves(1., BombingOutput::Mask);
+        assert!(points.iter().any(|(x, z)| { let v = m.eval(*x, *z, 0.01); v > 0.05 && v < 0.95 }));
+        for (x, z) in &points {
+            for out in [BombingOutput::Mask, BombingOutput::Id, BombingOutput::Vein, BombingOutput::Height] {
+                let v = leaves(2., out).eval(*x, *z, 0.002);
+                assert!((0. ..= 1.).contains(&v), "{:?} {}", out, v);
+            }
+        }
     }
 
     #[test]

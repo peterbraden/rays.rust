@@ -211,19 +211,118 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
    the patches alone barely see (left to them, the optimiser traded grey stones for sub-pixel
    confetti of saturated colours averaging grey). CMA-ES searches the parameters (the renderer
    isn't differentiable). About a second a candidate; 30 generations take 15 to 25 minutes.
+   (That was the first loss; the next section has what replaced it.)
 4. It writes `fitted.json` (the fitted preset as a library file, ready for a scene's
    `"library"`), `compare.png` and `log.csv`; with `--record`, it also writes the fit into the
    reference's `fit` in `library.json`: the losses, the settings, and the fitted values by
    parameter, with `"applied": false` until a person who has looked at the comparison copies
    them into the preset.
 
+### What the loss can see
+
+A fit finds whatever its loss can't see, so the loss is tested by itself:
+`scripts/loss-benchmark.py` compares crops of the scans whose right answer is known, without
+rendering. A quadrant of a scan is set against another quadrant rescaled (is the loss least at
+the right scale?), its phases randomised (the same sizes and colours, blobs for shapes),
+recoloured both ways by about a just noticeable difference (redder, yellower, lighter, more
+saturated, more contrast), its chroma moved to the wrong places (the same histograms), and
+every other scan coloured like it (does it know its own scan?). The first loss mostly saw mean
+colour:
+
+| at 128 pixels a quadrant | patch loss (first) | `ColourLoss` alone | `FitLoss` (colour and structure) |
+|---|---|---|---|
+| least at the right scale | 12% | | 59% |
+| shapes against blobs (log ratio) | 0.07 | | 0.11 (0.39 at 256 pixels) |
+| its own scan nearest | 35% | | 71% (82% at 256) |
+| contrast changed (log ratio) | 0.24 | 0.51 | |
+| colours in the wrong places | 0.06 | 0.45 | |
+| the five kinds of colour error alike (spread, smaller better) | 1.5 | 0.35 | |
+
+(A sum's log ratios are diluted by each part's floor, so colour is scored on the colour loss
+alone; colour parameters move only it, structure being compared on normalised lightness.)
+
+So fits now compare colour in Oklab (`ColourLoss`: the mean; the distribution about it with
+chroma counting as much as lightness; and each pixel's colour beside its neighbourhood's), and
+structure on normalised lightness (`StructureLoss`: an oriented log-Gabor bank's joint
+responses with the next scale's, after Portilla and Simoncelli, which tells shapes from blobs;
+and the radial power spectrum, which tells sizes), and see the scan twice: whole, and a
+quarter of it across at the same pixels against four of its tiles, as at 128 pixels across two
+metres a leaf is a pixel or two and no loss can see its shape. `--no-structure` and
+`--no-detail` go back to the first loss and the whole view alone.
+
+What the loss sees, a preset still has to be able to make: refitted with it, trail_dirt's scale
+ran to its smallest, the loss rightly missing the scan's fine grit everywhere and the preset
+having none to give it but by shrinking everything.
+
+### Solved colours, palettes and free graphs
+
+The latest round of fits (its settings now the defaults) changed what is searched, what is compared and how
+the result is judged:
+
+- **Colours are solved, not searched.** A rendered preset is linear in its colours, so the fit
+  renders the preset once with its fitted colours black and once per three colours with each
+  in one channel, and composes any choice of colours from those. The scan's pixels are matched
+  to the composed render's by iterated sliced optimal transport (in Oklab, in just noticeable
+  differences), and the colours come from a weighted least squares, pulled a little towards the
+  author's and kept in [0.003, 0.95] (`ColourSolve`). This reached granite_outcrop's dark rock,
+  which the bounded tints couldn't; the colours then cost nothing in the search's dimensions.
+- **A palette of the scan.** `PaletteLoss` clusters the scan's colours into six (k-means in
+  Oklab) and labels every pixel of both images by its nearest. It then compares each colour's
+  share, the sizes of its connected patches (as a distribution in octaves), which colours lie
+  beside which at 1, 3 and 9 pixels, the power spectra of lightness and the two chroma axes, and
+  each colour's own spectrum. A histogram can't tell sparse large stones from a confetti of
+  small ones; these parts can.
+- **Measured against the scan itself.** `FloorLoss` divides every part of the colour,
+  structure and palette losses by how much it differs between the scan's own four detail tiles
+  (plus a quarter of its typical value, so a part the scan is uniform in doesn't dominate), and
+  takes their root mean square. A loss of 1 is about as far from the scan as the scan is from
+  itself; the score averages the whole and the detail view (`--loss floor`, the default).
+- **Lit by a sun.** A uniform sky at one sample a pixel left about 11% noise in the albedo,
+  which the spectra read as grain and the search exploited. A sun straight down (on a wall,
+  straight in) with the relief stripped gives the albedo exactly at one sample.
+- **Every number free** (`--free`). The preset's graphs are searched as written:
+  - lengths (scales, cells, wavelengths, warps, sprite sizes) within ×/÷4;
+  - amplitudes, densities, multipliers and stretches within ×/÷2.5;
+  - roughness, jitter, spread, widths and coverage by ±0.25;
+  - offsets and smoothstep edges by ±0.3;
+  - each colour map's stops shifted and stretched;
+  - numeric variables within ×/÷3.
+
+  The same node with the same seed and value is tied into one parameter. A preset gains 11 to
+  50 dimensions, about 45 minutes a preset at 60 generations. A candidate the renderer refuses
+  is scored as far off, and bombing sizes are kept as the parser takes them.
+
+Each preset's loss as a multiple of its scan's own variation, measured on the detail view at 8
+samples (the fits' own scores, over both views, are lower):
+
+| Preset | As written | Fitted | | Preset | As written | Fitted |
+|---|---|---|---|---|---|---|
+| ochre_crust | 6.84 | 0.62 | | veined_basalt | 83.5 | 1.73 |
+| bedded_sandstone | 6.14 | 0.90 | | shingle | 49.9 | 2.10 |
+| lichened_ironstone | 25.3 | 0.91 | | weathered_grey_rock | 39.5 | 2.14 |
+| mossy_slab | 16.6 | 1.07 | | granite_outcrop | 116 | 2.21 |
+| caliche_ground | 14.4 | 1.20 | | stony_bank | 123 | 3.00 |
+| trail_dirt | 97.3 | 1.35 | | angular_rubble | 12.9 | 3.09 |
+| pebble_bed | 7.78 | 1.59 | | foliated_rock | 190 | 3.66 |
+| weathered_pink_granite | 26.8 | 1.62 | | laterite | 199 | 3.88 |
+| leaf_litter_gravel | 26.0 | 2.26 | | scree | 80.1 | 4.35 |
+
+All but two of the seventeen are applied. angular_rubble's fit is closer in tone but turns its angular stones
+into blobs close up. ochre_crust's fit swirls where the scan cracks. Both keep the presets as
+written.
+
+The fits furthest from their scans are broken stone and crusted ground. The fits move sizes,
+contrasts and colours freely, so what is left is structure the graphs can't make: angular,
+sharp-edged stones lying on one another, and cracks. Those need new sprites (`bombing` with
+angular shapes) rather than more search.
+
 ### Presets modelled on scans
 
-![Ten presets and their scans](material-fit-scans.png)
+![The first ten presets and their scans](material-fit-scans.png)
 
-*Each: the scan, the preset as written, and fitted. All ten fits applied.*
+*Each: the scan, the preset as written, and fitted (the first ten; the six after them aren't pictured). All sixteen fits of that round were applied (leaf_litter_gravel's after its leaves were remade by `bombing`); the round above has since refitted sixteen of them.*
 
-Ten presets were written to imitate particular Poly Haven scans, each scan recorded in the
+Sixteen presets were written to imitate particular Poly Haven scans, each scan recorded in the
 preset's `references`:
 
 | Preset | Scan | |
@@ -238,6 +337,12 @@ preset's `references`:
 | `laterite` | red_laterite_soil_stones | Rust-red earth with sparse pale nodules |
 | `foliated_rock` | quarry_wall (a wall) | Dark wavy foliation along a `dip`, from phasor noise |
 | `shingle` | coast_sand_03 | Grey-beige gravel and sand in lighter and darker drifts |
+| `veined_basalt` | dark_rock (a wall) | Near-black rock, a network of pale veins, horizontal fractures |
+| `weathered_grey_rock` | rock_01 | Smooth grey-brown rock, mottled, speckled, a few pits |
+| `weathered_pink_granite` | rock_04 | Coarse granite weathered rough, salmon feldspar among grey-brown |
+| `caliche_ground` | coral_gravel | Brown gravelly soil with ragged patches of pale lime crust |
+| `stony_bank` | river_small_rocks | Grey-beige silt with small flat stones bedded in it |
+| `leaf_litter_gravel` | leaf_scattered_gravel | Dark gravel with small brown leaves, pointed, ribbed and each its own shade (`bombing`), heaped between the stones and a few lying on them |
 
 Cliffs are fitted as walls (`"view": "wall"`), so their beds and streaks run along y as on a
 landscape's cliffs.
@@ -248,7 +353,7 @@ preset's own `scale`, multiplied into whatever a scene asks for. Re-rendering an
 preset gives the recorded loss. Fits correct colour and size; where a preset still differs
 from its scan it is in structure, which is the author's to improve: the sandstone's partings
 are thinner and more regular than the scan's chunky blocks, the ironstone has less lichen,
-the foliation's streaks are crisper, and the trail's stones fewer and smaller.
+the foliation's streaks are crisper, the trail's stones fewer and smaller, the caliche's lime patches fewer, and the stony bank's stones fainter.
 
 What the first attempts taught, now built into `fit-material.py`:
 
@@ -303,6 +408,7 @@ Beyond Perlin noise (`fractal`, with `ridged` and `billow` styles) and Worley's 
 | `cells` | Worley's noise, now with styles `f2` and `id` (a random value per cell: crystals, chips, granules), a `metric` (`euclidean`, `manhattan`: faceted, `chebyshev`: square) and `jitter` (0: a regular lattice, 1 the default). |
 | `gradient`, `rings`, `spherical` | POV-Ray's gradient (distance along `direction`), cylindrical rings (distance from the line through `center` along `axis`), and onion shells, each over `scale`. |
 | `wave` | Any input turned into repeating bands, `frequency` per unit of it, `phase`, as POV-Ray's wave types: `shape` `ramp`, `triangle`, `sine`, `scallop` (\|sin\|), `square`; `exponent` sharpens. |
+| `bombing` | Texture bombing (Glanville, GPU Gems 2004): sprites scattered over the ground plane (x, z) from a grid of `cell`s, `density` a cell on average, each at its own place, angle, length (`size` [smallest, largest]) and layer; where they overlap the topmost shows. `shape` `leaf` (a lens pointed at both ends, `width` 0.35 of its length, with a midrib) or `disc` (an ellipse). `output`: `mask` (coverage, softened over the footprint), `id` (the topmost's own random value: a colour each), `vein` (its midrib) or `height` (stacked and rounded at the edge, for a bump). Unlike cells, which tile the plane, sprites overlap and leave gaps, each turned its own way: leaf litter, petals, flakes. |
 | `checker`, `brick` | POV-Ray's: alternate cubes `size` across; bricks `size` [x, y, z] (default a UK brick in metres) in running bond with `mortar` between, `style` `mortar` (1 in it) or `id` (a value per brick). |
 | `occlusion` | The share of `rays` (6) short rays, `radius` (0.05 m) long, that meet something: cast out from the surface, how enclosed it is (`style` `cavity`: crevices, corners, where objects meet, as dirt gathers there); cast in from under it, how near a convex edge it is (`style` `edges`: wear). Directions are hashed from the point, so they converge over a pixel. Costs rays: use it in masks, not in bumps. |
 | `transform` | Its `input` scaled, rotated (degrees about x, then y, then z) and moved (`translate`): stretch cells into pores, turn bands. |
@@ -363,6 +469,9 @@ scaled, so a library material keeps its size in metres on any object (`Geometry:
 - D. S. Ebert, F. K. Musgrave, D. Peachey, K. Perlin and S. Worley, "Texturing and Modeling: A Procedural Approach", 3rd ed., 2003.
 - A. A. Apodaca and L. Gritz, "Advanced RenderMan", 2000, chapter 11 (antialiasing procedural textures).
 - A. J. Liu, Z. Dong, M. Hašan and S. Marschner, "Simulating the structure and texture of solid wood", SIGGRAPH Asia 2016.
+- J. Portilla and E. P. Simoncelli, "A parametric texture model based on joint statistics of complex wavelet coefficients", IJCV 40(1), 2000.
+- B. Ottosson, "A perceptual color space for image processing" (Oklab), <https://bottosson.github.io/posts/oklab/>, 2020.
+- S. Glanville, "Texture bombing", GPU Gems, chapter 20, 2004.
 - J. F. Blinn, "Simulation of wrinkled surfaces", SIGGRAPH 1978.
 - I. Quilez, "Domain warping", <https://iquilezles.org/articles/warp/>.
 - POV-Ray 3.7 reference: "Pattern", "Color Map", "Normal"; and its include files `stones.inc`, `woods.inc`, `metals.inc`.

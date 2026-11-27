@@ -23,8 +23,58 @@ pub enum PathTermination {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ImageOpts {
+    /// The image rendered, which is all of the frame unless it is cropped (`crop`).
     pub width: usize,
     pub height: usize,
+    /// The frame the camera sees, and where the image lies in it: its left column and bottom row
+    /// (the renderer's rows run up from the bottom; the written image is turned the right way
+    /// up), and the frame's width and height (pbrt's crop window, in pixels).
+    pub frame: Frame,
+}
+
+/// The whole frame, and where in it an image cropped from it lies (`ImageOpts::frame`).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl ImageOpts {
+    /// An image of the whole frame.
+    pub fn whole(width: usize, height: usize) -> ImageOpts {
+        ImageOpts { width, height, frame: Frame { x: 0, y: 0, width, height } }
+    }
+
+    /// Render only the `width` by `height` pixels from column `x` and row `y` (from the top
+    /// left of the written image) of the frame. Each is the same pixel, sample for sample, as in a render of the
+    /// whole frame: the camera, and everything sized to its pixels (levels of detail, texture
+    /// filtering, dicing), was made for the whole frame, and a pixel's rays and random numbers
+    /// are its place in the frame's. (Adaptive sampling judges a pixel by its neighbours, so a
+    /// cropped edge may stop at other counts.)
+    pub fn crop(&mut self, x: usize, y: usize, width: usize, height: usize) -> Result<(), String> {
+        let f = self.frame;
+        if width == 0 || height == 0 || x + width > f.width || y + height > f.height {
+            return Err(format!("a crop of {}x{} at ({}, {}) isn't within the {}x{} frame", width, height, x, y, f.width, f.height));
+        }
+        // Rows from the top of the image, as the renderer's from the bottom.
+        self.frame = Frame { x, y: f.height - y - height, ..f };
+        (self.width, self.height) = (width, height);
+        Ok(())
+    }
+
+    /// Pixel (x, y) of the image, as the renderer numbers them (rows up from the bottom): where
+    /// it is in the frame, and its index among the frame's pixels.
+    pub fn in_frame(&self, x: usize, y: usize) -> (usize, usize, usize) {
+        let (fx, fy) = (self.frame.x + x, self.frame.y + y);
+        (fx, fy, fy * self.frame.width + fx)
+    }
+
+    /// How many pixels the whole frame has.
+    pub fn frame_pixels(&self) -> usize {
+        self.frame.width * self.frame.height
+    }
 }
 
 #[derive(Debug)]

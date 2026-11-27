@@ -24,6 +24,7 @@ pub mod schema;
 #[cfg(feature = "cli")]
 pub mod server;
 pub mod preview;
+pub mod raycaster;
 pub mod ray;
 pub mod color;
 pub mod spectrum;

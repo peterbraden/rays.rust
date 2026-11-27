@@ -314,7 +314,38 @@
           },
           {
             "kind": "colours",
-            "paths": [],
+            "paths": [
+              [
+                "variables",
+                "palette",
+                0,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                1,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                2,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                3,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                4,
+                1
+              ]
+            ],
             "chroma": 0.1
           }
         ]
@@ -601,7 +632,50 @@
           },
           {
             "kind": "colours",
-            "paths": [],
+            "paths": [
+              [
+                "variables",
+                "palette",
+                0,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                1,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                2,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                3,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                4,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                5,
+                1
+              ],
+              [
+                "variables",
+                "palette",
+                6,
+                1
+              ]
+            ],
             "chroma": 0.1
           }
         ]
@@ -3101,7 +3175,44 @@
           },
           {
             "kind": "colours",
-            "paths": [],
+            "paths": [
+              [
+                "material",
+                "palette",
+                0,
+                1
+              ],
+              [
+                "material",
+                "palette",
+                1,
+                1
+              ],
+              [
+                "material",
+                "palette",
+                2,
+                1
+              ],
+              [
+                "material",
+                "palette",
+                3,
+                1
+              ],
+              [
+                "material",
+                "palette",
+                4,
+                1
+              ],
+              [
+                "material",
+                "palette",
+                5,
+                1
+              ]
+            ],
             "chroma": 0.1
           }
         ]

@@ -2255,14 +2255,14 @@
         "node": "transform",
         "scale": [
           1,
-          5,
+          2.1834,
           1
         ],
         "input": {
           "node": "fractal",
-          "scale": 0.08,
-          "smallest": 0.001,
-          "roughness": 0.6,
+          "scale": 0.027888,
+          "smallest": 0.002147,
+          "roughness": 0.8449,
           "seed": 141
         }
       }
@@ -2280,33 +2280,33 @@
           "albedo": {
             "pattern": {
               "node": "fractal",
-              "scale": 0.02,
-              "smallest": 0.0005,
+              "scale": 0.038983,
+              "smallest": 0.00041871,
               "seed": 142
             },
             "color_map": [
               [
-                -0.6,
+                -0.36753,
                 [
-                  0.18,
-                  0.36,
-                  0.3
+                  0.1571,
+                  0.2852,
+                  0.239
                 ]
               ],
               [
-                0.0,
+                -0.067531,
                 [
-                  0.3,
-                  0.52,
-                  0.44
+                  0.0968,
+                  0.4428,
+                  0.3674
                 ]
               ],
               [
-                0.6,
+                0.23247,
                 [
-                  0.45,
-                  0.62,
-                  0.55
+                  0.4473,
+                  0.543,
+                  0.4584
                 ]
               ]
             ]
@@ -2328,11 +2328,11 @@
         "pattern": "$patina",
         "color_map": [
           [
-            -0.25,
+            -0.29107,
             0.15
           ],
           [
-            0.05,
+            -0.062088,
             1
           ]
         ]
@@ -2386,9 +2386,57 @@
             "chroma": 0.1
           }
         ],
-        "view": "wall"
+        "view": "wall",
+        "fit": {
+          "loss": {
+            "start": 6.93676,
+            "fitted": 1.567747
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 1.639163,
+            "author_solved": 5.402797,
+            "patches": 3,
+            "chosen": "generation 47's best"
+          },
+          "date": "2026-11-27",
+          "applied": true,
+          "values": {
+            "scale": 1.2078,
+            "material.materials.1.albedo.color_map.0.1": [
+              0.1571,
+              0.2852,
+              0.239
+            ],
+            "material.materials.1.albedo.color_map.1.1": [
+              0.0968,
+              0.4428,
+              0.3674
+            ],
+            "material.materials.1.albedo.color_map.2.1": [
+              0.4473,
+              0.543,
+              0.4584
+            ],
+            "variables.patina.scale.1": 2.1834,
+            "variables.patina.input.scale": 0.027888,
+            "variables.patina.input.smallest": 0.002147,
+            "variables.patina.input.roughness": 0.8449,
+            "material.materials.1.albedo.pattern.scale": 0.038983,
+            "material.materials.1.albedo.pattern.smallest": 0.00041871,
+            "material.materials.1.albedo.color_map.0.0": -0.36753,
+            "material.materials.1.albedo.color_map.1.0": -0.067531,
+            "material.materials.1.albedo.color_map.2.0": 0.23247,
+            "material.amount.color_map.0.0": -0.29107,
+            "material.amount.color_map.1.0": -0.062088
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.2078
   },
   "galvanized_steel": {
     "doc": "Hot-dip galvanized steel: zinc spangle, crystals centimetres across, each reflecting with its own roughness.",

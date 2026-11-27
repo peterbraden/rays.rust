@@ -457,6 +457,10 @@ in colour close up). A `conductor` mirrors the fitting sun as wet layers did, so
 matte in its `reflectance` too; rusted_iron, fitted so to ambientCG's Metal064 (orange-brown rust
 in patches over grey steel), went 4.93 → 0.74, applied: red-brown rust and grey steel like the
 scan's, in place of orange over pale grey.
+verdigris_copper (to Metal058C, a turquoise patina streaked down over copper, seen as a wall)
+went 5.40 → 1.64, applied: the scan's turquoise in place of a pale wash, though blotchier and
+less streaked than the scan from afar. chipped_paint and aged_bronze are variants, which the fit
+can't move.
 
 ### Presets modelled on scans
 

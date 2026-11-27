@@ -2997,3 +2997,33 @@ only for their shapes.)
 Measure `desert-butte` the same way (its memory makes it slow here: run it alone), then decide.
 Independently: why a displaced terrain's intersection costs what it does (751 thread-seconds for
 displaced-terrain at 1 sample).
+
+
+## 20. Done since sections 17 to 19, and what is left (November 2026)
+
+Measured on the 8 GB M2, each against the build before it:
+
+- Displaced terrains keep their diced tiles in half the memory (f32 positions in the terrain's
+  own frame, octahedral normals: 16 bytes a vertex rather than 36), and no longer allocate for
+  each cell a ray meets (a third of the render was the allocator). displaced-terrain at 4
+  samples: 145.8 s to 105.5 s, the same image; at 1 sample a peak of 5.54 GB to 2.74.
+- Heightmap terrains walk only the stretch of the ray asked about (their range searches and
+  shadow rays walked the whole grid): desert-noon 3.47 s to 3.08.
+- Together, desert-butte at 1 sample: 519.6 s to 176.3 s, a peak of 13.45 GB to 6.96, its
+  heightmap terrains 70 and 27 us a ray to 10.2 and 2.9 (mostly the swapping gone). The terrain
+  pyramid of maximum heights (Tevs, Ihrke and Seidel 2008) is no longer worth it: the heightmaps
+  are 56 of its 1,300 thread-seconds.
+- The ground shaded at its vertices, on the CPU and in the kernels (section 18, steps 1 to 4):
+  the same picture where triangles are within 2 pixels; but the patches are diced 4 to 16
+  pixels apart, so only 5% of terrain-alpine's ground hits are. To 8 pixels: mean FLIP 0.0067,
+  render 10.7 s to 6.9; to 16: 0.0153, 3.4 s.
+
+Left, by what they would recover:
+
+1. desert-butte's displaced terrain: 1,103 of its 1,300 thread-seconds at 1 sample, most of it
+   dicing (about 600 thread-seconds once, at the 4-sample split of displaced-terrain); at 96
+   samples its traversal, some 88 us a ray, would dominate. Where that goes is the next profile.
+2. The ground's pixel limit (BAKE_PIXELS), or sharper edges: the cover's edge-defining parts
+   (snowline and slope thresholds, their noise in `shared`) evaluated per hit in the kernel, the
+   slow parts baked.
+3. Blending (section 19) only for kernel media beside host shapes (desert-noon: 2.9x bound).

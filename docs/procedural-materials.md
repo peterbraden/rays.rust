@@ -486,6 +486,13 @@ softer patches than the scan's), mossy_leaf_litter (forest_leaves_02: olive moss
 needles and twigs; 2.18 → 0.77, applied) and wet_leaf_mat (winter_leaves: dark wet leaves matted
 over one another; 5.89 → 1.46, applied, close to the scan near and far).
 
+Seen on a block and a sphere (`scripts/material-gallery.py --objects`), the presets built of
+`bombing` sprites streaked down every vertical face: the sprites lay over the plane x-z, as on
+the ground, so a wall showed each one drawn out along y. A bombing node now scatters its sprites
+over the plane a surface faces most, projected along the axis nearest its normal and blended
+across the seams, each plane by its own seed; ground facing up sees exactly the sprites it did
+(by the node's own seed on x-z), so the fits stand, and `"plan": true` keeps the old projection.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

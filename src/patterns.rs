@@ -437,6 +437,12 @@ pub struct Bombing {
 
 impl Bombing {
     pub fn eval(&self, x: f64, z: f64, filter: f64) -> f64 {
+        self.eval_seeded(x, z, filter, self.seed)
+    }
+
+    /// As `eval`, scattered by another seed: the sprites a surface facing another way shows
+    /// (`graph`'s bombing node projects them along the axis nearest the surface's normal).
+    pub fn eval_seeded(&self, x: f64, z: f64, filter: f64, seed: u64) -> f64 {
         let (gx, gz) = (x / self.cell, z / self.cell);
         let (ci, cj) = (gx.floor() as i64, gz.floor() as i64);
         // How many cells away a sprite's centre can be and still reach the point.
@@ -446,7 +452,7 @@ impl Bombing {
         let (mut cover, mut top) = (0f64, None::<(f64, f64, f64, f64, f64, f64)>);
         for i in ci - reach ..= ci + reach {
             for j in cj - reach ..= cj + reach {
-                let mut rng = CellRng::new(i, 0, j, self.seed);
+                let mut rng = CellRng::new(i, 0, j, seed);
                 for _ in 0 .. rng.poisson(self.density).min(8) {
                     let (u, v) = (rng.uniform(), rng.uniform());
                     let angle = 2. * PI * rng.uniform();

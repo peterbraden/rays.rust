@@ -34,7 +34,8 @@
 //!   from the surface (`style` `"cavity"`: crevices and corners) or in from under it
 //!   (`"edges"`: convex edges); needs the scene (in textures and layers' masks), `default`
 //!   without one.
-//! - `bombing`: sprites scattered over the plane x-z by texture bombing (`patterns::Bombing`):
+//! - `bombing`: sprites scattered by texture bombing (`patterns::Bombing`) over the plane x-z,
+//!   and on surfaces facing another way over the plane they face most (`plan` for x-z alone):
 //!   `shape` `"leaf"` (a lens with a midrib), `"disc"` (an ellipse) or `"stone"` (an irregular
 //!   convex polygon of 5 to 8 corners: broken, angular stones), on a grid of `cell`
 //!   (metres, default 0.05), `density` a cell on average, each its own angle, length from
@@ -339,7 +340,7 @@ enum Op {
     Checker { size: f64, plan: bool },
     Brick { size: Vector3<f64>, mortar: f64, style: crate::patterns::BrickStyle, seed: u64 },
     /// Sprites scattered over the plane x-z (`patterns::Bombing`), in [0, 1].
-    Bombing(Box<crate::patterns::Bombing>),
+    Bombing(Box<crate::patterns::Bombing>, bool),
     /// The share of short rays about the hit that meet something within `radius`: from outside,
     /// crevices and corners (`edges` false); from inside, convex edges (`edges` true).
     Occlusion { radius: f64, rays: u32, edges: bool, default: f64 },
@@ -483,7 +484,7 @@ impl Node {
                 Some(s) => occlusion(s, c, *radius, *rays, *edges),
                 None => *default,
             },
-            Op::Bombing(b) => b.eval(c.p.x, c.p.z, c.filter),
+            Op::Bombing(b, plan) => bombing(b, c, *plan),
             Op::Checker { size, plan } => crate::patterns::checker(c.p, *size, c.filter, *plan),
             Op::Brick { size, mortar, style, seed } => crate::patterns::brick(c.p, *size, *mortar, c.filter, *style, *seed),
             Op::Transform { input, inverse, normals, translate, shrink } => {
@@ -613,7 +614,7 @@ impl Op {
             Op::Gradient { .. } => (f64::NEG_INFINITY, f64::INFINITY),
             Op::Rings { .. } | Op::Spherical { .. } => (0., f64::INFINITY),
             Op::Wave { exponent, .. } => if *exponent >= 0. { (0., 1.) } else { (0., f64::INFINITY) },
-            Op::Checker { .. } | Op::Brick { .. } | Op::Bombing(_) => (0., 1.),
+            Op::Checker { .. } | Op::Brick { .. } | Op::Bombing(..) => (0., 1.),
             Op::Occlusion { default, .. } => (default.min(0.), default.max(1.)),
             Op::Transform { input, .. } => input.range(),
             Op::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
@@ -683,7 +684,7 @@ impl Op {
             Op::Checker { size, .. } => return *size,
             Op::Occlusion { radius, .. } => return *radius,
             Op::Brick { mortar, .. } => return *mortar,
-            Op::Bombing(b) => return b.finest(),
+            Op::Bombing(b, _) => return b.finest(),
             Op::Wave { input, frequency, .. } => {
                 // A cycle is 1 / frequency of the input; how far that is depends on the input.
                 return input.finest().min(1. / frequency.abs().max(1e-9));
@@ -816,6 +817,35 @@ pub(crate) fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, metric:
 /// rays soon leave the object again (worn and chipped edges). The directions are hashed from the
 /// point, so they are the same wherever the point is evaluated (a bump's finite differences
 /// agree) and differ from point to point, so averaging over a pixel converges.
+/// A bombing node's value at a point: its sprites scattered over the plane the surface faces
+/// most, projected along the axis nearest its normal and blended across the seams between
+/// (weights the normal's components to the eighth power), each plane scattered by its own seed
+/// so faces don't mirror each other. A surface facing up sees the plane x-z by the node's own
+/// seed alone, as when sprites lay only on the ground; `plan` keeps them there everywhere.
+fn bombing(b: &crate::patterns::Bombing, c: &Context, plan: bool) -> f64 {
+    let n = c.normal;
+    let a = Vector3::new(n.x.abs(), n.y.abs(), n.z.abs());
+    let w = Vector3::new(a.x.powi(8), a.y.powi(8), a.z.powi(8));
+    let total = w.x + w.y + w.z;
+    if plan || !(total > 1e-12) || w.y / total > 0.999 {
+        return b.eval(c.p.x, c.p.z, c.filter);
+    }
+    let mut sum = 0.;
+    for (k, weight) in [w.x, w.y, w.z].into_iter().enumerate() {
+        let weight = weight / total;
+        if weight < 1e-3 {
+            continue;
+        }
+        let v = match k {
+            0 => b.eval_seeded(c.p.z, c.p.y, c.filter, b.seed ^ 0x9e37_79b9_7f4a_7c15),
+            1 => b.eval(c.p.x, c.p.z, c.filter),
+            _ => b.eval_seeded(c.p.x, c.p.y, c.filter, b.seed ^ 0xc2b2_ae3d_27d4_eb4f),
+        };
+        sum += weight * v;
+    }
+    sum
+}
+
 fn occlusion(s: &crate::scene::Scene, c: &Context, radius: f64, rays: u32, edges: bool) -> f64 {
     let (p, n) = c.in_scene();
     let n = if edges { -n } else { n };
@@ -1119,7 +1149,7 @@ fn parse_node(v: &Value) -> Result<Node, String> {
                 return Err("bombing's size must be [smallest, largest], positive and at most four cells".into());
             }
             let width = positive(o, "width", if shape == SpriteShape::Leaf { 0.35 } else { 1. })?;
-            Op::Bombing(Box::new(Bombing { shape, cell, size, width, density: num(o, "density", 1.)?.clamp(0., 8.), seed: seed()?, output }))
+            Op::Bombing(Box::new(Bombing { shape, cell, size, width, density: num(o, "density", 1.)?.clamp(0., 8.), seed: seed()?, output }), plan)
         },
         "brick" => {
             let size = vec3(o, "size", Vector3::new(0.215, 0.065, 0.1025))?;
@@ -1214,6 +1244,28 @@ mod tests {
 
     fn graph(v: Value) -> Graph {
         Graph::parse(&v).unwrap()
+    }
+
+    #[test]
+    fn test_bombing_projects_along_the_normal() {
+        let spec = json!({"node": "bombing", "shape": "stone", "cell": 0.05, "size": [0.03, 0.08], "seed": 7});
+        let g = graph(spec.clone());
+        let b = crate::patterns::Bombing { shape: crate::patterns::SpriteShape::Stone, cell: 0.05, size: (0.03, 0.08),
+            width: 1., density: 1., seed: 7, output: crate::patterns::BombingOutput::Mask };
+        let wall = |x: f64, y: f64| Context::new(Vector3::new(x, y, 0.3), Vector3::z(), 0.);
+        // On the ground, the sprites of the plane x-z by its own seed, as before.
+        for k in 0..50 {
+            let (x, z) = (0.013 * k as f64, 0.007 * k as f64);
+            assert_eq!(g.eval(&at(x, 0., z)), b.eval(x, z, 0.));
+        }
+        // On a wall facing z, sprites over its plane: they change up the wall, where sprites
+        // projected from above would stream straight down it.
+        let up: Vec<f64> = (0..200).map(|k| g.eval(&wall(0.1, 0.004 * k as f64))).collect();
+        assert!(up.iter().any(|&v| v > 0.5) && up.iter().any(|&v| v < 0.5));
+        // `plan` keeps them on x-z: down the wall, nothing changes.
+        let plan = graph(json!({"node": "bombing", "shape": "stone", "cell": 0.05, "size": [0.03, 0.08], "seed": 7, "plan": true}));
+        let down: Vec<f64> = (0..50).map(|k| plan.eval(&wall(0.1, 0.01 * k as f64))).collect();
+        assert!(down.iter().all(|&v| v == down[0]));
     }
 
     #[test]

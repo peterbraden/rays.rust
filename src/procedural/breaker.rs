@@ -836,7 +836,9 @@ mod along_probe {
         let out: Vec<serde_json::Value> = xs.iter().map(|&x| {
             let (varied, stage, bend, raw) = w.at_raw(x);
             let pts: Vec<[f64; 2]> = varied.section(stage, 360).iter().map(|p| [p.x + bend, p.y]).collect();
-            serde_json::json!({"x": x, "raw": raw, "height": varied.height, "points": pts})
+            let (centre, tip, _) = w.tube(x);
+            serde_json::json!({"x": x, "raw": raw, "height": varied.height, "points": pts,
+                "centre": [centre.x, centre.y, centre.z], "tip": [tip.x, tip.y, tip.z]})
         }).collect();
         std::fs::write(std::env::var("RAYS_SECTIONS").unwrap(), serde_json::to_string(&out).unwrap()).unwrap();
     }

@@ -218,7 +218,8 @@ plains instead, not yet drawn.
   the floor's depth: about 9 km above a deep sea floor, eight times as wide. Convex, level at
   the summit, with a summit caldera, two or three rift zones stretching them into ridges, and
   an apron at the foot. The youngest erupt through the landscape's run: lava many times as
-  fast as an arc volcano's, mostly as thin flows from the summit and the rift zones, each a
+  fast as an arc volcano's, mostly as thin flows, half breaking out about the summit and half
+  anywhere along the rift zones' fissures (`Shield::rift_line`), each a
   quarter of a cubic kilometre running tens of kilometres down the flanks as Mauna Loa's do,
   laid a few metres thick across its width on any grid (`volcano::HOTSPOT_RATE`,
   `SHIELD_FLOW_VOLUME`, `lateral`). Bare rock is only what has erupted in the landscape's time

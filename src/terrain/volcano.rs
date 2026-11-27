@@ -177,8 +177,12 @@ pub struct Vent {
     cone_radius: f64,
     lava_fraction: f64,
     flow_thickness: f64,
-    /// Where its flows start besides its own cell: a shield's rift zones.
+    /// Where its flows start besides its summit: the cells all along a shield's rift zones
+    /// (`hotspot::Shield::rift_line`), where half its flows break out.
     rifts: Vec<usize>,
+    /// The share of its rift zones' length in the domain: of its flows that break out along
+    /// them, those beyond the domain aren't the domain's.
+    rift_share: f64,
     /// What it builds, and the integral of its weights over the whole cone (`Form::integral`).
     pub form: Form,
     integral: f64,
@@ -201,7 +205,7 @@ impl Vent {
     fn new(dir: Vector3<f64>, (start, end): (f64, f64), rate: f64, seed: u64, form: Form, cone_radius: f64, lava_fraction: f64, flow_thickness: f64,
            caldera: Option<(f64, f64)>, domain: &Domain) -> Vent {
         let mut vent = Vent {
-            dir, start, end, rate, seed, cell: None, cone: vec![], cone_radius, lava_fraction, flow_thickness, rifts: vec![],
+            dir, start, end, rate, seed, cell: None, cone: vec![], cone_radius, lava_fraction, flow_thickness, rifts: vec![], rift_share: 0.,
             form, integral: form.integral(cone_radius), caldera, collapse: vec![], summit: vec![],
         };
         place(&mut vent, domain);
@@ -250,13 +254,19 @@ pub fn vents(planet: &Planet, domain: &Domain, p: &VolcanoParams) -> Vec<Vent> {
         // the rest flows, in lobes stacked metres thick (so that, as Kīlauea's, they cover a
         // few square kilometres a year), and a tenth builds about its summit.
         let mut vent = Vent::new(s.dir, (0., f64::INFINITY), 0.5 * rate, 0x6873_0000_0000 ^ k as u64, Form::Shield, 0.5 * s.radius, 0.9, 8., None, domain);
-        // (Cells holding a point of a rift zone; on a patch, `cell_at` gives the nearest edge
-        // cell for points beyond it.)
+        // (The cells along its rift zones, where half its flows break out; on a patch,
+        // `cell_at` gives the nearest edge cell for points beyond it.)
         let rifts = s.rift_points(radius);
-        vent.rifts = rifts.iter().filter_map(|d| {
+        let spacing = domain.area[domain.cell_at(&s.dir)].sqrt().max(0.5 * s.radius / 400.);
+        let line = s.rift_line(radius, spacing);
+        let mut along: Vec<usize> = line.iter().filter_map(|d| {
             let c = domain.cell_at(d);
             (radius * domain.dirs[c].angle(d) <= domain.area[c].sqrt()).then_some(c)
         }).collect();
+        vent.rift_share = along.len() as f64 / line.len().max(1) as f64;
+        along.sort_unstable();
+        along.dedup();
+        vent.rifts = along;
         let mut rng = Pcg32::new(planet.params.seed ^ 0x6369_6e64, k as u64);
         let horizon = Vent { start: 0., end: p.horizon, ..Vent::new(s.dir, (0., 0.), 0., 0, Form::Shield, 0., 0., 0., None, domain) };
         cinder_cones(&horizon, 0., &rifts, &mut rng, domain, &mut vents);
@@ -456,9 +466,16 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
         let width = if shield { SHIELD_FLOW_WIDTH } else { 0.5 * FLOW_WIDTH };
         let longest = if shield { SHIELD_FLOW_LENGTH } else { FLOW_LENGTH };
         for _ in 0..flows {
-            let pick = (rng.next_f64() * (1 + vent.rifts.len()) as f64) as usize;
-            let summit = (!vent.summit.is_empty()).then(|| vent.summit[((rng.next_f64() * vent.summit.len() as f64) as usize).min(vent.summit.len() - 1)]);
-            let start = if pick == 0 { summit.or(vent.cell) } else { vent.rifts.get(pick - 1).copied() };
+            // Half from about the summit, half from anywhere along the rift zones (as
+            // Kīlauea's and Mauna Loa's eruptions share between them).
+            // (A rift zone's flows that break out beyond the domain aren't the domain's.)
+            let (from_rift, which, at, inside) = (shield && rng.next_f64() < 0.5, rng.next_f64(), rng.next_f64(), rng.next_f64());
+            if from_rift && inside >= vent.rift_share { continue; }
+            let one_of = |cells: &[usize], u: f64| (!cells.is_empty()).then(|| cells[((u * cells.len() as f64) as usize).min(cells.len() - 1)]);
+            let start = if from_rift {
+                let Some(c) = one_of(&vent.rifts, at) else { continue };
+                Some(c)
+            } else { one_of(&vent.summit, which).or(vent.cell) };
             let Some(mut c) = start.or(vent.cell) else { break };
             let per_metre = vent.flow_thickness * width;
             // The flow's lava, used as it goes; and how far it has run.
@@ -472,14 +489,20 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
                 // Down the steepest way; or, in a hollow (often of the flow's own making, its
                 // lava beside it raising the way ahead), ponding and spilling over its lowest
                 // side, never back the way it came.
-                let next = domain.links(c).iter()
-                    .filter(|l| Some(l.to) != came)
+                // (Chosen by the perturbed slope among the cells truly below: perturbed alone,
+                // flows wandered uphill over a level summit, heaping it ever higher.)
+                let mut next = domain.links(c).iter()
+                    .filter(|l| Some(l.to) != came && ground[l.to] < ground[c])
                     .map(|l| (l.to, (ground[c] - ground[l.to] - p.roughness * rng.next_f64()) / l.dist, l.dist))
                     .max_by(|a, b| a.1.total_cmp(&b.1));
                 // In a hollow, the flow ponds: its lava fills the cell to the lip it spills over
                 // (a metre above the lowest neighbour) before going on, as much as it has left.
-                if let Some((to, slope, _)) = next && slope <= 0. {
-                    let fill = ((ground[to] - ground[c] + 1.) * domain.area[c]).min(left).max(0.);
+                // (A hollow on the ground as it is, not as the path's roughness perturbs it,
+                // which on a level summit would heap every flow's first cell a metre higher.)
+                let lowest = domain.links(c).iter().filter(|l| Some(l.to) != came).min_by(|a, b| ground[a.to].total_cmp(&ground[b.to]));
+                if next.is_none() && let Some(l) = lowest {
+                    let fill = ((ground[l.to] - ground[c] + 1.) * domain.area[c]).min(left).max(0.);
+                    next = Some((l.to, 1. / l.dist, l.dist));
                     ground[c] += fill / domain.area[c];
                     lava[c] += fill / domain.area[c];
                     mark(c, 0.);
@@ -513,6 +536,10 @@ pub fn erupt(domain: &Domain, vents: &[Vent], p: &VolcanoParams, t: f64, dt: f64
                     mark(c, aa);
                 };
                 let mut used = 0.;
+                // (A flow's lava leaves the vent it breaks out of: what builds there is the
+                // cone's. Laid on the first cell too, it heaped every flow of a vent whose
+                // summit is one cell on that cell, kilometres high.)
+                let across = if came.is_none() { vec![] } else { across };
                 for &n in &across {
                     let v = (laid / across.len() as f64).min(CONFINED * vent.flow_thickness * domain.area[n]);
                     lay(n, v);
@@ -674,6 +701,51 @@ mod tests {
             let most = lava.iter().cloned().fold(0., f64::max);
             assert!(most > 0.5 * thickness && most < 3. * thickness, "{} m grid: {} m thick", spacing, most);
         }
+    }
+
+    #[test]
+    fn test_a_vent_builds_a_cone_not_a_spike() {
+        // A stratovolcano on cells as wide as its summit: its flows' lava leaves the vent's
+        // cell, which stands no higher than its cone over the cells beside it.
+        let planet = Planet::new(crate::terrain::planet::PlanetParams { seed: 5, ..Default::default() });
+        let d = Domain::patch(10., 20., 64, 750., planet.params.radius);
+        let centre = d.len() / 2 + 32;
+        let p = VolcanoParams::default();
+        let v = Vent::new(d.dirs[centre], (0., 1e9), 8e5, 1, Form::Strato { crater: 450. }, p.cone_radius, p.lava_fraction, p.flow_thickness, None, &d);
+        assert_eq!(v.cell, Some(centre));
+        let mut ground = vec![500.; d.len()];
+        let mut lava = vec![0.; d.len()];
+        let edge: Vec<bool> = (0..d.len()).map(|i| d.edges(i).len() < 4).collect();
+        for k in 0..300 { erupt(&d, std::slice::from_ref(&v), &p, k as f64 * 100., 100., &mut ground, &mut lava, &edge, None); }
+        let beside = d.edges(centre).iter().map(|l| ground[l.to] - 500.).sum::<f64>() / d.edges(centre).len() as f64;
+        assert!(ground[centre] - 500. < 1.5 * beside, "vent {} m, beside {} m", ground[centre] - 500., beside);
+    }
+
+    #[test]
+    fn test_a_shields_summit_grows_evenly() {
+        // A young hotspot shield's summit, on a fine patch, for 100,000 years: its flows break
+        // out about the summit and all along its rift zones, so the patch is built up evenly,
+        // not heaped where they break out.
+        let o = serde_json::json!({"type": "landscape", "seed": 0, "domain": {"type": "patch", "cells": 128, "spacing": 150, "near": "hotspot"}});
+        let params = crate::terrain::object::terrain_params(&o);
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = crate::terrain::object::site(&o["domain"], &params);
+        let p = params.volcano.clone().unwrap();
+        let d = Domain::patch(lat, lon, 128, 150., planet.params.radius);
+        let vs = vents(&planet, &d, &p);
+        assert!(vs.iter().any(|v| v.form == Form::Shield && !v.summit.is_empty()));
+        let mut ground: Vec<f64> = (0..d.len()).map(|i| planet.elevation(&d.dirs[i], 150.)).collect();
+        let g0 = ground.clone();
+        let mut lava = vec![0.; d.len()];
+        for k in 0..1000 {
+            let fixed: Vec<bool> = (0..d.len()).map(|i| d.edges(i).len() < 4 || ground[i] < 0.).collect();
+            erupt(&d, &vs, &p, k as f64 * 100., 100., &mut ground, &mut lava, &fixed, None);
+        }
+        let mut change: Vec<f64> = (0..d.len()).map(|i| ground[i] - g0[i]).collect();
+        change.sort_by(f64::total_cmp);
+        let (median, most) = (change[change.len() / 2], change[change.len() - 1]);
+        assert!(median > 100., "the shield builds: {} m", median);
+        assert!(most < 2. * median, "built {} m at most, {} m in the middle", most, median);
     }
 
     #[test]

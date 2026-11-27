@@ -210,6 +210,22 @@ impl Shield {
         }).collect()
     }
 
+    /// Points all along its rift zones, from a tenth to six tenths of its radius from the
+    /// summit, `spacing` metres apart, scattered up to a kilometre either side of each rift's
+    /// line (its fissures are en échelon, not one crack), on a planet of `radius`.
+    pub fn rift_line(&self, radius: f64, spacing: f64) -> Vec<Vector3<f64>> {
+        let n = ((0.5 * self.radius / spacing).ceil() as usize).max(1);
+        let mut rng = crate::geometry::Pcg32::new(self.phase.to_bits(), 0x7269);
+        self.rifts.iter().flat_map(|&a| {
+            let along = self.east * a.cos() + self.north * a.sin();
+            let side = self.dir.cross(&along);
+            (0..n).map(|k| {
+                let r = self.radius * (0.1 + 0.5 * (k as f64 + 0.5) / n as f64);
+                (self.dir * radius + along * r + side * 1000. * (2. * rng.next_f64() - 1.)).normalize()
+            }).collect::<Vec<_>>()
+        }).collect()
+    }
+
     /// The reef about it at `d`, if it is an atoll: the elevation its reef, lagoon and fore-reef
     /// hold the ground at, at least (None away from an atoll). `summit` is the shield's worn
     /// summit's elevation, metres (below the sea, `ATOLL`, for an atoll).

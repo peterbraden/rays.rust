@@ -2337,7 +2337,58 @@
           ]
         ]
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Metal058C",
+        "licence": "CC0",
+        "size": 1.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "materials",
+                1,
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "materials",
+                1,
+                "albedo",
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "materials",
+                1,
+                "albedo",
+                "color_map",
+                2,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ],
+        "view": "wall"
+      }
+    ]
   },
   "galvanized_steel": {
     "doc": "Hot-dip galvanized steel: zinc spangle, crystals centimetres across, each reflecting with its own roughness.",

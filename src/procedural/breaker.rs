@@ -21,6 +21,10 @@ use crate::na::{Vector2, Vector3};
 use crate::shapes::mesh::IndexedMesh;
 use serde_json::Value;
 
+/// A section's points, each one's share of the cross waves, and its share of the roller (how
+/// far it bulges, m, and how much it is churned): `Breaker::churned_section`.
+pub type ChurnedSection = (Vec<Vector2<f64>>, Vec<f64>, Vec<(f64, f64)>);
+
 /// A plunging breaker, the wave travelling towards -z, its crest along x.
 #[derive(Clone, Debug)]
 pub struct Breaker {
@@ -145,7 +149,7 @@ impl Breaker {
     /// how far it bulges out, metres, and how much it is churned into lumps (0 to 1): the
     /// roller's rounded mass high on the bore's front, its lumps over the front, the crest and
     /// the top of the back, a little over the water before it.
-    pub fn churned_section(&self, stage: f64, count: usize) -> (Vec<Vector2<f64>>, Vec<f64>, Vec<(f64, f64)>) {
+    pub fn churned_section(&self, stage: f64, count: usize) -> ChurnedSection {
         let h = self.height;
         let bed = -self.depth - 0.05 * h;
         let (front, back) = (-12. * h, 8. * h);

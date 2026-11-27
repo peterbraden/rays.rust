@@ -333,7 +333,10 @@ impl BreakerWater {
         // seaward, +z): where a noise stretched along the flow crosses zero, the crest's
         // coordinate wandering so the lines wind.
         // (Little on the lip's underside, facing down into the tube: clear water, lit through.)
-        let face = (1. - level) * crate::math::smoothstep(0.3, -0.1, normal.z) * (1. - 0.85 * crate::math::smoothstep(-0.1, -0.5, normal.y));
+        // (Nor on the crest's top and the lip's upper surface, facing up: there the lines'
+        // patches broke the crest's edge into tufts.)
+        let face = (1. - level) * crate::math::smoothstep(0.3, -0.1, normal.z) * (1. - 0.85 * crate::math::smoothstep(-0.1, -0.5, normal.y))
+            * crate::math::smoothstep(0.6, 0.3, normal.y);
         if face > 0. {
             // (The flow runs along the crest as well as up the face as the wave peels: the lines
             // lie diagonally, across the crest's coordinate as it rises.)
@@ -349,7 +352,7 @@ impl BreakerWater {
     /// octaves; streaks drawn out along the flow (up the face and along the crest, as the wave
     /// peels: a diagonal, narrow across it); and a gentle
     /// undulation half a metre across.
-    fn relief(&self, p: &Vector3<f64>) -> f64 {
+    fn relief(&self, p: &Vector3<f64>, streaked: f64) -> f64 {
         let n = |x: f64, y: f64, z: f64| self.noise.noise(x, y, z);
         // (Small: a breaking wave's face is glassy, and stronger ripples smeared everything seen
         // through or in it.)
@@ -358,7 +361,8 @@ impl BreakerWater {
             + 0.0005 * n(p.x / 0.08 + 3.3, p.y / 0.08, p.z / 0.08);
         // (Diagonal, as the foam's lines: along the crest alone they ringed the tube's roof.)
         let x = p.x + 1.2 * (p.y - self.trough);
-        let streaks = 0.002 * n(x / 0.06 + 11.9, p.y / 0.9, p.z / 0.9);
+        // (Faint: stronger, they swirled over every surface like brushstrokes.)
+        let streaks = streaked * 0.0005 * n(x / 0.1 + 11.9, p.y / 1.2, p.z / 1.2);
         let swell = 0.01 * n(p.x / 0.5 + 21.4, p.y / 0.5, p.z / 0.5);
         ripples + streaks + swell
     }
@@ -366,11 +370,13 @@ impl BreakerWater {
     /// The normal `n` at `p` tilted by the relief's slope across the surface.
     fn rippled(&self, p: &Vector3<f64>, n: &Vector3<f64>) -> Vector3<f64> {
         let e = 0.002;
-        let h0 = self.relief(p);
+        // Streaks where the water runs up a face, none where it lies level.
+        let streaked = crate::math::smoothstep(0.95, 0.8, n.y);
+        let h0 = self.relief(p, streaked);
         let g = Vector3::new(
-            self.relief(&(p + Vector3::x() * e)) - h0,
-            self.relief(&(p + Vector3::y() * e)) - h0,
-            self.relief(&(p + Vector3::z() * e)) - h0,
+            self.relief(&(p + Vector3::x() * e), streaked) - h0,
+            self.relief(&(p + Vector3::y() * e), streaked) - h0,
+            self.relief(&(p + Vector3::z() * e), streaked) - h0,
         ) / e;
         let along = g - n * g.dot(n);
         (n - along).normalize()

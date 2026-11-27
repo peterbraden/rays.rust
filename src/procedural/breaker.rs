@@ -55,7 +55,7 @@ const CAVITY: f64 = 0.33;
 /// The trough's level below still water and the crest's above, as fractions of the height.
 const TROUGH: f64 = 0.3;
 /// The lip's thickness at its tip and over the cavity's roof, as fractions of the height.
-const TIP: f64 = 0.02;
+const TIP: f64 = 0.04;
 const ROOF: f64 = 0.23;
 /// How far the lip throws, at its fullest: the angle round the cavity its tip reaches beyond
 /// the roof (radians).
@@ -322,7 +322,7 @@ impl BreakerWater {
         let n = |x: f64, y: f64, z: f64| self.noise.noise(x, y, z);
         let up = (p.y - self.trough) / self.height;
         let level = crate::math::smoothstep(0.85, 0.97, normal.y);
-        let low = crate::math::smoothstep(0.25, 0.1, up);
+        let low = 1. - crate::math::smoothstep(0.1, 0.25, up);
         let mut cover = 0.;
         if level * low > 0. {
             // The lace: two octaves, its edges sharpened.
@@ -335,8 +335,8 @@ impl BreakerWater {
         // (Little on the lip's underside, facing down into the tube: clear water, lit through.)
         // (Nor on the crest's top and the lip's upper surface, facing up: there the lines'
         // patches broke the crest's edge into tufts.)
-        let face = (1. - level) * crate::math::smoothstep(0.3, -0.1, normal.z) * (1. - 0.85 * crate::math::smoothstep(-0.1, -0.5, normal.y))
-            * crate::math::smoothstep(0.6, 0.3, normal.y);
+        let face = (1. - level) * (1. - crate::math::smoothstep(-0.1, 0.3, normal.z)) * (1. - 0.85 * (1. - crate::math::smoothstep(-0.5, -0.1, normal.y)))
+            * (1. - crate::math::smoothstep(0.3, 0.6, normal.y));
         if face > 0. {
             // (The flow runs along the crest as well as up the face as the wave peels: the lines
             // lie diagonally, across the crest's coordinate as it rises.)
@@ -371,7 +371,7 @@ impl BreakerWater {
     fn rippled(&self, p: &Vector3<f64>, n: &Vector3<f64>) -> Vector3<f64> {
         let e = 0.002;
         // Streaks where the water runs up a face, none where it lies level.
-        let streaked = crate::math::smoothstep(0.95, 0.8, n.y);
+        let streaked = 1. - crate::math::smoothstep(0.8, 0.95, n.y);
         let h0 = self.relief(p, streaked);
         let g = Vector3::new(
             self.relief(&(p + Vector3::x() * e), streaked) - h0,
@@ -468,6 +468,61 @@ impl crate::volume::DensityField for Whitewater {
         let thinning = 0.25 + 0.75 * (-0.5 * age).exp();
         let lumps = 0.5 + 0.5 * self.noise.noise(p.x / 0.25, p.y / 0.25, p.z / 0.25) + 0.3 * self.noise.noise(p.x / 0.08 + 9.1, p.y / 0.08, p.z / 0.08);
         (landed * (mass * thinning).max(splash) * (1.6 * lumps - 0.3)).clamp(0., 1.)
+    }
+
+    fn majorant(&self) -> f64 { 1. }
+}
+
+/// The air a breaker's lip carries, as a density (0 to 1) for a volume of the wave's shape: the
+/// thrown jet is torn and entrains air, which scatters light white and makes the lip a lit,
+/// tinted sheet rather than clear glass; most towards its tip, none in the body of the wave
+/// below the cavity's roof. The cavity and the lip's reach along the crest are found once,
+/// every ten centimetres.
+pub struct Aeration {
+    start: f64,
+    step: f64,
+    /// Each section's cavity centre (y, z), semi-axes, and the angles of its roof and the lip's tip.
+    sections: Vec<(f64, f64, f64, f64, f64, f64)>,
+    noise: crate::noise::PerlinNoise,
+}
+
+impl Aeration {
+    pub fn new(breaker: &Breaker) -> Aeration {
+        let step = 0.1;
+        let start = breaker.center.x - 0.5 * breaker.width;
+        let n = (breaker.width / step).ceil() as usize + 1;
+        let sections = (0..n).map(|i| {
+            let x = start + i as f64 * step - breaker.center.x;
+            let (varied, stage, bend) = breaker.at(x);
+            let (c, a, b) = varied.cavity();
+            let (_, top) = varied.extremes();
+            let tip = top + THROW * varied.throw.clamp(0.5, 1.1) * stage;
+            (breaker.center.y + c.y, breaker.center.z + c.x + bend, a, b, top, tip)
+        }).collect();
+        Aeration { start, step, sections, noise: crate::noise::PerlinNoise::shuffled(breaker.seed.wrapping_add(0xae7a)) }
+    }
+}
+
+impl crate::volume::DensityField for Aeration {
+    fn density(&self, p: &Vector3<f64>) -> f64 {
+        let f = (p.x - self.start) / self.step;
+        if f.is_nan() || f < 0. || f >= (self.sections.len() - 1) as f64 { return 0.; }
+        let i = f.round() as usize;
+        let (cy, cz, a, b, top, tip) = self.sections[i];
+        if tip <= top + 0.05 { return 0.; }
+        // Where p is about the cavity: its angle (as the section's) and its distance out in
+        // units of the ellipse.
+        let (s, k) = TILT.sin_cos();
+        let (dz, dy) = (p.z - cz, p.y - cy);
+        let (u, v) = (dz * k + dy * s, -dz * s + dy * k);
+        let mut phi = (v / b).atan2(u / a);
+        if phi < top - 1. { phi += std::f64::consts::TAU; }
+        let out = ((u / a).powi(2) + (v / b).powi(2)).sqrt();
+        if out < 1. { return 0.; }
+        let thrown = crate::math::smoothstep(top, tip, phi) * (1. - crate::math::smoothstep(tip - 0.05, tip + 0.15, phi));
+        let near = 1. - crate::math::smoothstep(1., 1. + 1.2 * ROOF * 3., out);
+        let torn = 0.6 + 0.4 * self.noise.noise(p.x / 0.2, p.y / 0.2, p.z / 0.2);
+        (thrown.powf(0.7) * near * torn).clamp(0., 1.)
     }
 
     fn majorant(&self) -> f64 { 1. }

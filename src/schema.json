@@ -5957,6 +5957,12 @@
           "doc": "Density from the white water a breaker's lip throws up where it lands: a breaker's fields (procedural::breaker::Whitewater); give min and max."
         },
         {
+          "name": "aeration",
+          "kind": "json",
+          "default": null,
+          "doc": "Density from the air a breaker's thrown lip carries, most towards its tip: a breaker's fields (procedural::breaker::Aeration); give it the breaker's shape."
+        },
+        {
           "name": "albedo",
           "kind": "color",
           "default": [1, 1, 1],

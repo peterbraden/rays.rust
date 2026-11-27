@@ -130,30 +130,16 @@
   {
    "type": "volume",
    "shape": "$wave",
-   "density": {
-    "node": "expr",
-    "expr": "min(max((y - 1.2) / 0.15 + 1.2 * n - 0.4, 0), 1)",
-    "inputs": {
-     "n": {
-      "node": "fractal",
-      "scale": 0.3,
-      "seed": 6
-     }
-    },
-    "range": [
-     0,
-     1
-    ]
-   },
+   "aeration": "$wave",
    "sigma_a": [
     0,
     0,
     0
    ],
    "sigma_s": [
-    2.5,
-    2.5,
-    2.5
+    5,
+    5,
+    5
    ],
    "g": 0.6
   },

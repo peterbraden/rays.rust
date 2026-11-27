@@ -474,6 +474,10 @@ The woods run their grain up the scene's y and are seen on a wall, while wood sc
 with the grain across; a reference's `"rotate"` turns the scan by quarter turns before it is
 compared. oak, fitted so to ambientCG's Wood049 (flat-sawn oak), went 38.4 → 2.80, applied: the
 scan's mid brown and wavering grain in place of pale, ruled lines.
+maple (to Poly Haven's white_maple_veneer, 11.0 → 6.11) lost its curl, the scan being plain
+maple, and pine (to coated_pine, 13.4 → 6.99) took the scan's amber coating, not the preset's
+pale matt pine; neither applied. The walnut veneers are grey, not oiled chocolate, and weren't
+tried.
 
 ### Presets modelled on scans
 

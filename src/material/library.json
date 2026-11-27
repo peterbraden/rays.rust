@@ -1902,7 +1902,59 @@
           }
         ],
         "view": "wall",
-        "rotate": 1
+        "rotate": 1,
+        "fit": {
+          "loss": {
+            "start": 44.930258,
+            "fitted": 5.268546
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 6.991145,
+            "author_solved": 13.3678,
+            "patches": 3,
+            "chosen": "generation 46's best"
+          },
+          "date": "2026-11-27",
+          "applied": false,
+          "values": {
+            "scale": 0.6631,
+            "material.albedo.color_map.0.1": [
+              0.639,
+              0.29,
+              0.0208
+            ],
+            "material.albedo.color_map.1.1": [
+              0.125,
+              0.0245,
+              0.003
+            ],
+            "material.albedo.color_map.2.1": [
+              0.1945,
+              0.0615,
+              0.003
+            ],
+            "material.albedo.color_map.3.1": [
+              0.0521,
+              0.0132,
+              0.003
+            ],
+            "variables.rings.input.inputs.1.scale": 0.17709,
+            "variables.rings.input.inputs.1.smallest": 0.0073326,
+            "variables.rings.input.inputs.1.amplitude": 0.0040291,
+            "variables.rings.input.inputs.2.scale.1": 18.095,
+            "variables.rings.input.inputs.2.input.scale": 0.010698,
+            "variables.rings.input.inputs.2.input.smallest": 0.00075073,
+            "variables.rings.input.inputs.2.input.amplitude": 0.0021815,
+            "material.albedo.color_map.0.0": -0.3476,
+            "material.albedo.color_map.1.0": 0.3099,
+            "material.albedo.color_map.2.0": 0.55098,
+            "material.albedo.color_map.3.0": 0.74823
+          }
+        }
       }
     ]
   },
@@ -6049,7 +6101,53 @@
           }
         ],
         "view": "wall",
-        "rotate": 1
+        "rotate": 1,
+        "fit": {
+          "loss": {
+            "start": 20.56689,
+            "fitted": 6.003454
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 6.107648,
+            "author_solved": 10.997675,
+            "patches": 3,
+            "chosen": "the search's mean"
+          },
+          "date": "2026-11-27",
+          "applied": false,
+          "values": {
+            "scale": 0.50003,
+            "material.albedo.color_map.0.1": [
+              0.6514,
+              0.5257,
+              0.3649
+            ],
+            "material.albedo.color_map.1.1": [
+              0.7831,
+              0.6567,
+              0.4576
+            ],
+            "material.albedo.color_map.2.1": [
+              0.8181,
+              0.7205,
+              0.5475
+            ],
+            "variables.rings.input.inputs.1.scale": 1.1203,
+            "variables.rings.input.inputs.1.smallest": 0.0052112,
+            "variables.rings.input.inputs.1.amplitude": 0.0042794,
+            "variables.curl.wavelength": 0.0020001,
+            "variables.curl.spread": 0.18242,
+            "material.albedo.pattern.inputs.0.inputs.0": 0.10082,
+            "material.albedo.pattern.inputs.1.inputs.0": 1.3079,
+            "material.albedo.color_map.0.0": -1.2467,
+            "material.albedo.color_map.1.0": -0.36909,
+            "material.albedo.color_map.2.0": 0.63387
+          }
+        }
       }
     ]
   },

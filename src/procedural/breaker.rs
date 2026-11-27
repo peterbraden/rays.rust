@@ -199,7 +199,10 @@ impl Breaker {
             let wall = self.on_cavity(phi).0;
             if phi >= top { return crest_point + (wall - crest_point) * hollow; }
             let u = ((phi - bottom) / (top - bottom)).clamp(0., 1.);
-            let slope = Vector2::new(toe.x + (crest_point.x - toe.x) * (1. - (1. - u).powi(2)), toe.y + (crest_point.y - toe.y) * u);
+            // (Partly straight, so that it meets the crest at about 50 degrees, not standing
+            // vertical below it: on a collapsed bore that strip stood as a palisade.)
+            let along = 0.4 * u + 0.6 * (1. - (1. - u).powi(2));
+            let slope = Vector2::new(toe.x + (crest_point.x - toe.x) * along, toe.y + (crest_point.y - toe.y) * u);
             slope + (wall - slope) * hollow
         };
         let start = face(bottom);
@@ -224,7 +227,9 @@ impl Breaker {
             weight.push(from_tip(phi) * (GLASSY + (1. - GLASSY) * (1. - up).powi(2)));
             // (On what is left of the lip, only as it folds away.)
             let lip_left = if phi > top { 1. - hollow } else { 1. };
-            roller.push((churn * lip_left * 0.25 * h * (-((up - 0.75) / 0.2).powi(2)).exp(), churn * lip_left * (0.3 + 0.7 * up)));
+            // (Growing up to the crest and over it, the roller rounding the bore's top: bulging
+            // most below the crest left a notch above, broken into ledges by the lumps.)
+            roller.push((churn * lip_left * 0.2 * h * up.powi(3), churn * lip_left * (0.3 + 0.7 * up)));
         }
         // Back over the lip's outer surface, thickening from the tip to the roof.
         for i in 0..n_out {
@@ -234,7 +239,7 @@ impl Breaker {
             // collapsed again.)
             loop_.push(crest_point + (p + n * thickness(phi) - crest_point) * hollow);
             weight.push(from_tip(phi) * GLASSY);
-            roller.push((churn * (1. - hollow) * 0.15 * h, 0.5 * churn * (1. - hollow)));
+            roller.push((churn * (1. - hollow) * 0.2 * h, 0.5 * churn * (1. - hollow)));
         }
         // The crest, and the back of the wave falling to the still water (a smooth step, level
         // at both ends).
@@ -245,7 +250,7 @@ impl Breaker {
             let s = u * u * (3. - 2. * u);
             loop_.push(Vector2::new(crest.x + (fall - crest.x) * u, crest.y * (1. - s)));
             weight.push(GLASSY + (1. - GLASSY) * u);
-            roller.push((churn * 0.15 * h * (1. - u).powi(2), 0.5 * churn * (1. - u).powi(2)));
+            roller.push((churn * 0.2 * h * (1. - u).powi(2), 0.5 * churn * (1. - u).powi(2)));
         }
         // The still water behind, out to the back.
         for i in 1..=n_still {

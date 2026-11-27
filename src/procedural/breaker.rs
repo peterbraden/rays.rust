@@ -332,11 +332,12 @@ impl BreakerWater {
         // The lines, where the face rises (not the level water, nor the back, which faces
         // seaward, +z): where a noise stretched along the flow crosses zero, the crest's
         // coordinate wandering so the lines wind.
-        let face = (1. - level) * crate::math::smoothstep(0.3, -0.1, normal.z);
+        // (Little on the lip's underside, facing down into the tube: clear water, lit through.)
+        let face = (1. - level) * crate::math::smoothstep(0.3, -0.1, normal.z) * (1. - 0.85 * crate::math::smoothstep(-0.1, -0.5, normal.y));
         if face > 0. {
             // (The flow runs along the crest as well as up the face as the wave peels: the lines
             // lie diagonally, across the crest's coordinate as it rises.)
-            let x = p.x + 1.2 * (p.y - self.trough) + 0.25 * n(p.y / 0.7 + 3.9, p.z / 0.7, p.x / 2.);
+            let x = p.x + 1.2 * (p.y - self.trough) + 0.6 * n(p.y / 0.7 + 3.9, p.z / 0.7, p.x / 1.5);
             let line = 1. - (n(x / 0.18 + 41.3, p.y / 1.3, p.z / 1.3) + 0.3 * n(x / 0.07 + 2.2, p.y / 0.5, p.z / 0.5)).abs();
             let patches = crate::math::smoothstep(0.0, 0.3, n(p.x / 4. + 13.7, p.y / 2., p.z / 2.));
             cover = cover.max(face * patches * crate::math::smoothstep(0.7, 0.73, line));
@@ -345,8 +346,8 @@ impl BreakerWater {
     }
 
     /// The surface's small relief at `p` (m): capillary ripples a few centimetres long, in three
-    /// octaves; streaks drawn out along the flow (up the face and over the lip, in the plane of
-    /// the wave's section: long in y and z, narrow along the crest, x); and a gentle
+    /// octaves; streaks drawn out along the flow (up the face and along the crest, as the wave
+    /// peels: a diagonal, narrow across it); and a gentle
     /// undulation half a metre across.
     fn relief(&self, p: &Vector3<f64>) -> f64 {
         let n = |x: f64, y: f64, z: f64| self.noise.noise(x, y, z);
@@ -355,7 +356,9 @@ impl BreakerWater {
         let ripples = 0.00024 * n(p.x / 0.03, p.y / 0.03, p.z / 0.03)
             + 0.00012 * n(p.x / 0.015 + 7.1, p.y / 0.015, p.z / 0.015)
             + 0.0005 * n(p.x / 0.08 + 3.3, p.y / 0.08, p.z / 0.08);
-        let streaks = 0.002 * n(p.x / 0.06 + 11.9, p.y / 0.9, p.z / 0.9);
+        // (Diagonal, as the foam's lines: along the crest alone they ringed the tube's roof.)
+        let x = p.x + 1.2 * (p.y - self.trough);
+        let streaks = 0.002 * n(x / 0.06 + 11.9, p.y / 0.9, p.z / 0.9);
         let swell = 0.01 * n(p.x / 0.5 + 21.4, p.y / 0.5, p.z / 0.5);
         ripples + streaks + swell
     }

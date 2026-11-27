@@ -226,6 +226,10 @@ fn rounding_margin(b: &BBox) -> BBox {
     BBox::new(b.min.coords - Vector3::repeat(m), b.max.coords + Vector3::repeat(m))
 }
 
+/// The most levels of quads a tile's quadtree has (`intersect_cell`'s stack): a cell diced to
+/// 2^16 a side would be 4 billion vertices.
+const MAX_TILE_LEVEL: usize = 16;
+
 /// A cell's edge: its first vertex (i, j), the step along it, and the offset to the cell across it.
 type Edge = ((usize, usize), (usize, usize), (isize, isize));
 
@@ -796,9 +800,18 @@ impl DisplacedTerrain {
         }
         // Descend the quadtree, nearest block first: (depth in `boxes`, block x, block z).
         let top = tile.boxes.len() - 1;
-        let mut stack: Vec<(usize, usize, usize, f64)> = Vec::with_capacity(4 * (top + 1));
-        stack.push((top, 0, 0, t0));
-        while let Some((depth, bi, bj, entry)) = stack.pop() {
+        // On the stack, not the heap: allocated afresh for every cell a ray met, the stack was a
+        // third of a finely diced terrain's render in the allocator. Each level down pushes at
+        // most four, and a tile is at most `MAX_TILE_LEVEL` levels deep.
+        assert!(top < MAX_TILE_LEVEL, "a tile {} levels deep", top + 1);
+        // (Uninitialised, as `bvh::Bvh`'s: only entries below `size`, all written, are read.)
+        let mut stack = [std::mem::MaybeUninit::<(usize, usize, usize, f64)>::uninit(); 4 * MAX_TILE_LEVEL + 1];
+        stack[0].write((top, 0, 0, t0));
+        let mut size = 1;
+        while size > 0 {
+            size -= 1;
+            // SAFETY: stack[size] was written when size last rose past it.
+            let (depth, bi, bj, entry) = unsafe { stack[size].assume_init() };
             if entry > far { continue }
             let blocks = n >> (depth + 1);
             if slab(&tile.block(depth, bj * blocks + bi), &r.ro, &inv, t0, far).is_none() { continue }
@@ -825,7 +838,8 @@ impl DisplacedTerrain {
             // Farthest pushed first, so the nearest is visited next.
             children.sort_by(|a, b| b.2.total_cmp(&a.2));
             for &(ci, cj, e) in children.iter() {
-                stack.push((depth - 1, ci, cj, e));
+                stack[size].write((depth - 1, ci, cj, e));
+                size += 1;
             }
         }
         best

@@ -3027,3 +3027,17 @@ Left, by what they would recover:
    (snowline and slope thresholds, their noise in `shared`) evaluated per hit in the kernel, the
    slow parts baked.
 3. Blending (section 19) only for kernel media beside host shapes (desert-noon: 2.9x bound).
+
+### Measured since (option B, larger triangles)
+
+- Baking triangles up to 8 or 16 pixels: terrain-alpine at 16 samples on the GPU renders in
+  6.9 or 3.4 s against 10.7 at 2 pixels, at a mean FLIP of 0.0067 or 0.0153 against shading every
+  hit.
+- Lattices of their own for triangles a cover's edge crosses (snow, ice, water, rock against
+  soil): 3.26 million points, 28 s to bake, and the same 0.0151. So the blur isn't at the
+  cover's edges but in its colour's fine detail: the grain (noise 7 m across), the rocks'
+  textures and the library materials' patterns, finer than the vertices. Judging edges by colour
+  too made a lattice of nearly every triangle: 46 million points, 18 GB. Reverted.
+- Next measurement: how much of the 0.015 is the cover's grain, which a kernel could apply at
+  each hit from `shared::noise` over the baked colour, and how much the library materials'
+  patterns, which would need the graph evaluator in the kernels.

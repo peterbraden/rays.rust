@@ -25,19 +25,19 @@ rng = random.Random(25)
 # The camera, looking past the tree at the cottage, the sky's afterglow low on the left.
 camera = {"location": [-6.0, 1.5, 11.5], "lookat": [1.4, 2.6, 1.8], "up": [0, 1, 0], "angle": 0.74, "aperture": 0.02}
 
-# The cottage, turned to be seen three-quarter on: its front, and its right-hand gable with
-# its chimney. `local` places a point given in the cottage's own frame (x along the ridge, z
+# The cottage, turned to be seen three-quarter on (its front about 45 degrees from the
+# camera): its front, and its right-hand gable with its chimney. `local` places a point given in the cottage's own frame (x along the ridge, z
 # out of the front).
-YAW = -50
+YAW = -72
 
 
 def local(x, z):
     c, s = math.cos(math.radians(YAW)), math.sin(math.radians(YAW))
     return [round(x * c + z * s, 3), 0, round(-x * s + z * c, 3)]
 
-# The tree, out from the cottage's right-hand gable, turned so that its presents (heaped on its
-# -z side) face the camera.
-TREE_AT = local(7.2, 2.2)
+# The tree, out from the cottage's right-hand gable and back from its front, turned so that
+# its presents (heaped on its -z side) face the camera.
+TREE_AT = local(6.8, -1.6)
 towards = [camera["location"][0] - TREE_AT[0], camera["location"][2] - TREE_AT[2]]
 TURN = round(math.degrees(math.atan2(-towards[0], -towards[1])), 1)
 

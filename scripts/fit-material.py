@@ -1133,8 +1133,26 @@ class RenderFailed(Exception):
     """The renderer refused a candidate (a panic, say, at an extreme of its parameters)."""
 
 
+def resolve_variant(preset, library=None):
+    """A variant (a preset whose material is another preset, `{"type": "library", "name", ...}`,
+    its other fields setting that preset's variables, as a palette) as the base preset with those
+    variables set: so the fitting render can strip its gloss (`strip_relief` sees only the base's
+    materials), and a fit's paths into the variant's fields still reach it."""
+    m = preset.get("material", {})
+    if not (isinstance(m, dict) and m.get("type") == "library" and "name" in m):
+        return preset
+    library = library or json.load(open(os.path.join(ROOT, "src/material/library.json")))
+    base = json.loads(json.dumps(library[m["name"]]))
+    base["variables"] = dict(base.get("variables", {}),
+                             **{k: v for k, v in m.items() if k not in ("type", "name", "scale", "seed", "over")})
+    if "scale" in m or "scale" in preset:
+        base["scale"] = base.get("scale", 1.) * m.get("scale", 1.) * preset.get("scale", 1.)
+    return resolve_variant(base, library)
+
+
 def render(preset, usage, name, args, size, tmp, tag, linear=False):
     lighting = getattr(args, "lighting", "sun")
+    preset = resolve_variant(preset)
     if lighting == "sun":
         preset = strip_relief(preset)
     library_path = os.path.join(tmp, "library-%s.json" % tag)

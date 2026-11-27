@@ -105,14 +105,14 @@ pub struct Constituent {
 }
 
 /// `n`, a unit vector, folded onto the octahedron and unfolded onto a square, in 16-bit steps.
-fn encode_normal(n: &Vector3<f64>) -> [i16; 2] {
+pub(crate) fn encode_normal(n: &Vector3<f64>) -> [i16; 2] {
     let l1 = n.x.abs() + n.y.abs() + n.z.abs();
     let (x, y) = (n.x / l1, n.y / l1);
     let (x, y) = if n.z < 0. { ((1. - y.abs()) * x.signum(), (1. - x.abs()) * y.signum()) } else { (x, y) };
     [(x * 32767.).round() as i16, (y * 32767.).round() as i16]
 }
 
-fn decode_normal(e: [i16; 2]) -> Vector3<f64> {
+pub(crate) fn decode_normal(e: [i16; 2]) -> Vector3<f64> {
     let (x, y) = (e[0] as f64 / 32767., e[1] as f64 / 32767.);
     let z = 1. - x.abs() - y.abs();
     let (x, y) = if z < 0. { ((1. - y.abs()) * x.signum(), (1. - x.abs()) * y.signum()) } else { (x, y) };

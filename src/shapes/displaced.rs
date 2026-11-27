@@ -186,12 +186,44 @@ impl View {
 }
 
 /// A diced cell: its (2^k + 1)^2 vertices and their normals, row by row along x, and the
-/// bounds of each block of 2^j x 2^j quads for j from 1 to k.
+/// bounds of each block of 2^j x 2^j quads for j from 1 to k. Kept small, as every cell a ray
+/// has met is kept for the render (a finely diced terrain's tiles once filled 13 GB): positions
+/// in single precision in the terrain's own frame, as every tile and every nested terrain
+/// (`Nest`) rounds them, so that a vertex neighbours share rounds alike in each and no crack opens
+/// between them (to within 0.25 mm 4 km from the frame's origin, where a landscape's patches,
+/// placed about its camera, stay), and its blocks' bounds from them exactly; normals as two
+/// 16-bit octahedral coordinates (`lod::encode_normal`, to within 0.01 degrees): 16 bytes a
+/// vertex rather than 36.
 struct Tile {
     n: usize,
-    pos: Vec<Vector3<f64>>,
-    nrm: Vec<[f32; 3]>,
-    boxes: Vec<Vec<BBox>>,
+    origin: Vector3<f64>,
+    pos: Vec<[f32; 3]>,
+    nrm: Vec<[i16; 2]>,
+    boxes: Vec<Vec<[f32; 6]>>,
+}
+
+impl Tile {
+    fn pos(&self, i: usize) -> Vector3<f64> {
+        let p = self.pos[i];
+        self.origin + Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64)
+    }
+
+    fn normal(&self, i: usize) -> Vector3<f64> {
+        crate::shapes::lod::decode_normal(self.nrm[i])
+    }
+
+    /// Block `b` of depth `depth`'s bounds.
+    fn block(&self, depth: usize, b: usize) -> BBox {
+        let x = &self.boxes[depth][b];
+        BBox::new(self.origin + Vector3::new(x[0] as f64, x[1] as f64, x[2] as f64), self.origin + Vector3::new(x[3] as f64, x[4] as f64, x[5] as f64))
+    }
+}
+
+/// `b` grown by what rounding a point in it to single precision may move it (`Tile`): four of
+/// f32's steps at its largest coordinate, so a cell's bounds still hold its diced triangles.
+fn rounding_margin(b: &BBox) -> BBox {
+    let m = 4. * f32::EPSILON as f64 * b.min.coords.abs().max().max(b.max.coords.abs().max());
+    BBox::new(b.min.coords - Vector3::repeat(m), b.max.coords + Vector3::repeat(m))
 }
 
 /// A cell's edge: its first vertex (i, j), the step along it, and the offset to the cell across it.
@@ -472,6 +504,7 @@ impl DisplacedTerrain {
                 }
             }
         }
+        let cell_bounds: Vec<BBox> = cell_bounds.iter().map(rounding_margin).collect();
         let (bvh, cells) = Bvh::build((0 .. (nx * nz) as u32).filter(|&k| !in_hole(k as usize % nx, k as usize / nx)).collect(),
             |&k| cell_bounds[k as usize]);
         let bounds = bvh.bounds();
@@ -531,6 +564,7 @@ impl DisplacedTerrain {
             cell_bound(&g, ix, iz, toward_zero(r), (0., 0.), &aside, self.vertical)
         }).collect();
         let hole = self.hole;
+        let tightened: Vec<BBox> = tightened.iter().map(rounding_margin).collect();
         let in_hole = |ix: usize, iz: usize| hole.is_some_and(|(x0, x1, z0, z1)| ix >= x0 && ix < x1 && iz >= z0 && iz < z1);
         let (bvh, cells) = Bvh::build((0 .. (nx * nz) as u32).filter(|&k| !in_hole(k as usize % nx, k as usize / nx)).collect(),
             |&k| tightened[k as usize]);
@@ -633,7 +667,7 @@ impl DisplacedTerrain {
         };
         let at = |i: usize, j: usize| ring[(j + 1) * w + i + 1];
         let mut pos = Vec::with_capacity((n + 1) * (n + 1));
-        let mut nrm = Vec::with_capacity((n + 1) * (n + 1));
+        let mut nrm: Vec<[i16; 2]> = Vec::with_capacity((n + 1) * (n + 1));
         for j in 0 ..= n {
             for i in 0 ..= n {
                 pos.push(at(i, j));
@@ -641,7 +675,7 @@ impl DisplacedTerrain {
                 let tv = ring[(j + 2) * w + i + 1] - ring[j * w + i + 1];
                 let m = tv.cross(&tu);
                 let m = if m.norm() > 0. { m.normalize() } else { Vector3::y() };
-                nrm.push([m.x as f32, m.y as f32, m.z as f32]);
+                nrm.push(crate::shapes::lod::encode_normal(&m));
             }
         }
         // Edges: where the neighbour across is coarser, follow its edge; and evaluate the
@@ -678,28 +712,32 @@ impl DisplacedTerrain {
             }
             pos[(j0 + dj * n) * (n + 1) + i0 + di * n] = prev;
         }
-        // Bounds of blocks of quads, from 2 x 2 up to the whole cell.
-        let mut boxes: Vec<Vec<BBox>> = vec![];
+        // The positions as the triangles will be intersected: in the terrain's frame, in f32.
+        let origin = Vector3::zeros();
+        let pos: Vec<[f32; 3]> = pos.iter().map(|p: &Vector3<f64>| { let d = p - origin; [d.x as f32, d.y as f32, d.z as f32] }).collect();
+        // Bounds of blocks of quads, from 2 x 2 up to the whole cell, of those (so exactly).
+        let mut boxes: Vec<Vec<[f32; 6]>> = vec![];
         let mut size = 2;
         while size <= n {
             let blocks = n / size;
             let level_boxes = (0 .. blocks * blocks).map(|b| {
                 let (bi, bj) = ((b % blocks) * size, (b / blocks) * size);
-                let mut lo = Vector3::repeat(f64::INFINITY);
-                let mut hi = Vector3::repeat(f64::NEG_INFINITY);
+                let mut b = [f32::INFINITY, f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
                 for j in bj ..= bj + size {
                     for i in bi ..= bi + size {
                         let p = pos[j * (n + 1) + i];
-                        lo = lo.inf(&p);
-                        hi = hi.sup(&p);
+                        for a in 0..3 {
+                            b[a] = b[a].min(p[a]);
+                            b[a + 3] = b[a + 3].max(p[a]);
+                        }
                     }
                 }
-                BBox::new(lo, hi)
+                b
             }).collect();
             boxes.push(level_boxes);
             size *= 2;
         }
-        Tile { n, pos, nrm, boxes }
+        Tile { n, origin, pos, nrm, boxes }
     }
 
     fn tile(&self, k: usize) -> &Tile {
@@ -745,10 +783,9 @@ impl DisplacedTerrain {
             let (a, b, c, d) = (v(i, j), v(i + 1, j), v(i, j + 1), v(i + 1, j + 1));
             let mut hit: Option<(f64, Vector3<f64>)> = None;
             for [p, q, s] in [[a, b, c], [d, c, b]] {
-                if let Some((t, u, w)) = intersect_triangle(r, tile.pos[p], tile.pos[q], tile.pos[s])
+                if let Some((t, u, w)) = intersect_triangle(r, tile.pos(p), tile.pos(q), tile.pos(s))
                     && t >= t0 && t <= far && hit.is_none_or(|(ht, _)| t < ht) {
-                    let nv = |x: usize| Vector3::new(tile.nrm[x][0] as f64, tile.nrm[x][1] as f64, tile.nrm[x][2] as f64);
-                    let m = nv(p) * (1. - u - w) + nv(q) * u + nv(s) * w;
+                    let m = tile.normal(p) * (1. - u - w) + tile.normal(q) * u + tile.normal(s) * w;
                     hit = Some((t, if m.norm() > 0. { m.normalize() } else { Vector3::y() }));
                 }
             }
@@ -764,7 +801,7 @@ impl DisplacedTerrain {
         while let Some((depth, bi, bj, entry)) = stack.pop() {
             if entry > far { continue }
             let blocks = n >> (depth + 1);
-            if slab(&tile.boxes[depth][bj * blocks + bi], &r.ro, &inv, t0, far).is_none() { continue }
+            if slab(&tile.block(depth, bj * blocks + bi), &r.ro, &inv, t0, far).is_none() { continue }
             if depth == 0 {
                 for (i, j) in [(2 * bi, 2 * bj), (2 * bi + 1, 2 * bj), (2 * bi, 2 * bj + 1), (2 * bi + 1, 2 * bj + 1)] {
                     if let Some(h) = quad(i, j, far) {
@@ -779,7 +816,7 @@ impl DisplacedTerrain {
             let mut children: [(usize, usize, f64); 4] = [(0, 0, 0.); 4];
             let mut count = 0;
             for (ci, cj) in [(2 * bi, 2 * bj), (2 * bi + 1, 2 * bj), (2 * bi, 2 * bj + 1), (2 * bi + 1, 2 * bj + 1)] {
-                if let Some(e) = slab(&tile.boxes[depth - 1][cj * child_blocks + ci], &r.ro, &inv, t0, far) {
+                if let Some(e) = slab(&tile.block(depth - 1, cj * child_blocks + ci), &r.ro, &inv, t0, far) {
                     children[count] = (ci, cj, e);
                     count += 1;
                 }
@@ -830,7 +867,7 @@ impl DisplacedTerrain {
             let mut stack = vec![(tile.boxes.len() - 1, 0usize, 0usize)];
             while let Some((depth, bi, bj)) = stack.pop() {
                 let blocks = n >> (depth + 1);
-                if !contains(&tile.boxes[depth][bj * blocks + bi]) { continue }
+                if !contains(&tile.block(depth, bj * blocks + bi)) { continue }
                 for (ci, cj) in [(2 * bi, 2 * bj), (2 * bi + 1, 2 * bj), (2 * bi, 2 * bj + 1), (2 * bi + 1, 2 * bj + 1)] {
                     if depth == 0 { quads.push((ci, cj)) } else { stack.push((depth - 1, ci, cj)) }
                 }
@@ -840,7 +877,7 @@ impl DisplacedTerrain {
         let mut best: Option<(f64, (f64, f64))> = None;
         for (i, j) in quads {
             for tri in [[(i, j), (i + 1, j), (i, j + 1)], [(i + 1, j + 1), (i, j + 1), (i + 1, j)]] {
-                let at = |(a, b): (usize, usize)| tile.pos[b * (n + 1) + a];
+                let at = |(a, b): (usize, usize)| tile.pos(b * (n + 1) + a);
                 let (a, e1, e2) = (at(tri[0]), at(tri[1]) - at(tri[0]), at(tri[2]) - at(tri[0]));
                 let (d11, d12, d22) = (e1.dot(&e1), e1.dot(&e2), e2.dot(&e2));
                 let det = d11 * d22 - d12 * d12;
@@ -959,7 +996,7 @@ impl DisplacedTerrain {
             let tile = self.tile(k);
             let n = tile.n;
             let at = |i: usize, j: usize| j * (n + 1) + i;
-            let normal = |x: usize| Vector3::new(tile.nrm[x][0] as f64, tile.nrm[x][1] as f64, tile.nrm[x][2] as f64);
+            let normal = |x: usize| tile.normal(x);
             let mut out = Vec::with_capacity(2 * n * n);
             for j in 0 .. n {
                 for i in 0 .. n {
@@ -968,7 +1005,7 @@ impl DisplacedTerrain {
                     // dicing's do: (c - a) x (b - a) with x and z increasing along b and c.
                     for [p, q, s] in [[a, c, b], [d, b, c]] {
                         out.push((crate::wavefront::flat::Prim::Triangle {
-                            v: [tile.pos[p], tile.pos[q], tile.pos[s]],
+                            v: [tile.pos(p), tile.pos(q), tile.pos(s)],
                             n: Some([normal(p), normal(q), normal(s)]),
                         }, k as u32));
                     }
@@ -1013,16 +1050,17 @@ mod tests {
         let here = DisplacedTerrain::new(flat(), graph(), true, &detail).unwrap();
         let there = DisplacedTerrain::new(flat(), graph(), true, &detail).unwrap()
             .placed(Vector3::new(100., 0., 0.), Matrix3::identity());
-        assert!((rise(&here, 1.5, 0.5) - 0.015).abs() < 1e-9);
-        assert!((rise(&there, 1.5, 0.5) - 1.015).abs() < 1e-9);
+        // (To within the diced positions' single precision, `Tile`.)
+        assert!((rise(&here, 1.5, 0.5) - 0.015).abs() < 1e-6);
+        assert!((rise(&there, 1.5, 0.5) - 1.015).abs() < 1e-6);
         // A field, read at the scene's points too.
         let sediment = || Graph::parse(&serde_json::json!({"node": "field", "field": "sediment", "from": 0, "to": 200})).unwrap();
         let unread = DisplacedTerrain::new(flat(), sediment(), true, &detail).unwrap();
-        assert!(rise(&unread, 1.5, 0.5).abs() < 1e-9);
+        assert!(rise(&unread, 1.5, 0.5).abs() < 1e-6);
         let read = DisplacedTerrain::new(flat(), sediment(), true, &detail).unwrap()
             .placed(Vector3::new(100., 0., 0.), Matrix3::identity())
             .with_fields(Arc::new(East));
-        assert!((rise(&read, 1.5, 0.5) - crate::procedural::nubis_clouds::smoothstep(0., 200., 101.5)).abs() < 1e-9);
+        assert!((rise(&read, 1.5, 0.5) - crate::procedural::nubis_clouds::smoothstep(0., 200., 101.5)).abs() < 1e-6);
     }
 
     #[test]
@@ -1054,7 +1092,8 @@ mod tests {
         assert_eq!(t.point(n / 2, n / 2, 3), plain.point(n / 2, n / 2, 3));
         for k in 0 .. 64 {
             let b = t.cell_bounds[k];
-            for p in &t.dice(k, false).pos {
+            let tile = t.dice(k, false);
+            for p in (0 .. tile.pos.len()).map(|i| tile.pos(i)) {
                 assert!((0 .. 3).all(|a| p[a] >= b.min[a] && p[a] <= b.max[a]), "cell {}: {:?} outside {:?}", k, p, b);
             }
         }
@@ -1199,7 +1238,8 @@ mod tests {
             let b = t.cell_bounds[k];
             let x0 = t.grid.min.0 + (k % n) as f64;
             sideways = sideways.max(x0 - b.min.x);
-            for p in &t.dice(k, false).pos {
+            let tile = t.dice(k, false);
+            for p in (0 .. tile.pos.len()).map(|i| tile.pos(i)) {
                 assert!((0 .. 3).all(|a| p[a] >= b.min[a] && p[a] <= b.max[a]), "cell {}: {:?} outside {:?}", k, p, b);
             }
         }
@@ -1247,7 +1287,8 @@ mod tests {
         assert!(height(2 * n + 6) > 3., "granite {}", height(2 * n + 6));
         for k in 0 .. n * n {
             let b = t.cell_bounds[k];
-            for p in &t.dice(k, false).pos {
+            let tile = t.dice(k, false);
+            for p in (0 .. tile.pos.len()).map(|i| tile.pos(i)) {
                 assert!((0 .. 3).all(|a| p[a] >= b.min[a] && p[a] <= b.max[a]), "cell {}: {:?} outside {:?}", k, p, b);
             }
         }

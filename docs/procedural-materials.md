@@ -470,6 +470,11 @@ in place of a bright teal; both applied, their structure their bases'. (Judged o
 patch: with only colours to move there was no search to roam.) The overlay variants
 (weathered_granite, aged_bronze, chipped_paint) need a material under them and aren't fitted.
 
+The woods run their grain up the scene's y and are seen on a wall, while wood scans are taken
+with the grain across; a reference's `"rotate"` turns the scan by quarter turns before it is
+compared. oak, fitted so to ambientCG's Wood049 (flat-sawn oak), went 38.4 → 2.80, applied: the
+scan's mid brown and wavering grain in place of pale, ruled lines.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

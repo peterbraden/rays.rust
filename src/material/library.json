@@ -1484,23 +1484,23 @@
             },
             {
               "node": "fractal",
-              "scale": 0.4,
-              "smallest": 0.01,
-              "amplitude": 0.004,
+              "scale": 0.75487,
+              "smallest": 0.0037807,
+              "amplitude": 0.0022422,
               "seed": 81
             },
             {
               "node": "transform",
               "scale": [
                 1,
-                8,
+                5.8911,
                 1
               ],
               "input": {
                 "node": "fractal",
-                "scale": 0.05,
-                "smallest": 0.003,
-                "amplitude": 0.0015,
+                "scale": 0.01298,
+                "smallest": 0.0009729,
+                "amplitude": 0.0035235,
                 "seed": 82
               }
             }
@@ -1512,24 +1512,24 @@
         "inputs": [
           {
             "node": "smoothstep",
-            "from": 0.35,
-            "to": 0.15,
+            "from": 0.64153,
+            "to": 0.42919,
             "input": "$rings"
           },
           {
             "node": "smoothstep",
-            "from": 0.35,
-            "to": 0.2,
+            "from": 0.64096,
+            "to": 0.4348,
             "input": {
               "node": "transform",
               "scale": [
                 1,
-                14,
+                34.974,
                 1
               ],
               "input": {
                 "node": "cells",
-                "scale": 0.0005,
+                "scale": 0.002,
                 "seed": 83
               }
             }
@@ -1538,13 +1538,13 @@
       },
       "fibres": {
         "node": "gabor",
-        "wavelength": 0.0008,
+        "wavelength": 0.00036203,
         "direction": [
           1,
           0,
           1
         ],
-        "spread": 0.3,
+        "spread": 0.07144,
         "plan": false,
         "seed": 84
       },
@@ -1552,40 +1552,40 @@
         [
           0.0,
           [
-            0.56,
-            0.4,
-            0.24
+            0.4213,
+            0.2764,
+            0.1707
           ]
         ],
         [
           0.4,
           [
-            0.5,
-            0.34,
-            0.19
+            0.2994,
+            0.1882,
+            0.1156
           ]
         ],
         [
           0.75,
           [
-            0.38,
-            0.24,
-            0.12
+            0.196,
+            0.1242,
+            0.0767
           ]
         ],
         [
           1.0,
           [
-            0.31,
-            0.19,
-            0.09
+            0.2242,
+            0.1397,
+            0.0765
           ]
         ]
       ],
       "pore_color": [
-        0.2,
-        0.12,
-        0.06
+        0.1434,
+        0.0895,
+        0.0527
       ]
     },
     "material": {
@@ -1596,7 +1596,7 @@
         "pattern": "$pores",
         "color_map": [
           [
-            0.0,
+            -0.072964,
             {
               "pattern": {
                 "node": "add",
@@ -1606,7 +1606,7 @@
                     "node": "multiply",
                     "inputs": [
                       "$fibres",
-                      0.08
+                      0.15946
                     ]
                   }
                 ]
@@ -1615,7 +1615,7 @@
             }
           ],
           [
-            1.0,
+            0.56463,
             "$pore_color"
           ]
         ]
@@ -1681,9 +1681,74 @@
           }
         ],
         "view": "wall",
-        "rotate": 1
+        "rotate": 1,
+        "fit": {
+          "loss": {
+            "start": 399.995261,
+            "fitted": 3.273804
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 2.80136,
+            "author_solved": 38.376542,
+            "patches": 3,
+            "chosen": "the search's mean"
+          },
+          "date": "2026-11-27",
+          "applied": true,
+          "values": {
+            "scale": 1.9916,
+            "variables.palette.0.1": [
+              0.4213,
+              0.2764,
+              0.1707
+            ],
+            "variables.palette.1.1": [
+              0.2994,
+              0.1882,
+              0.1156
+            ],
+            "variables.palette.2.1": [
+              0.196,
+              0.1242,
+              0.0767
+            ],
+            "variables.palette.3.1": [
+              0.2242,
+              0.1397,
+              0.0765
+            ],
+            "variables.pore_color": [
+              0.1434,
+              0.0895,
+              0.0527
+            ],
+            "variables.rings.input.inputs.1.scale": 0.75487,
+            "variables.rings.input.inputs.1.smallest": 0.0037807,
+            "variables.rings.input.inputs.1.amplitude": 0.0022422,
+            "variables.rings.input.inputs.2.scale.1": 5.8911,
+            "variables.rings.input.inputs.2.input.scale": 0.01298,
+            "variables.rings.input.inputs.2.input.smallest": 0.0009729,
+            "variables.rings.input.inputs.2.input.amplitude": 0.0035235,
+            "variables.pores.inputs.0.from": 0.64153,
+            "variables.pores.inputs.0.to": 0.42919,
+            "variables.pores.inputs.1.from": 0.64096,
+            "variables.pores.inputs.1.to": 0.4348,
+            "variables.pores.inputs.1.input.scale.1": 34.974,
+            "variables.pores.inputs.1.input.input.scale": 0.002,
+            "variables.fibres.wavelength": 0.00036203,
+            "variables.fibres.spread": 0.07144,
+            "material.albedo.color_map.0.0": -0.072964,
+            "material.albedo.color_map.1.0": 0.56463,
+            "material.albedo.color_map.0.1.pattern.inputs.1.inputs.1": 0.15946
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.9916
   },
   "pine": {
     "doc": "Pine, matt varnished: pale wood with narrow orange-brown latewood bands, rings wide and wavering.",

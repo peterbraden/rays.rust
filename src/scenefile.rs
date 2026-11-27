@@ -2216,6 +2216,8 @@ impl SceneFile {
             _ if o["whitewater"].is_object() => Arc::new(crate::procedural::breaker::Whitewater::new(&crate::procedural::breaker::Breaker::parse(&o["whitewater"]))),
             // The air a breaker's lip carries.
             _ if o["aeration"].is_object() => Arc::new(crate::procedural::breaker::Aeration::new(&crate::procedural::breaker::Breaker::parse(&o["aeration"]))),
+            // The spray a breaker throws off its crest.
+            _ if o["spray"].is_object() => Arc::new(crate::procedural::breaker::Spray::new(&crate::procedural::breaker::Breaker::parse(&o["spray"]))),
             _ if graphed => {
                 assert!(o.get("grid").is_none() && o.get("noise").is_none(), "Give a volume a density graph, or a grid or noise, not both");
                 let g = crate::graph::Graph::parse(&o["density"]).unwrap_or_else(|e| panic!("volume's density: {}", e));

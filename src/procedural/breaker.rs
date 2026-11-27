@@ -326,8 +326,9 @@ impl BreakerWater {
         let mut cover = 0.;
         if level * low > 0. {
             // The lace: two octaves, its edges sharpened.
-            let lace = 0.65 * n(p.x / 0.9 + 31.7, p.y / 0.9, p.z / 0.9) + 0.35 * n(p.x / 0.3 + 5.2, p.y / 0.3, p.z / 0.3);
-            cover = level * low * crate::math::smoothstep(0.05, 0.15, lace);
+            // (Fine: patches a third of a metre across, holes between; coarser ones read as stains.)
+            let lace = 0.65 * n(p.x / 0.35 + 31.7, p.y / 0.35, p.z / 0.35) + 0.35 * n(p.x / 0.12 + 5.2, p.y / 0.12, p.z / 0.12);
+            cover = level * low * crate::math::smoothstep(0.08, 0.12, lace);
         }
         // The lines, where the face rises (not the level water, nor the back, which faces
         // seaward, +z): where a noise stretched along the flow crosses zero, the crest's
@@ -519,10 +520,63 @@ impl crate::volume::DensityField for Aeration {
         if phi < top - 1. { phi += std::f64::consts::TAU; }
         let out = ((u / a).powi(2) + (v / b).powi(2)).sqrt();
         if out < 1. { return 0.; }
-        let thrown = crate::math::smoothstep(top, tip, phi) * (1. - crate::math::smoothstep(tip - 0.05, tip + 0.15, phi));
+        // (Some from the roof on, more towards the tip: the tube's roof is turbid too.)
+        let thrown = (0.3 + 0.7 * crate::math::smoothstep(top, tip, phi)) * crate::math::smoothstep(top - 0.6, top, phi)
+            * (1. - crate::math::smoothstep(tip - 0.05, tip + 0.15, phi));
         let near = 1. - crate::math::smoothstep(1., 1. + 1.2 * ROOF * 3., out);
         let torn = 0.6 + 0.4 * self.noise.noise(p.x / 0.2, p.y / 0.2, p.z / 0.2);
         (thrown.powf(0.7) * near * torn).clamp(0., 1.)
+    }
+
+    fn majorant(&self) -> f64 { 1. }
+}
+
+/// The spray a breaker throws off its crest, as a density (0 to 1) for a volume: droplets torn
+/// from the crest and the lip, in wisps within the better part of a metre above each section's
+/// crest, carried back seaward by the wind off the land; found from each section's crest, every
+/// ten centimetres, so it follows the crest as it rises, falls and bends.
+pub struct Spray {
+    start: f64,
+    step: f64,
+    /// Each section's crest (y, z).
+    crests: Vec<(f64, f64)>,
+    height: f64,
+    noise: crate::noise::PerlinNoise,
+}
+
+impl Spray {
+    pub fn new(breaker: &Breaker) -> Spray {
+        let step = 0.1;
+        let start = breaker.center.x - 0.5 * breaker.width;
+        let n = (breaker.width / step).ceil() as usize + 1;
+        let crests = (0..n).map(|i| {
+            let x = start + i as f64 * step - breaker.center.x;
+            let (varied, stage, bend) = breaker.at(x);
+            let section = varied.section(stage, 120);
+            let crest = section.iter().fold(Vector2::new(0., f64::MIN), |a, p| if p.y > a.y { *p } else { a });
+            (breaker.center.y + crest.y, breaker.center.z + crest.x + bend)
+        }).collect();
+        Spray { start, step, crests, height: breaker.height, noise: crate::noise::PerlinNoise::shuffled(breaker.seed.wrapping_add(0x5b7a)) }
+    }
+}
+
+impl crate::volume::DensityField for Spray {
+    fn density(&self, p: &Vector3<f64>) -> f64 {
+        let f = (p.x - self.start) / self.step;
+        if f.is_nan() || f < 0. || f >= (self.crests.len() - 1) as f64 { return 0.; }
+        let (i, a) = (f.floor() as usize, f.fract());
+        let (y0, z0) = self.crests[i];
+        let (y1, z1) = self.crests[i + 1];
+        let (cy, cz) = (y0 + (y1 - y0) * a, z0 + (z1 - z0) * a);
+        let h = self.height;
+        let up = (p.y - cy) / (0.4 * h);
+        if up < -0.15 || up > 1. { return 0.; }
+        // Blown back: the higher, the further seaward.
+        let back = (p.z - cz - 0.4 * h * up.max(0.)) / (0.35 * h);
+        let sheet = (-back * back).exp() * (1. - up.max(0.)).powi(2) * (1. - crate::math::smoothstep(-0.15, 0., -up));
+        let n = |s: f64, o: f64| self.noise.noise(p.x / s + o, p.y / s, p.z / s);
+        let wisps = 0.5 + 0.5 * n(0.3, 0.) + 0.35 * n(0.1, 7.7);
+        (sheet * (2. * wisps - 0.6)).clamp(0., 1.)
     }
 
     fn majorant(&self) -> f64 { 1. }

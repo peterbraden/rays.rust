@@ -5963,6 +5963,12 @@
           "doc": "Density from the air a breaker's thrown lip carries, most towards its tip: a breaker's fields (procedural::breaker::Aeration); give it the breaker's shape."
         },
         {
+          "name": "spray",
+          "kind": "json",
+          "default": null,
+          "doc": "Density from the spray a breaker throws off its crest, following the crest: a breaker's fields (procedural::breaker::Spray); give min and max."
+        },
+        {
           "name": "albedo",
           "kind": "color",
           "default": [1, 1, 1],

@@ -1938,6 +1938,9 @@
       "group": "Terrain",
       "doc": "Ground whose height comes from a heightmap: flat, fractal noise or an image.",
       "fields": [
+        {"name": "displacement", "kind": "json", "default": null, "doc": "A function graph moving the surface along its normal at render time, diced to the camera's pixel size (see docs/displacement.md): rock, stones, footprints."},
+        {"name": "vector_displacement", "kind": "json", "default": null, "doc": "Graphs of x, y, z and outward, displacing the surface sideways too, for overhangs (docs/displacement.md)."},
+        {"name": "displacement_falloff", "kind": "number", "default": 0, "doc": "Distance over which the displacement fades out towards the grid's edges."},
         {
           "name": "heightmap",
           "kind": "object",

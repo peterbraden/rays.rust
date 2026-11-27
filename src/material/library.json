@@ -119,7 +119,91 @@
           ]
         ]
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Marble021",
+        "licence": "CC0",
+        "size": 1.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                2,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                3,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                3,
+                1,
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                4,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                4,
+                1,
+                "color_map",
+                1,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
   },
   "nero_marquina": {
     "doc": "Black marble crossed by a network of fine white calcite veins, polished (veins along the zero crossings of warped noise).",
@@ -213,7 +297,29 @@
         "interpolation": "smooth",
         "color_map": "$palette"
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Marble016",
+        "licence": "CC0",
+        "size": 1.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
   },
   "travertine": {
     "doc": "Cream travertine, honed: wavy bands of deposition, and pits drawn out along them, dark and hollow.",
@@ -326,7 +432,67 @@
         "graph": "$pits",
         "amount": -0.003
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Travertine009",
+        "licence": "CC0",
+        "size": 1.2,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                2,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
   },
   "granite": {
     "doc": "Pink granite, polished: interlocking crystals of feldspar, quartz and biotite, each its own colour.",
@@ -418,7 +584,29 @@
         "interpolation": "step",
         "color_map": "$palette"
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Granite003A",
+        "licence": "CC0",
+        "size": 1.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
   },
   "slate": {
     "doc": "Riven slate: dark blue-grey, its cleft face stepped where the cleavage planes break off.",
@@ -2896,7 +3084,29 @@
           ]
         ]
       ]
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Granite002A",
+        "licence": "CC0",
+        "size": 1.0,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
   },
   "weathered_granite": {
     "doc": "Granite left outdoors: honed dull, its feldspar chalky, stained with iron, grimy in its hollows and patched with lichen.",

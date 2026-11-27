@@ -189,6 +189,10 @@ impl Breaker {
             let u = if tip > top { ((tip - phi) / (tip - top)).clamp(0., 1.) } else { 1. };
             lip * (tip_thickness + (ROOF - tip_thickness) * u.powf(0.7))
         };
+        // How far the lip has unfolded from the crest: later than the face hollows, so that a
+        // shoulder keeps a smooth crest (unfolding with the face, a third-hollow face carried a
+        // third of a hook, a row of teeth along the shoulder).
+        let unfold = hollow.powi(3);
         let (roof, up) = self.on_cavity(top);
         let crest_point = roof + up * lip * ROOF;
         let toe = Vector2::new(roof.x - 1.5 * h, -TROUGH * h);
@@ -197,7 +201,7 @@ impl Breaker {
         // the cavity's wall and the lip thrown from its roof.
         let face = |phi: f64| {
             let wall = self.on_cavity(phi).0;
-            if phi >= top { return crest_point + (wall - crest_point) * hollow; }
+            if phi >= top { return crest_point + (wall - crest_point) * unfold; }
             let u = ((phi - bottom) / (top - bottom)).clamp(0., 1.);
             // (Partly straight, so that it meets the crest at about 50 degrees, not standing
             // vertical below it: on a collapsed bore that strip stood as a palisade.)
@@ -218,7 +222,11 @@ impl Breaker {
         const GLASSY: f64 = 0.35;
         // The edge's fingers: the last of the lip stretched or drawn in, the rest of it as it is.
         // (Over the last 0.6 radians, so that the arc never folds back for fingers within ±0.3.)
-        let finger = self.finger.clamp(-0.3, 0.3) * hollow;
+        // (Only on a lip thrown, once the face is half hollow: a lip barely there, on the
+        // shoulder, showed them as a row of teeth.)
+        // And in proportion to how far the lip has thrown: the same swing on a short lip made
+        // each finger large beside it.
+        let finger = self.finger.clamp(-0.3, 0.3) * crate::math::smoothstep(0.5, 1., hollow) * (tip - top) / THROW;
         let fingered = |phi: f64| phi + finger * crate::math::smoothstep(tip - 0.6, tip, phi);
         for i in 0..n_in {
             let phi = fingered(bottom + (tip - bottom) * i as f64 / (n_in - 1) as f64);
@@ -237,7 +245,7 @@ impl Breaker {
             let (p, n) = self.on_cavity(phi);
             // (Folded onto the crest with the lip's inside, as the face is not yet hollow or has
             // collapsed again.)
-            loop_.push(crest_point + (p + n * thickness(phi) - crest_point) * hollow);
+            loop_.push(crest_point + (p + n * thickness(phi) - crest_point) * unfold);
             weight.push(from_tip(phi) * GLASSY);
             roller.push((churn * (1. - hollow) * 0.2 * h, 0.5 * churn * (1. - hollow)));
         }

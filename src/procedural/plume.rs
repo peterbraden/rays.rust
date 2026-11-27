@@ -104,28 +104,40 @@ impl Plume {
     }
 
     /// Where `p` is about the centreline's nearest point: the distance along the plume to it,
-    /// the plume's half-width and half-depth there, and `p`'s offset across the wind and
-    /// square to the plume besides.
+    /// the plume's half-width and half-depth there, and `p`'s offset across the wind and along
+    /// the plume's normal.
     fn nearest(&self, p: &Vector3<f64>) -> (f64, f64, f64, f64, f64) {
-        let mut best = (0, 0., f64::INFINITY);
+        let mut found = [(0f64, 0f64); POINTS - 1];
+        let mut least = (0, f64::INFINITY);
         for k in 0..POINTS - 1 {
             let (a, b) = (self.line[k], self.line[k + 1]);
             let ab = b - a;
             let t = ((p - a).dot(&ab) / ab.norm_squared().max(1e-12)).clamp(0., 1.);
-            let d = (p - (a + ab * t)).norm_squared();
-            if d < best.2 { best = (k, t, d); }
+            let d = (p - (a + ab * t)).norm();
+            found[k] = (t, d);
+            if d < least.1 { least = (k, d); }
         }
-        let (k, t, _) = best;
-        let (a, b) = (self.line[k], self.line[k + 1]);
-        let tangent = (b - a).normalize();
-        let off = p - (a + (b - a) * t);
+        // Blended over the segments nearly as near (inside the bend, a point is as near the
+        // rising column as the level plume, and the nearest alone would leave a seam there).
+        let lerp = |v: &[f64], k: usize, t: f64| v[k] + t * (v[k + 1] - v[k]);
+        let tau = 0.25 * lerp(&self.depths, least.0, found[least.0].0);
         let side = Vector3::new(-self.wind.y, 0., self.wind.x);
-        let across = off.dot(&side);
-        let rest = off - side * across - tangent * off.dot(&tangent);
-        // (Up or down: below the centreline negative.)
-        let square = rest.norm() * if rest.y < 0. { -1. } else { 1. };
-        let lerp = |v: &[f64]| v[k] + t * (v[k + 1] - v[k]);
-        (lerp(&self.along), lerp(&self.widths), lerp(&self.depths), across, square)
+        let (mut sum, mut out) = (0., [0.; 5]);
+        for (k, &(t, d)) in found.iter().enumerate() {
+            if d > least.1 + 5. * tau { continue; }
+            let weight = (-(d - least.1) / tau).exp();
+            let (a, b) = (self.line[k], self.line[k + 1]);
+            let tangent = (b - a).normalize();
+            let off = p - (a + (b - a) * t);
+            // Square to both: along the plume's normal, which turns with it from downwind
+            // (where it rises) to up (where it drifts level).
+            let values = [lerp(&self.along, k, t), lerp(&self.widths, k, t), lerp(&self.depths, k, t),
+                off.dot(&side), off.dot(&side.cross(&tangent).normalize())];
+            for (o, v) in out.iter_mut().zip(values) { *o += weight * v; }
+            sum += weight;
+        }
+        let [s, w, h, across, square] = out.map(|v| v / sum);
+        (s, w, h, across, square)
     }
 
     /// The fraction of the source's density at `p`, 0 to 1.
@@ -143,7 +155,9 @@ impl Plume {
         let billows = self.noise.fbm(s / (1.6 * scale), square / scale, across / (1.4 * scale), 5, 0.5, 2.);
         let lumpy = 1. - smoothstep(0., 0.5 * self.length, s);
         let core = (-r2).exp();
-        let shaped = (core + (0.6 + 0.8 * lumpy) * (billows - 0.5)).clamp(0., 1.);
+        // (The billows fade out before its edge, and above the ground it doesn't sink below.)
+        let edge = (1. - smoothstep(1., 4., r2)) * smoothstep(0., 100., p.y - (self.source.y - 2. * self.radius));
+        let shaped = (core + (0.6 + 0.8 * lumpy) * (billows - 0.5)).clamp(0., 1.) * edge;
         dilution * smoothstep(0.08, 0.6, shaped)
     }
 }
@@ -199,6 +213,20 @@ mod tests {
         assert!(across > 0. && up > 0.);
         let mean = |c: Vector3<f64>| (0..200).map(|i| p.density(&(c + Vector3::new(0., 0., i as f64 - 100.)))).sum::<f64>() / 200.;
         assert!(mean(far) < 0.5 * mean(near), "{} far, {} near", mean(far), mean(near));
+    }
+
+    #[test]
+    fn test_the_plume_has_no_seams() {
+        // Nowhere does its density jump between points half a metre apart: not inside its bend
+        // (as near the rising column as the level plume), nor at its edges.
+        let p = lake();
+        let mut rng = crate::geometry::Pcg32::new(5, 5);
+        for _ in 0..200_000 {
+            let q = Vector3::new(-3000. + 4000. * rng.next_f64(), 700. + 1200. * rng.next_f64(), -1500. + 3000. * rng.next_f64());
+            let d = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64()) * 0.5;
+            let jump = (p.fraction(&q) - p.fraction(&(q + d))).abs();
+            assert!(jump < 0.1, "jumps by {} at {:?}", jump, q);
+        }
     }
 
     #[test]

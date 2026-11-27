@@ -23,11 +23,21 @@ from christmas_tree import MATERIALS, decorate, turned, write_scene  # noqa: E40
 rng = random.Random(25)
 
 # The camera, looking past the tree at the cottage, the sky's afterglow low on the left.
-camera = {"location": [-6.0, 1.5, 11.5], "lookat": [1.3, 2.0, 1.4], "up": [0, 1, 0], "angle": 0.7, "aperture": 0.02}
+camera = {"location": [-6.0, 1.5, 11.5], "lookat": [1.4, 2.6, 1.8], "up": [0, 1, 0], "angle": 0.74, "aperture": 0.02}
 
-# The tree, out in front of the cottage's right-hand end, turned so that its presents (heaped
-# on its -z side) face the camera.
-TREE_AT = [3.2, 0, 5.0]
+# The cottage, turned to be seen three-quarter on: its front, and its right-hand gable with
+# its chimney. `local` places a point given in the cottage's own frame (x along the ridge, z
+# out of the front).
+YAW = -50
+
+
+def local(x, z):
+    c, s = math.cos(math.radians(YAW)), math.sin(math.radians(YAW))
+    return [round(x * c + z * s, 3), 0, round(-x * s + z * c, 3)]
+
+# The tree, out from the cottage's right-hand gable, turned so that its presents (heaped on its
+# -z side) face the camera.
+TREE_AT = local(7.2, 2.2)
 towards = [camera["location"][0] - TREE_AT[0], camera["location"][2] - TREE_AT[2]]
 TURN = round(math.degrees(math.atan2(-towards[0], -towards[1])), 1)
 
@@ -42,7 +52,7 @@ objects = [
     # front of the cottage and the roof takes the blue of the sky.
     {"type": "skysphere", "sun_direction": [-0.85, -0.008, 0.5]},
     {"type": "plane", "y": 0, "material": "SNOW", "normal": {"pattern": "bumps", "amount": 0.25, "scale": 1.5}},
-    {"type": "cottage", "style": "stone", "location": [0, 0, 0], "yaw": -18, "snow": 0.22, "seed": 3},
+    {"type": "cottage", "style": "stone", "location": [0, 0, 0], "yaw": YAW, "snow": 0.22, "seed": 3},
     # Trees framing the view, and boulders under the snow.
     {"type": "tree", "species": "norway-spruce", "seed": 31, "location": [-9.5, 0, 7.5], "bark": "SNOWY_BARK", "leaves": LADEN,
      "params": {"scale": 4.2, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},
@@ -52,17 +62,28 @@ objects = [
      "params": {"scale": 2.2, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},
     {"type": "boulder", "location": [-5.2, -0.25, 5.2], "radius": 0.55, "angularity": 0.4, "seed": 4, "material": "SNOWY_GRANITE"},
     {"type": "boulder", "location": [6.3, -0.3, 6.6], "radius": 0.4, "angularity": 0.5, "seed": 5, "material": "SNOWY_GRANITE"},
-    # The forest round the clearing, open in a widening gap along the view towards the sky.
+    # The forest round the clearing, but for a gap behind the cottage, widening away from the
+    # camera, where the sky shows over the trees.
     {"type": "forest", "seed": 12, "lod": {"pixels": 1}, "cache": "demo/scenes/.forest-cache",
      "area": {"min": [-90, -90], "max": [90, 40]}, "spacing": 4.5, "clearings": 0.05, "patch_size": 30, "patchiness": 0.3,
      "variants": 8,
-     "where": "min(1, max(0, (sqrt(x * x + 1.6 * (z - 6) * (z - 6)) - 16) / 8)) * min(1, max(0, (sqrt(((x + 7.5) * 0.874 + (z - 13.5) * 0.486) * ((x + 7.5) * 0.874 + (z - 13.5) * 0.486)) - 7 - 0.5 * max(0, ((x + 7.5) * 0.486 - (z - 13.5) * 0.874) - 14)) / 4))",
+     "where": "min(1, max(0, (sqrt(x * x + 1.2 * (z - 2) * (z - 2)) - 18) / 6)) * min(1, max(0, (sqrt(((x + 6) * 0.819 + (z - 11.5) * 0.574) * ((x + 6) * 0.819 + (z - 11.5) * 0.574)) - 5 - 0.3 * max(0, ((x + 6) * 0.574 - (z - 11.5) * 0.819) - 14)) / 4))",
      "species": [
          {"species": "norway-spruce", "weight": 4, "spacing": 0.8, "bark": "SNOWY_BARK", "leaves": LADEN},
          {"species": "balsam-fir", "weight": 3, "spacing": 0.7, "bark": "SNOWY_BARK", "leaves": LADEN},
          {"species": "scots-pine", "weight": 1, "bark": "SNOWY_BARK", "leaves": "LADEN_PINE_NEEDLE"},
      ]},
 ]
+
+# Trees standing about the cottage, behind it and to either side, younger and lower than the
+# forest's: spruces and firs, laden with snow (in the cottage's frame: x, z, height).
+for i, (x, z, h, species) in enumerate([
+        (-6.5, -6.0, 6.0, "norway-spruce"), (-1.5, -8.0, 7.0, "balsam-fir"), (3.5, -6.5, 5.0, "norway-spruce"),
+        (8.0, -4.0, 6.5, "balsam-fir"), (-9.0, -2.0, 5.5, "norway-spruce"), (-10.5, 2.5, 4.5, "balsam-fir"),
+        (11.0, 1.0, 5.5, "norway-spruce"), (6.0, -9.5, 7.5, "norway-spruce"), (-4.0, -11.0, 6.5, "balsam-fir"),
+        (1.5, -12.5, 5.5, "norway-spruce")]):
+    objects.append({"type": "tree", "species": species, "seed": 40 + i, "location": local(x, z), "bark": "SNOWY_BARK",
+                    "leaves": LADEN, "params": {"scale": h, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}})
 
 # The Christmas tree, dressed, with its presents; a warm lamp just in front of its star.
 star_y = decorate(rng, objects.append, TREE_AT, TURN)

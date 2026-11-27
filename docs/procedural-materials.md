@@ -479,6 +479,13 @@ maple, and pine (to coated_pine, 13.4 → 6.99) took the scan's amber coating, n
 pale matt pine; neither applied. The walnut veneers are grey, not oiled chocolate, and weren't
 tried.
 
+Three more presets were written for Poly Haven's ground scans, their needles, leaves and twigs
+`bombing` leaves of different widths, and fitted: burned_ground (burned_ground_01: charred soil,
+ash and brown earth, bleached needles and charred twigs; 4.08 → 1.06, applied, its ash in paler,
+softer patches than the scan's), mossy_leaf_litter (forest_leaves_02: olive moss, fallen leaves,
+needles and twigs; 2.18 → 0.77, applied) and wet_leaf_mat (winter_leaves: dark wet leaves matted
+over one another; 5.89 → 1.46, applied, close to the scan near and far).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

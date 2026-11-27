@@ -21602,24 +21602,24 @@
     "doc": "Fallen leaves in winter, wet and matted: dark browns lying thickly over one another, a few paler, decaying into the soil; modelled on Poly Haven's winter_leaves.",
     "variables": {
       "leaf": [
-        0.3,
-        0.2,
-        0.13
+        0.2415,
+        0.1491,
+        0.0976
       ],
       "leaf2": [
-        0.2,
-        0.13,
-        0.08
+        0.129,
+        0.0741,
+        0.0454
       ],
       "pale": [
-        0.4,
-        0.3,
-        0.2
+        0.3883,
+        0.2956,
+        0.1915
       ],
       "dark": [
-        0.1,
-        0.07,
-        0.05
+        0.0729,
+        0.0504,
+        0.0397
       ]
     },
     "material": {
@@ -21628,86 +21628,86 @@
         "pattern": {
           "node": "bombing",
           "shape": "leaf",
-          "cell": 0.06,
+          "cell": 0.015747,
           "size": [
-            0.04,
-            0.09
+            0.012159,
+            0.062673
           ],
-          "width": 0.55,
-          "density": 1.2,
+          "width": 0.30073,
+          "density": 2.9538,
           "seed": 2031,
           "output": "mask"
         },
         "color_map": [
           [
-            0,
+            -0.34872,
             {
               "pattern": {
                 "node": "bombing",
                 "shape": "leaf",
-                "cell": 0.04,
+                "cell": 0.035665,
                 "size": [
-                  0.03,
-                  0.07
+                  0.042646,
+                  0.14195
                 ],
-                "width": 0.5,
-                "density": 2.2,
+                "width": 0.41558,
+                "density": 1.1242,
                 "seed": 2021,
                 "output": "mask"
               },
               "color_map": [
                 [
-                  0,
+                  0.25481,
                   {
                     "pattern": {
                       "node": "fractal",
-                      "scale": 0.1,
+                      "scale": 0.39319,
                       "seed": 2011,
-                      "smallest": 0.003
+                      "smallest": 0.0019406
                     },
                     "color_map": [
                       [
-                        -0.4,
+                        -0.32789,
                         "$dark"
                       ],
                       [
-                        0.4,
+                        0.13498,
                         "$leaf2"
                       ]
                     ]
                   }
                 ],
                 [
-                  1,
+                  1.2273,
                   {
                     "pattern": {
                       "node": "bombing",
                       "shape": "leaf",
-                      "cell": 0.04,
+                      "cell": 0.035665,
                       "size": [
-                        0.03,
-                        0.07
+                        0.042646,
+                        0.14195
                       ],
-                      "width": 0.5,
-                      "density": 2.2,
+                      "width": 0.41558,
+                      "density": 1.1242,
                       "seed": 2021,
                       "output": "id"
                     },
                     "color_map": [
                       [
-                        0,
+                        -0.09905,
                         "$dark"
                       ],
                       [
-                        0.3,
+                        0.24038,
                         "$leaf2"
                       ],
                       [
-                        0.75,
+                        0.74952,
                         "$leaf"
                       ],
                       [
-                        1.0,
+                        1.0324,
                         "$pale"
                       ]
                     ]
@@ -21717,36 +21717,36 @@
             }
           ],
           [
-            1,
+            1.6509,
             {
               "pattern": {
                 "node": "bombing",
                 "shape": "leaf",
-                "cell": 0.06,
+                "cell": 0.015747,
                 "size": [
-                  0.04,
-                  0.09
+                  0.012159,
+                  0.062673
                 ],
-                "width": 0.55,
-                "density": 1.2,
+                "width": 0.30073,
+                "density": 2.9538,
                 "seed": 2031,
                 "output": "id"
               },
               "color_map": [
                 [
-                  0,
+                  0.36323,
                   "$dark"
                 ],
                 [
-                  0.3,
+                  0.62501,
                   "$leaf2"
                 ],
                 [
-                  0.75,
+                  1.0177,
                   "$leaf"
                 ],
                 [
-                  1.0,
+                  1.2358,
                   "$pale"
                 ]
               ]
@@ -21765,13 +21765,13 @@
                 {
                   "node": "bombing",
                   "shape": "leaf",
-                  "cell": 0.04,
+                  "cell": 0.035665,
                   "size": [
-                    0.03,
-                    0.07
+                    0.042646,
+                    0.14195
                   ],
-                  "width": 0.5,
-                  "density": 2.2,
+                  "width": 0.41558,
+                  "density": 1.1242,
                   "seed": 2021,
                   "output": "height"
                 }
@@ -21784,13 +21784,13 @@
                 {
                   "node": "bombing",
                   "shape": "leaf",
-                  "cell": 0.06,
+                  "cell": 0.015747,
                   "size": [
-                    0.04,
-                    0.09
+                    0.012159,
+                    0.062673
                   ],
-                  "width": 0.55,
-                  "density": 1.2,
+                  "width": 0.30073,
+                  "density": 2.9538,
                   "seed": 2031,
                   "output": "height"
                 }
@@ -21853,7 +21853,7 @@
             "chosen": "generation 58's best"
           },
           "date": "2026-11-27",
-          "applied": false,
+          "applied": true,
           "values": {
             "scale": 0.76824,
             "variables.leaf": [
@@ -21925,6 +21925,7 @@
           }
         }
       }
-    ]
+    ],
+    "scale": 0.7682
   }
 }

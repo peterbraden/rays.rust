@@ -2942,3 +2942,58 @@ first, on the CPU, before anything is ported:
    assumption.
 4. Then the kernels: a ground material reading the same values (`tables`), plastic as now, snow
    and ice ported to `shaders/shared`, water as `MAT_WATER`; the landscape leaves the host.
+
+
+## 19. Blended renders: the GPU's stages and the CPU's together (November 2026)
+
+The question: the GPU runs the stages it can, and the CPU the rest, rather than a scene the GPU
+refuses rendering wholly on the CPU. Host materials do this already (`GpuRenderer::serve_host`);
+what makes the GPU refuse a scene is a shape only its own code intersects (a kernel can't stop
+mid shadow ray for the host) or a medium the kernels have no code for (then the path tracer).
+
+### Measured: what a blend could gain
+
+Its bound: the stages' time over the CPU-only part (the host's shading, its intersection of its
+shapes, its shadow rays past them), taking the kernels' share as free on the GPU and perfectly
+overlapped. From the reports (section 16) of renders on the CPU's wavefront:
+
+| scene | stages, s | CPU-only | bound | what the CPU does |
+|---|---|---|---|---|
+| desert-noon | 27.3 | 34% | 2.9x | Terrain 8 s, Stand 1 s; the rest the kernels, mostly media |
+| forest-sunlit | 55.0 | 80% | 1.25x | Stands 42 s |
+| terrain-alpine (undiced) | 107.2 | 61% | 1.6x | Group 66 s (diced now: on the GPU, section 17) |
+| alpine-meadow | 192.8 | 88% | 1.1x | Group 164 s |
+| forest-aerial | 135.8 | 93% | 1.1x | Stand 108 s |
+| forest-dense | 232.0 | 95% | 1.1x | Stand 203 s |
+| displaced-terrain | 790.7 | 100% | 1.0x | DisplacedTerrain's intersection 752 s |
+| overhangs | 926.8 | 100% | 1.0x | DisplacedTerrain's intersection 869 s |
+
+And where media send a scene to the path tracer, a profile of the render: `cumulus` 95% the
+cloud's density (`cauliflower` and Perlin noise), `altostratus` about 70% (`overcast`, Perlin and
+Worley noise). A blend leaves the density, which is the walk's work, on the CPU: little gain.
+
+So: a blend pays where the kernels' share is large, which is media they have code for beside
+shapes they haven't (the desert scenes: `desert-butte`, 9,585 s in render-all, the slowest,
+`desert-overlook`, `desert-mesas`, `desert-noon`). Elsewhere the CPU's own work is the render:
+what pays there is porting it (the forests' `Stand`, the clouds' densities) or making it cheaper
+(a displaced terrain's lazy dicing, 752 s of displaced-terrain's 791).
+
+(Run B's reason for the desert scenes, "participating media beside objects whose materials the
+renderer's own code shades", is gone: they render on the CPU's wavefront now, refused by the GPU
+only for their shapes.)
+
+### What a blend needs (not started)
+
+1. The host's shapes as a stage between the GPU's rounds: a kernel marks the paths whose ray
+   crosses a host shape's bounds; the host intersects those and writes back a nearer hit. On
+   Apple's shared memory the buffers needn't be copied; the cost is the synchronisation.
+2. Shadow rays out of the shading kernel, into a queue: traced by the GPU through its own, and by
+   the host through its shapes for those crossing their bounds.
+3. Overlap: the host works on one block of passes while the device runs the next (the lanes,
+   double-buffered), so neither waits.
+
+### Next
+
+Measure `desert-butte` the same way (its memory makes it slow here: run it alone), then decide.
+Independently: why a displaced terrain's intersection costs what it does (751 thread-seconds for
+displaced-terrain at 1 sample).

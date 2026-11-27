@@ -1241,9 +1241,20 @@ impl Ground {
 
     /// Whether scene point `p` is under a closed basin's terminal lake: brine, shallow over a
     /// pale floor of salt and clay.
+    ///
+    /// Read, as the playa about it is (`cover`), at a point warped by noise (and jittered a
+    /// little for each sample): the lake's depth is a field at the cells' corners, so its shore
+    /// read straight would trace their outline, a rounded rectangle a few cells across.
     pub fn salt_lake(&self, p: &Vector3<f64>) -> bool {
         let (d, _) = self.frame.on_planet(p);
-        self.layer_at(&d).is_some_and(|l| l.fields.salt_lake(&l.domain, &d) > crate::terrain::simulation::SALT_LAKE_DEPTH)
+        let Some(layer) = self.layer_at(&d) else { return false };
+        let cell = layer.spacing;
+        let q = d * self.frame.radius;
+        let n = |s: f64, o: f64| self.noise.fbm(q.x / s + o * 17., q.y / s, q.z / s, 4, 0.5, 2.);
+        // (Little jitter: a shore is sharp, if ragged.)
+        let warp = |o: f64| cell * (4. * (n(2. * cell, o) - 0.5) + 0.6 * (n(0.4 * cell, o + 0.37) - 0.5) + 0.15 * (n(0.08 * cell, o + 0.71) - 0.5) + 0.1 * (rand() - 0.5));
+        let (e, _) = self.frame.on_planet(&(p + Vector3::new(warp(0.61), 0., warp(0.83))));
+        self.layer_at(&e).is_some_and(|l| l.fields.salt_lake(&l.domain, &e) > crate::terrain::simulation::SALT_LAKE_DEPTH)
     }
 
     /// How much of the ground at scene point `p` is a playa (`graph::Field::Playa`), blended

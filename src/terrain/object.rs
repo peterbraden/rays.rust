@@ -817,7 +817,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
     let mut medium = LandscapeMedium::with_ground(ground, material);
     if o["eruption"].as_bool().unwrap_or(false) {
-        let e = eruption(&planet, &relief, &frame);
+        let e = eruption(&planet, &relief, &frame, &params.climate.clone().unwrap_or_default());
         let at: Vec<String> = e.lakes.iter().map(|(c, _)| format!("[{:.0}, {:.0}, {:.0}]", c.x, c.y, c.z)).collect();
         say(format!("Landscape: erupting, {} lava lakes (at {}) and {} channels", e.lakes.len(), at.join(", "), e.channels.len()));
         medium = medium.with_eruption(Arc::new(e), params.planet.seed, o["sun_intensity"].as_f64().unwrap_or(1.));
@@ -828,7 +828,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
 /// The eruption in progress about the scene (`terrain::eruption`): each young shield still
 /// building within 200 km (`hotspot::activity` over a fifth), a lava lake in its summit crater
 /// and channels from there and from a rift zone.
-fn eruption(planet: &crate::terrain::planet::Planet, relief: &Relief, frame: &crate::terrain::scenery::Frame) -> crate::terrain::eruption::Eruption {
+fn eruption(planet: &crate::terrain::planet::Planet, relief: &Relief, frame: &crate::terrain::scenery::Frame, climate: &crate::terrain::climate::ClimateParams) -> crate::terrain::eruption::Eruption {
     use crate::terrain::{eruption, hotspot};
     let radius = planet.params.radius;
     // (Heights above the sea: the channels and lakes are read in plan, and stop at the sea.)
@@ -856,7 +856,12 @@ fn eruption(planet: &crate::terrain::planet::Planet, relief: &Relief, frame: &cr
             channels.push(eruption::channel(Vector3::new(r.x, 0., r.z), &ground, 8000., 35., i as u64 + 7));
         }
     }
-    eruption::Eruption::new(lakes, channels)
+    // Its plumes carried by the climate's surface wind at the scene's latitude (the scene's x
+    // is east, its z south): the trades at 6 to 8 m/s, light airs in the calms.
+    let lat = origin.y.clamp(-1., 1.).asin();
+    let (east, north) = crate::terrain::climate::wind(climate, lat);
+    let strength = east.hypot(north);
+    eruption::Eruption::new(lakes, channels).with_wind(crate::na::Vector2::new(east, -north), 1. + 6. * strength)
 }
 
 /// Cameras higher than this above the ground, metres, see no detail worth displacing: from

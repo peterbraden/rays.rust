@@ -53,6 +53,9 @@ pub struct Channel {
 pub struct Eruption {
     pub lakes: Vec<(Vector3<f64>, f64)>,
     pub channels: Vec<Channel>,
+    /// The surface wind its plumes are carried by: towards (x, z) in the scene's plan, and its
+    /// speed, m/s.
+    pub wind: (crate::na::Vector2<f64>, f64),
     /// Plan cells (`CELL` metres in scene x and z) and the channel segments crossing each.
     cells: HashMap<(i64, i64), Vec<(usize, usize)>>,
 }
@@ -77,7 +80,23 @@ impl Eruption {
                 }
             }
         }
-        Eruption { lakes, channels, cells }
+        Eruption { lakes, channels, wind: (crate::na::Vector2::new(1., 0.), 7.), cells }
+    }
+
+    /// Its plumes carried by a wind towards `towards` (the scene's plan) at `speed` m/s.
+    pub fn with_wind(mut self, towards: crate::na::Vector2<f64>, speed: f64) -> Eruption {
+        self.wind = (towards, speed);
+        self
+    }
+
+    /// The gas plume over each lava lake (`procedural::plume`): a lake loses about 15 kW per
+    /// square metre of its surface (crust and open lava; Halemaʻumaʻu's lake, about a gigawatt),
+    /// its plume thick with steam and sulphate haze (extinction 0.01 per metre).
+    pub fn plumes(&self, seed: u64) -> Vec<crate::procedural::plume::Plume> {
+        self.lakes.iter().enumerate().map(|(k, &(c, r))| {
+            let heat = 15e3 * std::f64::consts::PI * r * r;
+            crate::procedural::plume::Plume::new(c, r, heat, self.wind.0, self.wind.1, 0.01, 15_000., seed.wrapping_add(k as u64))
+        }).collect()
     }
 
     /// How hot the lava at scene point `p` is, 0 (none) to 1 (a channel's open core, or a

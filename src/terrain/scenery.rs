@@ -1693,6 +1693,8 @@ impl LandscapeMedium {
 }
 
 impl Medium for LandscapeMedium {
+    fn eruption(&self) -> Option<&Arc<crate::terrain::eruption::Eruption>> { self.active.as_ref().map(|a| &a.eruption) }
+
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
         if let Some(a) = &self.active && a.eruption.heat(&pt).is_some() { return a; }
         if self.ground.wet(&pt) { &self.water }

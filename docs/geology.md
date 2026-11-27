@@ -254,6 +254,25 @@ at a pace set by the rain: in about 500 years at 2,000 mm a year, as the rain to
 wet windward flows carry forest within 300-400 years, its dry leeward ones stand bare for
 millennia). The flows' relief outlasts the plants, worn back over tens of thousands of years.
 
+### An eruption in progress
+
+With `"eruption": true` a landscape's young shields still building (within 200 km of the
+scene) erupt as it is seen (`terrain::eruption`): a lava lake 300 m across in each summit's
+caldera, and channels of lava from there and from a rift zone, found down the steepest way
+over the landscape's own surface, spilling across hollows. The lava glows as a blackbody at
+1,100-1,200 °C, on the same scale as the sun and lightning (`eruption::luminance`,
+`radiance_per_nit`: about a thousand candela per square metre, so faint by day and lighting
+the ground about it at night): a lake's crust is dark plates with incandescent seams between
+them and open lava where it founders at the rim; a channel's crust is cracked, open in its
+core and hotter towards the vent.
+
+Over each lake rises its plume of steam and sulphate haze (`procedural::plume`): buoyant from
+the lake's heat (about 15 kW per square metre, a gigawatt for a lake Halemaʻumaʻu's size), it
+climbs and bends over in the climate's surface wind by Briggs' two-thirds law, levelling off
+some 500 m up in the trades' stable air, widening as it entrains the air about it and thinning
+downwind into a haze over 15 km, in billows that ride along it; lit by the sun, or at night
+by the lava beneath.
+
 ## Deposits: till, moraines and sand
 
 What erosion takes is laid down again somewhere, and the sediment remembers how. Glaciers

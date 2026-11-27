@@ -973,6 +973,10 @@ impl SceneFile {
                 let mut x: Vec<Arc<SceneObject>> = SceneFile::parse_object(obj.clone(), materials, media, geometries).into_iter().collect();
                 if let Some(first) = x.first().cloned() {
                     landscape = Some(first.clone());
+                    // The gas plumes over its lava lakes, if it is erupting.
+                    if let Some(e) = first.medium.eruption() {
+                        x.extend(SceneFile::eruption_plumes(e, SceneFile::parse_seed(&obj).unwrap_or(0)));
+                    }
                     // And the boulders it strews about the camera, if it draws its own detail.
                     if let Some((scatter, material)) = crate::terrain::object::boulders(&obj, &first) {
                         let mut with = materials.clone();
@@ -2913,6 +2917,17 @@ impl SceneFile {
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(f));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// The plumes of an erupting landscape's lava lakes (`terrain::eruption`,
+    /// `procedural::plume`): steam and sulphate haze, white and scattering forward, lit by the
+    /// sun and the glowing lava beneath.
+    pub fn eruption_plumes(e: &crate::terrain::eruption::Eruption, seed: u64) -> Vec<Arc<SceneObject>> {
+        e.plumes(seed).into_iter().map(|p| {
+            let (lo, hi) = p.bounds();
+            let s = SceneFile::parse_scattering(&serde_json::json!({"albedo": [0.97, 0.97, 0.98]}), 0.7);
+            Arc::new(create_volume(BBox::new(lo, hi), Arc::new(p), s))
+        }).collect()
     }
 
     /// The clouds of a storm's gust front (see `procedural::arcus`): `"shelf_cloud"` (arcus), a

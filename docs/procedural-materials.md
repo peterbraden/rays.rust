@@ -442,6 +442,11 @@ went 4.13 → 2.40, applied: interlocking crystals of pink-beige, grey and black
 verde_marble, a variant of nero_marquina, could only move its colours and came out black with
 white speckle; calacatta_marble's scan (Marble014) is a beige marble, not calacatta's warm white
 with bold veins, and the fit made it beige and lacy. Neither applied.
+cork (to ambientCG's Cork003, agglomerated granules) went 6.29 → 3.90, applied: the scan's
+warm orange granules and dark gaps in place of pale beige. leather (to Leather037) went 38.3 →
+32.6, applied for its colour, the scan's rich brown: a leather's albedo is nearly uniform (its
+pebbling is in the bump, which the fit leaves alone), so the fit flattened the grain in the
+colour and its score stays large.
 
 ### Presets modelled on scans
 

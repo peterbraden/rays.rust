@@ -2260,24 +2260,24 @@
     "variables": {
       "creases": {
         "node": "warp",
-        "amount": 0.0008,
-        "scale": 0.004,
+        "amount": 0.0022831,
+        "scale": 0.0013889,
         "octaves": 2,
         "seed": 161,
         "input": {
           "node": "cells",
           "style": "edges",
-          "scale": 0.0028,
+          "scale": 0.00071824,
           "seed": 162
         }
       },
       "pores": {
         "node": "smoothstep",
-        "from": 0.2,
-        "to": 0.08,
+        "from": 0.40162,
+        "to": 0.29597,
         "input": {
           "node": "cells",
-          "scale": 0.0007,
+          "scale": 0.0014753,
           "seed": 163
         }
       },
@@ -2289,17 +2289,17 @@
             {
               "node": "smoothstep",
               "from": 0,
-              "to": 0.3,
+              "to": 0.13202,
               "input": "$creases"
             },
-            0.00012
+            8.4897e-05
           ]
         },
         "b": {
           "node": "multiply",
           "inputs": [
             "$pores",
-            3e-05
+            6.1551e-05
           ]
         }
       }
@@ -2312,36 +2312,36 @@
         "pattern": "$creases",
         "color_map": [
           [
-            0.0,
+            -0.19705,
             [
-              0.07,
-              0.035,
-              0.018
+              0.0804,
+              0.0315,
+              0.0161
             ]
           ],
           [
-            0.25,
+            0.29867,
             {
               "pattern": {
                 "node": "fractal",
-                "scale": 0.1,
+                "scale": 0.35438,
                 "seed": 164
               },
               "color_map": [
                 [
-                  -0.6,
+                  -0.56236,
                   [
-                    0.16,
-                    0.08,
-                    0.04
+                    0.1385,
+                    0.0491,
+                    0.0276
                   ]
                 ],
                 [
-                  0.6,
+                  0.35354,
                   [
-                    0.24,
-                    0.12,
-                    0.06
+                    0.1471,
+                    0.0396,
+                    0.023
                   ]
                 ]
               ]
@@ -2401,23 +2401,74 @@
             ],
             "chroma": 0.1
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 706.558026,
+            "fitted": 127.365765
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 32.57689,
+            "author_solved": 38.346638,
+            "patches": 3,
+            "chosen": "generation 39's best"
+          },
+          "date": "2026-11-27",
+          "applied": true,
+          "values": {
+            "scale": 0.76251,
+            "material.albedo.color_map.0.1": [
+              0.0804,
+              0.0315,
+              0.0161
+            ],
+            "material.albedo.color_map.1.1.color_map.0.1": [
+              0.1385,
+              0.0491,
+              0.0276
+            ],
+            "material.albedo.color_map.1.1.color_map.1.1": [
+              0.1471,
+              0.0396,
+              0.023
+            ],
+            "variables.creases.amount": 0.0022831,
+            "variables.creases.scale": 0.0013889,
+            "variables.creases.input.scale": 0.00071824,
+            "variables.pores.from": 0.40162,
+            "variables.pores.to": 0.29597,
+            "variables.pores.input.scale": 0.0014753,
+            "variables.relief.a.inputs.1": 8.4897e-05,
+            "variables.relief.a.inputs.0.to": 0.13202,
+            "variables.relief.b.inputs.1": 6.1551e-05,
+            "material.albedo.color_map.0.0": -0.19705,
+            "material.albedo.color_map.1.0": 0.29867,
+            "material.albedo.color_map.1.1.pattern.scale": 0.35438,
+            "material.albedo.color_map.1.1.color_map.0.0": -0.56236,
+            "material.albedo.color_map.1.1.color_map.1.0": 0.35354
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7625
   },
   "cork": {
     "doc": "Agglomerated cork: granules of bark pressed together, each its own shade, with dark gaps between.",
     "variables": {
       "granules": {
         "node": "warp",
-        "amount": 0.001,
-        "scale": 0.004,
+        "amount": 0.0012668,
+        "scale": 0.0010006,
         "octaves": 2,
         "seed": 171,
         "input": {
           "node": "cells",
           "style": "id",
-          "scale": 0.003,
+          "scale": 0.0046691,
           "seed": 172
         }
       },
@@ -2426,29 +2477,29 @@
         "inputs": [
           {
             "node": "smoothstep",
-            "from": 0.06,
+            "from": 0.35415,
             "to": 0.0,
             "input": {
               "node": "warp",
-              "amount": 0.001,
-              "scale": 0.004,
+              "amount": 0.0012668,
+              "scale": 0.0010006,
               "octaves": 2,
               "seed": 171,
               "input": {
                 "node": "cells",
                 "style": "edges",
-                "scale": 0.003,
+                "scale": 0.0046691,
                 "seed": 172
               }
             }
           },
           {
             "node": "smoothstep",
-            "from": -0.2,
-            "to": 0.4,
+            "from": -0.19454,
+            "to": 0.59634,
             "input": {
               "node": "fractal",
-              "scale": 0.01,
+              "scale": 0.0048209,
               "seed": 173
             }
           }
@@ -2461,43 +2512,43 @@
         "pattern": "$gaps",
         "color_map": [
           [
-            0.0,
+            0.044936,
             {
               "pattern": "$granules",
               "color_map": [
                 [
-                  0,
+                  -0.54141,
                   [
-                    0.38,
-                    0.24,
-                    0.13
+                    0.3806,
+                    0.2315,
+                    0.1272
                   ]
                 ],
                 [
-                  0.5,
+                  0.23348,
                   [
-                    0.55,
-                    0.38,
-                    0.22
+                    0.5718,
+                    0.2084,
+                    0.0541
                   ]
                 ],
                 [
-                  1,
+                  1.0084,
                   [
-                    0.62,
-                    0.46,
-                    0.3
+                    0.6707,
+                    0.3463,
+                    0.1165
                   ]
                 ]
               ]
             }
           ],
           [
-            1.0,
+            0.7578,
             [
-              0.12,
-              0.07,
-              0.04
+              0.1212,
+              0.04,
+              0.0059
             ]
           ]
         ]
@@ -2570,9 +2621,66 @@
             ],
             "chroma": 0.1
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 1018.188808,
+            "fitted": 4.237411
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 3.896321,
+            "author_solved": 6.288966,
+            "patches": 3,
+            "chosen": "generation 53's best"
+          },
+          "date": "2026-11-27",
+          "applied": true,
+          "values": {
+            "scale": 1.2094,
+            "material.albedo.color_map.0.1.color_map.0.1": [
+              0.3806,
+              0.2315,
+              0.1272
+            ],
+            "material.albedo.color_map.0.1.color_map.1.1": [
+              0.5718,
+              0.2084,
+              0.0541
+            ],
+            "material.albedo.color_map.0.1.color_map.2.1": [
+              0.6707,
+              0.3463,
+              0.1165
+            ],
+            "material.albedo.color_map.1.1": [
+              0.1212,
+              0.04,
+              0.0059
+            ],
+            "variables.granules.amount": 0.0012668,
+            "variables.gaps.inputs.0.input.amount": 0.0012668,
+            "variables.granules.scale": 0.0010006,
+            "variables.gaps.inputs.0.input.scale": 0.0010006,
+            "variables.granules.input.scale": 0.0046691,
+            "variables.gaps.inputs.0.input.input.scale": 0.0046691,
+            "variables.gaps.inputs.0.from": 0.35415,
+            "variables.gaps.inputs.1.from": -0.19454,
+            "variables.gaps.inputs.1.to": 0.59634,
+            "variables.gaps.inputs.1.input.scale": 0.0048209,
+            "material.albedo.color_map.0.0": 0.044936,
+            "material.albedo.color_map.1.0": 0.7578,
+            "material.albedo.color_map.0.1.color_map.0.0": -0.54141,
+            "material.albedo.color_map.0.1.color_map.1.0": 0.23348,
+            "material.albedo.color_map.0.1.color_map.2.0": 1.0084
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.2094
   },
   "car_paint": {
     "doc": "Glossy red car paint with the faint orange-peel waviness of a sprayed clear coat.",

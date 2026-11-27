@@ -570,7 +570,7 @@ impl crate::volume::DensityField for Spray {
         let (cy, cz) = (y0 + (y1 - y0) * a, z0 + (z1 - z0) * a);
         let h = self.height;
         let up = (p.y - cy) / (0.4 * h);
-        if up < -0.15 || up > 1. { return 0.; }
+        if !(-0.15..=1.).contains(&up) { return 0.; }
         // Blown back: the higher, the further seaward.
         let back = (p.z - cz - 0.4 * h * up.max(0.)) / (0.35 * h);
         let sheet = (-back * back).exp() * (1. - up.max(0.)).powi(2) * (1. - crate::math::smoothstep(-0.15, 0., -up));

@@ -453,8 +453,10 @@ forrest_sand_01: grey-beige sand darkened by humus, pine needles in clumps by `b
 drawn thin; 5.62 → 1.27, applied, its needles lying in denser mats than the scan's) and
 shore_gravel (low_tide_rocks: packed centimetre pebbles and shell fragments, by `stone`
 sprites; 11.3 → 1.24, applied, close to the scan from afar, its pebbles softer and less varied
-in colour close up). Metals aren't fitted yet: a `conductor` mirrors the fitting sun as wet
-layers did, and needs a matte stand-in first.
+in colour close up). A `conductor` mirrors the fitting sun as wet layers did, so it is drawn
+matte in its `reflectance` too; rusted_iron, fitted so to ambientCG's Metal064 (orange-brown rust
+in patches over grey steel), went 4.93 → 0.74, applied: red-brown rust and grey steel like the
+scan's, in place of orange over pale grey.
 
 ### Presets modelled on scans
 

@@ -2005,9 +2005,9 @@
         "inputs": [
           {
             "node": "fractal",
-            "scale": 0.25,
-            "smallest": 0.002,
-            "roughness": 0.6,
+            "scale": 0.062887,
+            "smallest": 0.0034793,
+            "roughness": 0.80826,
             "seed": 131
           },
           {
@@ -2016,7 +2016,7 @@
               {
                 "node": "cells",
                 "style": "f1",
-                "scale": 0.01,
+                "scale": 0.025791,
                 "seed": 132
               },
               -0.25
@@ -2027,9 +2027,9 @@
       "scale_relief": {
         "node": "fractal",
         "style": "billow",
-        "scale": 0.02,
-        "smallest": 0.0005,
-        "amplitude": 0.0004,
+        "scale": 0.0095356,
+        "smallest": 0.0011347,
+        "amplitude": 0.00020677,
         "seed": 133
       }
     },
@@ -2039,9 +2039,9 @@
         {
           "type": "conductor",
           "reflectance": [
-            0.42,
-            0.42,
-            0.43
+            0.1404,
+            0.1431,
+            0.1413
           ],
           "roughness": 0.35,
           "normal": {
@@ -2061,13 +2061,13 @@
           "albedo": {
             "pattern": {
               "node": "fractal",
-              "scale": 0.04,
-              "smallest": 0.001,
+              "scale": 0.082536,
+              "smallest": 0.00084825,
               "seed": 135
             },
             "color_map": [
               [
-                -0.6,
+                -1.2992,
                 [
                   0.12,
                   0.05,
@@ -2075,27 +2075,27 @@
                 ]
               ],
               [
-                -0.1,
+                -0.56134,
                 [
-                  0.3,
-                  0.12,
-                  0.04
+                  0.1254,
+                  0.062,
+                  0.0323
                 ]
               ],
               [
-                0.3,
+                0.028909,
                 [
-                  0.45,
-                  0.2,
-                  0.06
+                  0.19,
+                  0.0695,
+                  0.0465
                 ]
               ],
               [
-                0.7,
+                0.61916,
                 [
-                  0.55,
-                  0.3,
-                  0.1
+                  0.4853,
+                  0.2021,
+                  0.0925
                 ]
               ]
             ]
@@ -2110,11 +2110,11 @@
         "pattern": "$rust",
         "color_map": [
           [
-            -0.25,
+            -0.31488,
             0
           ],
           [
-            -0.12,
+            -0.13105,
             1
           ]
         ]
@@ -2182,9 +2182,71 @@
             ],
             "chroma": 0.1
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 10.922363,
+            "fitted": 0.659011
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 0.742399,
+            "author_solved": 4.928523,
+            "patches": 3,
+            "chosen": "generation 50's best"
+          },
+          "date": "2026-11-27",
+          "applied": true,
+          "values": {
+            "scale": 1.7133,
+            "material.materials.0.reflectance": [
+              0.1404,
+              0.1431,
+              0.1413
+            ],
+            "material.materials.1.albedo.color_map.0.1": [
+              0.12,
+              0.05,
+              0.025
+            ],
+            "material.materials.1.albedo.color_map.1.1": [
+              0.1254,
+              0.062,
+              0.0323
+            ],
+            "material.materials.1.albedo.color_map.2.1": [
+              0.19,
+              0.0695,
+              0.0465
+            ],
+            "material.materials.1.albedo.color_map.3.1": [
+              0.4853,
+              0.2021,
+              0.0925
+            ],
+            "variables.rust.inputs.0.scale": 0.062887,
+            "variables.rust.inputs.0.smallest": 0.0034793,
+            "variables.rust.inputs.0.roughness": 0.80826,
+            "variables.rust.inputs.1.inputs.0.scale": 0.025791,
+            "variables.scale_relief.scale": 0.0095356,
+            "variables.scale_relief.smallest": 0.0011347,
+            "variables.scale_relief.amplitude": 0.00020677,
+            "material.materials.1.albedo.pattern.scale": 0.082536,
+            "material.materials.1.albedo.pattern.smallest": 0.00084825,
+            "material.materials.1.albedo.color_map.0.0": -1.2992,
+            "material.materials.1.albedo.color_map.1.0": -0.56134,
+            "material.materials.1.albedo.color_map.2.0": 0.028909,
+            "material.materials.1.albedo.color_map.3.0": 0.61916,
+            "material.amount.color_map.0.0": -0.31488,
+            "material.amount.color_map.1.0": -0.13105
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.7133
   },
   "verdigris_copper": {
     "doc": "Weathered copper: a pale green patina of verdigris over darkened metal, streaked downwards where rain has run.",

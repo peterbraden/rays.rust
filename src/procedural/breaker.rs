@@ -42,6 +42,9 @@ pub struct Breaker {
     /// This section's lip's thickness and throw, as multiples of the usual.
     pub lip: f64,
     pub throw: f64,
+    /// How far this section's lip's very edge reaches beyond the rest of it, radians round the
+    /// cavity (its fingers).
+    pub finger: f64,
     /// How many points across a section and sections along the crest.
     pub resolution: (usize, usize),
     pub seed: u64,
@@ -81,6 +84,7 @@ impl Breaker {
             variation: n("variation", 1.).max(0.),
             lip: 1.,
             throw: 1.,
+            finger: 0.,
             resolution: (resolution.0.max(60), resolution.1.max(2)),
             seed: SceneFile::parse_int(&o["seed"], 0) as u64,
         }
@@ -132,7 +136,7 @@ impl Breaker {
     pub fn weighted_section(&self, stage: f64, count: usize) -> (Vec<Vector2<f64>>, Vec<f64>) {
         let h = self.height;
         let bed = -self.depth - 0.05 * h;
-        let (front, back) = (-8. * h, 8. * h);
+        let (front, back) = (-12. * h, 8. * h);
         let (bottom, top) = self.extremes();
         let tip = top + self.reach(stage);
         // Fixed shares of the points: the trough's water in front, the face and the lip's
@@ -186,17 +190,25 @@ impl Breaker {
             weight.push(if i == 0 { 0. } else { 1. });
         }
         // Up the face (the cavity's seaward wall), over its roof and down to the lip's tip.
+        // (The face and the lip, drawn smooth by the flow over them, carry a third of the cross
+        // waves the level water does, less up from the face's foot.)
+        const GLASSY: f64 = 0.35;
+        // The edge's fingers: the last of the lip stretched or drawn in, the rest of it as it is.
+        // (Over the last 0.6 radians, so that the arc never folds back for fingers within ±0.3.)
+        let finger = self.finger.clamp(-0.3, 0.3) * hollow;
+        let fingered = |phi: f64| phi + finger * crate::math::smoothstep(tip - 0.6, tip, phi);
         for i in 0..n_in {
-            let phi = bottom + (tip - bottom) * i as f64 / (n_in - 1) as f64;
+            let phi = fingered(bottom + (tip - bottom) * i as f64 / (n_in - 1) as f64);
             loop_.push(face(phi));
-            weight.push(from_tip(phi));
+            let up = ((phi - bottom) / (top - bottom)).clamp(0., 1.);
+            weight.push(from_tip(phi) * (GLASSY + (1. - GLASSY) * (1. - up).powi(2)));
         }
         // Back over the lip's outer surface, thickening from the tip to the roof.
         for i in 0..n_out {
-            let phi = tip - (tip - top) * i as f64 / (n_out - 1) as f64;
+            let phi = fingered(tip - (tip - top) * i as f64 / (n_out - 1) as f64);
             let (p, n) = self.on_cavity(phi);
             loop_.push(p + n * thickness(phi));
-            weight.push(from_tip(phi));
+            weight.push(from_tip(phi) * GLASSY);
         }
         // The crest, and the back of the wave falling to the still water (a smooth step, level
         // at both ends).
@@ -206,7 +218,7 @@ impl Breaker {
             let u = i as f64 / n_back as f64;
             let s = u * u * (3. - 2. * u);
             loop_.push(Vector2::new(crest.x + (fall - crest.x) * u, crest.y * (1. - s)));
-            weight.push(1.);
+            weight.push(GLASSY + (1. - GLASSY) * u);
         }
         // The still water behind, out to the back.
         for i in 1..=n_still {
@@ -258,11 +270,14 @@ impl Breaker {
             // the shoulder still standing and where it has landed.
             height: self.height * (1. + v * (0.45 * ((-((raw - 1.) / 0.5).powi(2)).exp() - 1.) + 0.1 * wander(9., 1.7))),
             // (Over metres and less too: the falling water isn't even.)
-            lip: 1. + v * (0.35 * wander(5., 3.1) + 0.25 * wander(1.2, 8.3)),
+            lip: 1. + v * (0.35 * wander(5., 3.1) + 0.25 * wander(1.2, 8.3) + 0.2 * wander(0.6, 14.9)),
             throw: 1. + v * (0.08 * wander(6., 4.9) + 0.06 * wander(1.5, 9.7) + 0.03 * wander(0.5, 12.1)),
+            // The falling water's edge torn into fingers, decimetres across.
+            finger: v * 0.15 * (wander(0.3, 16.3) + 0.6 * wander(0.12, 18.1)),
             ..self.clone()
         };
-        let bend = v * (1.0 * wander(20., 6.7) + 0.15 * x * x / self.width.max(1.));
+        // (A peak: its shoulders lagging seaward either side, the line wandering.)
+        let bend = v * (1.5 * wander(15., 6.7) + 0.3 * x * x / self.width.max(1.));
         (varied, stage, bend, raw)
     }
 
@@ -658,10 +673,10 @@ impl crate::volume::DensityField for Spray {
 
 /// Smaller waves crossing the breaker: the wind's chop, the backwash, waves reflected and
 /// refracted from elsewhere, running every way over the face, the lip and the water about it,
-/// so that the surface is uneven, not a clean curve: a sum of sinusoids of random directions
-/// and phases, wavelengths from 0.4 to 4 m (evenly in their logarithm), each a few percent
-/// steep (their slopes together about a tenth), as the relief the surface is moved along its
-/// normal by.
+/// so that the surface is uneven, not a clean curve: a sum of 64 sinusoids of random directions
+/// and phases, wavelengths from 0.3 to 3 m (evenly in their logarithm), each a few percent
+/// steep and the longer ones less so (a chop, not long bands), as the relief the surface is
+/// moved along its normal by.
 pub struct CrossWaves {
     waves: Vec<(Vector3<f64>, f64, f64)>,
 }
@@ -669,14 +684,15 @@ pub struct CrossWaves {
 impl CrossWaves {
     pub fn new(seed: u64, strength: f64) -> CrossWaves {
         let mut rng = crate::geometry::Pcg32::new(seed.wrapping_add(0xc705), 7);
-        let waves = (0..32).map(|_| {
+        let waves = (0..64).map(|_| {
             let dir = loop {
                 let v = Vector3::new(rng.next_f64() - 0.5, rng.next_f64() - 0.5, rng.next_f64() - 0.5) * 2.;
                 if v.norm() > 0.2 && v.norm() <= 1. { break v.normalize(); }
             };
-            let length = 0.4 * 10f64.powf(rng.next_f64());
+            let length = 0.3 * 10f64.powf(rng.next_f64());
             let k = std::f64::consts::TAU / length;
-            (dir * k, 0.006 * length * strength, rng.next_f64() * std::f64::consts::TAU)
+            // (The longer ones less steep: a chop, not long bands.)
+            (dir * k, 0.006 * length * (0.3 / length).powf(0.25) * strength, rng.next_f64() * std::f64::consts::TAU)
         }).collect();
         CrossWaves { waves }
     }
@@ -750,8 +766,9 @@ mod tests {
 
     #[test]
     fn test_a_breakers_section_is_a_simple_loop() {
-        for (stage, lip, throw) in [(0., 1., 1.), (0.3, 1., 1.), (0.7, 1., 1.), (1., 1., 1.), (1., 0.5, 1.1), (1., 1.6, 0.5), (0.6, 1.6, 1.1)] {
-            let w = Breaker { lip, throw, ..wave() };
+        for (stage, lip, throw, finger) in [(0., 1., 1., 0.), (0.3, 1., 1., 0.), (0.7, 1., 1., 0.), (1., 1., 1., 0.), (1., 0.5, 1.1, 0.), (1., 1.6, 0.5, 0.),
+                (0.6, 1.6, 1.1, 0.), (1., 0.5, 1.1, 0.3), (1., 0.5, 1.1, -0.3), (0.8, 1.6, 0.5, 0.3)] {
+            let w = Breaker { lip, throw, finger, ..wave() };
             let s = w.section(stage, 200);
             assert_eq!(s.len(), 200);
             assert!(signed_area(&s) > 0.);

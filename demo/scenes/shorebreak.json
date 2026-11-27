@@ -19,8 +19,8 @@
    "height": 2,
    "depth": 2,
    "width": 60,
-   "stage": 0.95,
-   "peel": 0.6,
+   "stage": 1.0,
+   "peel": 1.5,
    "seed": 3
   }
  },
@@ -78,8 +78,8 @@
    "height": 2,
    "depth": 2,
    "width": 60,
-   "stage": 0.95,
-   "peel": 0.6,
+   "stage": 1.0,
+   "peel": 1.5,
    "seed": 3
   },
   {

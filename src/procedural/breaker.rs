@@ -86,6 +86,13 @@ impl Breaker {
         }
     }
 
+    /// How far round the cavity from its roof the lip's tip has reached at `stage` (radians):
+    /// little at first (a shoulder's face steepens before its lip throws), the whole throw at 1.
+    fn reach(&self, stage: f64) -> f64 {
+        // (Never quite none: the lip's outer arc keeps distinct points.)
+        THROW * self.throw.clamp(0.5, 1.1) * (0.02 + 0.98 * stage.clamp(0., 1.).powf(1.6))
+    }
+
     /// The cavity's ellipse: its centre, semi-axes and the point at angle `phi` on it, and the
     /// outward normal there.
     fn cavity(&self) -> (Vector2<f64>, f64, f64) {
@@ -127,7 +134,7 @@ impl Breaker {
         let bed = -self.depth - 0.05 * h;
         let (front, back) = (-8. * h, 8. * h);
         let (bottom, top) = self.extremes();
-        let tip = top + THROW * self.throw.clamp(0.5, 1.1) * stage.clamp(0., 1.);
+        let tip = top + self.reach(stage);
         // Fixed shares of the points: the trough's water in front, the face and the lip's
         // underside, the lip's outer surface, the back of the wave, the still water behind;
         // the rest are the bed's two corners.
@@ -147,7 +154,32 @@ impl Breaker {
         loop_.push(Vector2::new(back, bed));
         loop_.push(Vector2::new(front, bed));
         weight.extend([0., 0.]);
-        let start = self.on_cavity(bottom).0;
+        // How hollow the face is: a steep slope on the shoulder, before the lip throws, from a
+        // toe a wave's height and a half in front of the crest; hollowing into the cavity's
+        // wall as the lip throws.
+        let hollow = crate::math::smoothstep(0.15, 0.7, stage);
+        let lip = h * self.lip.clamp(0.5, 1.6);
+        // The lip's thickness from its tip to the roof: a tip no thinner than its root on a face
+        // not yet hollow (a crest, not a lip), thinning as it throws.
+        let tip_thickness = TIP + (ROOF - TIP) * (1. - hollow);
+        let thickness = |phi: f64| {
+            let u = if tip > top { ((tip - phi) / (tip - top)).clamp(0., 1.) } else { 1. };
+            lip * (tip_thickness + (ROOF - tip_thickness) * u.powf(0.7))
+        };
+        let (roof, up) = self.on_cavity(top);
+        let crest_point = roof + up * lip * ROOF;
+        let toe = Vector2::new(roof.x - 1.5 * h, -TROUGH * h);
+        // The face: on a face not yet hollow, a slope rising from the toe to the crest itself
+        // (steepening towards it), and what lip there is folded onto the crest; hollowing into
+        // the cavity's wall and the lip thrown from its roof.
+        let face = |phi: f64| {
+            let wall = self.on_cavity(phi).0;
+            if phi >= top { return crest_point + (wall - crest_point) * hollow; }
+            let u = ((phi - bottom) / (top - bottom)).clamp(0., 1.);
+            let slope = Vector2::new(toe.x + (crest_point.x - toe.x) * (1. - (1. - u).powi(2)), toe.y + (crest_point.y - toe.y) * u);
+            slope + (wall - slope) * hollow
+        };
+        let start = face(bottom);
         for i in 0..n_trough {
             let u = i as f64 / n_trough as f64;
             loop_.push(Vector2::new(front + (start.x - front) * u, -TROUGH * h));
@@ -156,14 +188,10 @@ impl Breaker {
         // Up the face (the cavity's seaward wall), over its roof and down to the lip's tip.
         for i in 0..n_in {
             let phi = bottom + (tip - bottom) * i as f64 / (n_in - 1) as f64;
-            loop_.push(self.on_cavity(phi).0);
+            loop_.push(face(phi));
             weight.push(from_tip(phi));
         }
         // Back over the lip's outer surface, thickening from the tip to the roof.
-        let thickness = |phi: f64| {
-            let u = if tip > top { ((tip - phi) / (tip - top)).clamp(0., 1.) } else { 1. };
-            h * self.lip.clamp(0.5, 1.6) * (TIP + (ROOF - TIP) * u.powf(0.7))
-        };
         for i in 0..n_out {
             let phi = tip - (tip - top) * i as f64 / (n_out - 1) as f64;
             let (p, n) = self.on_cavity(phi);
@@ -222,9 +250,13 @@ impl Breaker {
         let v = self.variation;
         let wander = |scale: f64, seed: f64| noise.noise(x / scale, seed, 0.5);
         let raw = self.stage + self.peel * t + 0.08 * v * wander(7., 2.3);
-        let stage = raw.clamp(0., 1.);
+        // The shape's stage: the raw one up to the lip's landing, then running back down as
+        // the tube closes and collapses into a broken bore (over another 0.3 of it).
+        let stage = if raw <= 1. { raw.max(0.) } else { (1. - (raw - 1.) / 0.3).max(0.) };
         let varied = Breaker {
-            height: self.height * (1. + v * (0.25 * (stage - self.stage) + 0.1 * wander(9., 1.7))),
+            // Highest at the pocket, where the lip is throwing (the stage about 1), lower along
+            // the shoulder still standing and where it has landed.
+            height: self.height * (1. + v * (0.45 * ((-((raw - 1.) / 0.5).powi(2)).exp() - 1.) + 0.1 * wander(9., 1.7))),
             // (Over metres and less too: the falling water isn't even.)
             lip: 1. + v * (0.35 * wander(5., 3.1) + 0.25 * wander(1.2, 8.3)),
             throw: 1. + v * (0.08 * wander(6., 4.9) + 0.06 * wander(1.5, 9.7) + 0.03 * wander(0.5, 12.1)),
@@ -243,7 +275,7 @@ impl Breaker {
         let stage = stage.max(0.);
         let (c, _, _) = varied.cavity();
         let (_, top) = varied.extremes();
-        let (tip, _) = varied.on_cavity(top + THROW * varied.throw.clamp(0.5, 1.1) * stage.min(1.));
+        let (tip, _) = varied.on_cavity(top + varied.reach(stage.min(1.)));
         let place = |p: Vector2<f64>| self.center + Vector3::new(x, p.y, p.x + bend);
         (place(c), place(tip), stage)
     }
@@ -539,7 +571,7 @@ impl Aeration {
             let (varied, stage, bend) = breaker.at(x);
             let (c, a, b) = varied.cavity();
             let (_, top) = varied.extremes();
-            let tip = top + THROW * varied.throw.clamp(0.5, 1.1) * stage;
+            let tip = top + varied.reach(stage);
             (breaker.center.y + c.y, breaker.center.z + c.x + bend, a, b, top, tip)
         }).collect();
         Aeration { start, step, sections, noise: crate::noise::PerlinNoise::shuffled(breaker.seed.wrapping_add(0xae7a)) }
@@ -685,7 +717,17 @@ fn ear_clip(p: &[Vector2<f64>]) -> Vec<[usize; 3]> {
             clipped = true;
             break;
         }
-        if !clipped { break; }
+        if !clipped {
+            // Only flat ears left where points coincide or lie in a line: clip one, a triangle
+            // of no area, so the cap stays closed.
+            match (0..n).find(|&k| cross(p[left[(k + n - 1) % n]], p[left[k]], p[left[(k + 1) % n]]).abs() <= 1e-12) {
+                Some(k) => {
+                    out.push([left[(k + n - 1) % n], left[k], left[(k + 1) % n]]);
+                    left.remove(k);
+                },
+                None => break,
+            }
+        }
     }
     if left.len() == 3 { out.push([left[0], left[1], left[2]]); }
     out
@@ -759,5 +801,26 @@ mod tests {
         let volume: f64 = m.triangles.iter().map(|t| m.positions[t[0]].dot(&m.positions[t[1]].cross(&m.positions[t[2]])) / 6.).sum();
         let area = 0.5 * signed_area(&w.section(0.5, 200));
         assert!(volume > 0.5 * area * w.width && volume < 1.5 * area * w.width, "{} vs {}", volume, area * w.width);
+    }
+}
+
+#[cfg(test)]
+mod along_probe {
+    use super::*;
+    /// Writes the shorebreak's sections along its crest as JSON, for drawing (RAYS_SECTIONS).
+    #[test]
+    #[ignore]
+    fn probe_along() {
+        let text = std::fs::read_to_string("demo/scenes/shorebreak.json").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let o = v["objects"].as_array().unwrap().iter().find(|o| o["type"] == "breaker").unwrap();
+        let w = Breaker::parse(o);
+        let xs = [-25., -15., -8., -4., 0., 4., 10., 25.];
+        let out: Vec<serde_json::Value> = xs.iter().map(|&x| {
+            let (varied, stage, bend, raw) = w.at_raw(x);
+            let pts: Vec<[f64; 2]> = varied.section(stage, 360).iter().map(|p| [p.x + bend, p.y]).collect();
+            serde_json::json!({"x": x, "raw": raw, "height": varied.height, "points": pts})
+        }).collect();
+        std::fs::write(std::env::var("RAYS_SECTIONS").unwrap(), serde_json::to_string(&out).unwrap()).unwrap();
     }
 }

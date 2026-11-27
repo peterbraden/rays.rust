@@ -109,6 +109,18 @@ impl Covered {
     }
 }
 
+/// What the kernels need of a ground shaded at its vertices (`Covered`) besides the covers:
+/// snow's spherical albedo, settled and firn (shaded as Lambertian there); glacier ice, white and
+/// blue, as a rough dielectric surface (`refractive index`, `roughness` as a plastic's: alpha is
+/// its square) over its body's albedo; and its rivers' and lakes' water.
+pub struct GroundExport {
+    pub snow: [Color; 2],
+    pub ice: [Color; 2],
+    pub ice_index: f64,
+    pub ice_roughness: [f64; 2],
+    pub water: Option<Water>,
+}
+
 pub trait MaterialModel: Sync{
     /// Scatter an intersection ray.
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay;

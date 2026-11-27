@@ -1405,6 +1405,20 @@ impl Medium for LandscapeMedium {
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(&*self.ground) }
 
+    fn ground(&self) -> Option<crate::material::model::GroundExport> {
+        if !self.own {
+            return None;
+        }
+        let g = &self.ground;
+        Some(crate::material::model::GroundExport {
+            snow: [g.snow[0].albedo(), g.snow[1].albedo()],
+            ice: [g.ice[0].albedo(), g.ice[1].albedo()],
+            ice_index: crate::material::snow::ICE_REFRACTIVE_INDEX,
+            ice_roughness: [g.ice[0].style.roughness.sqrt(), g.ice[1].style.roughness.sqrt()],
+            water: self.water.water(),
+        })
+    }
+
     /// Shaded from what its vertices' covers say, interpolated, as `Land::scatter` shades from
     /// the cover at the hit: one of water, snow, ice or bare ground, by their shares; bare ground
     /// a plastic for its coated share, else Lambertian, of its baked parameters.

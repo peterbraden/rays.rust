@@ -28,6 +28,9 @@ pub trait Medium : Sync{
     fn bake_at(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Option<crate::material::model::Covered> {
         self.material_at(i.point).bake(i, s).map(crate::material::model::Covered::bare)
     }
+    /// What the kernels need to shade this medium's surface from its vertices' covers
+    /// (`bake_at`), if they can: a landscape's ground.
+    fn ground(&self) -> Option<crate::material::model::GroundExport> { None }
     /// Shade the hit `i` from what covers it, `c`, interpolated from its triangle's vertices
     /// (`bake_at`), rather than by its material there; None to shade it by its material.
     fn scatter_covered(&self, _r: &crate::ray::Ray, _i: &crate::intersection::Intersection, _c: &crate::material::model::Covered,

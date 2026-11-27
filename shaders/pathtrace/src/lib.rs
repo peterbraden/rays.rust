@@ -233,6 +233,22 @@ pub const MAT_HOST: u32 = 7;
 pub const MAT_WATER: u32 = 8;
 /// No surface's: a vertex in a medium (`MEDIUM_HIT`), which scatters by its phase function.
 pub const MAT_MEDIUM: u32 = 9;
+/// A ground shaded at its vertices (the renderer's `FlatScene::covers`): its triangles carry
+/// their corners' covers' indices (in `v0.w`, `n1.w`, `n2.w`), its block of `tables` is at `a`
+/// (`GROUND_*`), its water material is `b` (`NO_MATERIAL` for none). Resolved at each hit to
+/// one material (`ground_material`).
+pub const MAT_GROUND: u32 = 10;
+pub const NO_MATERIAL: u32 = u32::MAX;
+/// A ground's block: snow's albedo settled and firn (3 each), ice's white and blue (3 each),
+/// ice's refractive index, its roughness white and blue, and where the covers are (bits).
+pub const GROUND_SNOW: u32 = 0;
+pub const GROUND_ICE: u32 = 6;
+pub const GROUND_ICE_INDEX: u32 = 12;
+pub const GROUND_ICE_ROUGHNESS: u32 = 13;
+pub const GROUND_COVERS: u32 = 15;
+/// A vertex's cover: the bare ground's albedo (3), refractive index, roughness and coated share;
+/// the shares of snow, the snow's age, of ice, the ice's blueness, and of water; and a pad.
+pub const COVER_SIZE: u32 = 12;
 /// Water's refractive index.
 pub const WATER_INDEX: f32 = 1.333;
 /// Hits nearer than this are not hazed (as the renderer's `AERIAL_PERSPECTIVE_FROM`).
@@ -2293,6 +2309,60 @@ pub fn power_heuristic(p: f32, q: f32) -> f32 {
     if p2 + q2 == 0.0 { 0.0 } else { p2 / (p2 + q2) }
 }
 
+/// Field `k` of the covers at corners `c`, by barycentric weights `w`.
+fn cover_field(s: &Scene, covers: u32, c: UVec4, w: Vec3, k: u32) -> f32 {
+    at(s.tables, covers + c.x * COVER_SIZE + k) * w.x + at(s.tables, covers + c.y * COVER_SIZE + k) * w.y
+        + at(s.tables, covers + c.z * COVER_SIZE + k) * w.z
+}
+
+/// Field `k` of the covers weighted by their coated shares as well (a coat's refractive index
+/// and roughness, which only the coated part of the ground has), as the renderer's `Baked::mix`.
+fn coated_field(s: &Scene, covers: u32, c: UVec4, w: Vec3, k: u32) -> f32 {
+    let coat = Vec3::new(at(s.tables, covers + c.x * COVER_SIZE + 5), at(s.tables, covers + c.y * COVER_SIZE + 5), at(s.tables, covers + c.z * COVER_SIZE + 5)) * w;
+    let total = coat.x + coat.y + coat.z;
+    if total <= 0.0 {
+        return cover_field(s, covers, c, w, k);
+    }
+    cover_field(s, covers, c, coat / total, k)
+}
+
+/// A ground shaded at its vertices (`MAT_GROUND`) as one material at this hit, as the
+/// renderer's `LandscapeMedium::scatter_covered`: what covers it there interpolated from its
+/// triangle's corners' covers by the hit's barycentric weights (`h.y`, `h.z`), and one of water,
+/// snow (Lambertian of its spherical albedo, settled or firn by its age), ice (white or blue, a
+/// rough dielectric over its body: a plastic) or bare ground (a plastic for its coated share,
+/// else Lambertian) chosen by their shares.
+pub fn ground_material(s: &Scene, g: &Material, prim: u32, h: Vec4, rng: &mut u32) -> Material {
+    let block = g.a;
+    let covers = at(s.tables, block + GROUND_COVERS).to_bits();
+    let pr = whole_prim(s, prim);
+    let c = UVec4::new(pr.v0.w.to_bits(), pr.n1.w.to_bits(), pr.n2.w.to_bits(), 0);
+    let w = Vec3::new(1.0 - h.y - h.z, h.y, h.z);
+    let mut m = Material { kind: MAT_DIFFUSE, a: 0, b: 0, pad: 0, c0: Vec4::ZERO, c1: Vec4::ZERO, p: Vec4::ZERO };
+    let water = cover_field(s, covers, c, w, 10);
+    if g.b != NO_MATERIAL && water > 0.0 && rand(rng) < water {
+        return at(s.materials, g.b);
+    }
+    let (snow, ice) = (cover_field(s, covers, c, w, 6), cover_field(s, covers, c, w, 8));
+    let u = rand(rng) * (snow + ice).max(1.0);
+    if u < snow {
+        let firn = rand(rng) < cover_field(s, covers, c, w, 7);
+        m.c0 = tv3(s, block + GROUND_SNOW + if firn { 3 } else { 0 }).extend(0.0);
+    } else if u < snow + ice {
+        let blue = rand(rng) < cover_field(s, covers, c, w, 9);
+        m.kind = MAT_PLASTIC;
+        m.c0 = tv3(s, block + GROUND_ICE + if blue { 3 } else { 0 }).extend(0.0);
+        m.p = Vec4::new(at(s.tables, block + GROUND_ICE_INDEX), at(s.tables, block + GROUND_ICE_ROUGHNESS + if blue { 1 } else { 0 }), 0.0, 0.0);
+    } else {
+        m.c0 = Vec3::new(cover_field(s, covers, c, w, 0), cover_field(s, covers, c, w, 1), cover_field(s, covers, c, w, 2)).extend(0.0);
+        if rand(rng) < cover_field(s, covers, c, w, 5) {
+            m.kind = MAT_PLASTIC;
+            m.p = Vec4::new(coated_field(s, covers, c, w, 3), coated_field(s, covers, c, w, 4), 0.0, 0.0);
+        }
+    }
+    m
+}
+
 fn resolve_material(s: &Scene, m_in: u32, at_point: Vec3) -> u32 {
     // The squares are laid out in the world, not about the camera.
     let p = world(s, at_point);
@@ -3182,6 +3252,9 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
         let prim = whole_prim(s, hit.prim);
         let m = resolve_material(s, prim.info.y, point);
         mat = at(s.materials, m);
+        if mat.kind == MAT_GROUND {
+            mat = ground_material(s, &mat, hit.prim, p.hit, &mut rng);
+        }
         if mat.kind == MAT_EMITTER {
             let le = emitted(s, m, hit_ns, -rd);
             let mut w = 1.0;

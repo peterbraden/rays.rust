@@ -527,7 +527,12 @@ fn host_kernels(s: &Scene, flat: &FlatScene) -> Vec<Option<GpuMaterial>> {
 /// once rendered as water everywhere.
 fn host_kernel(s: &Scene, medium: &(dyn crate::material::texture::Medium + Sync + Send)) -> Option<GpuMaterial> {
     let w = medium.uniform()?.water().filter(|_| s.moonlight.is_none())?;
-    Some(GpuMaterial { kind: pathtrace::MAT_WATER, c0: c4(&w.body), c1: c4(&w.bubbles), p: Vec4::new(w.radius as f32, w.roughness as f32, 0., 0.), ..GpuMaterial::zeroed() })
+    Some(water_material(&w))
+}
+
+/// The kernels' water (`pathtrace::MAT_WATER`).
+fn water_material(w: &crate::material::model::Water) -> GpuMaterial {
+    GpuMaterial { kind: pathtrace::MAT_WATER, c0: c4(&w.body), c1: c4(&w.bubbles), p: Vec4::new(w.radius as f32, w.roughness as f32, 0., 0.), ..GpuMaterial::zeroed() }
 }
 
 impl Buffers {
@@ -588,15 +593,35 @@ impl Buffers {
         if materials.is_empty() {
             materials.push(GpuMaterial::zeroed());
         }
-        let to_gpu = |p: &Prim, m: u32, emitter: u32| -> GpuPrim {
+        // Grounds shaded at their vertices (`FlatScene::covers`, plan.md section 18): for each
+        // object whose medium exports one, a material that reads its triangles' corners' covers
+        // (`pathtrace::MAT_GROUND`; its table's place set below, once there are tables), and its
+        // water. Not under a moon, which the kernels' water doesn't reflect.
+        let grounds: Vec<Option<(u32, crate::material::model::GroundExport)>> = flat.hosts.iter().map(|o| {
+            let g = o.medium.ground().filter(|_| !flat.covers.is_empty() && s.moonlight.is_none())?;
+            let water = g.water.as_ref().map_or(pathtrace::NO_MATERIAL, |w| { materials.push(water_material(w)); materials.len() as u32 - 1 });
+            materials.push(GpuMaterial { kind: pathtrace::MAT_GROUND, b: water, ..GpuMaterial::zeroed() });
+            Some((materials.len() as u32 - 1, g))
+        }).collect();
+        // A primitive shaded at its vertices: its ground's material, and its corners' covers'
+        // indices in its spare slots (a triangle's v0.w, n1.w and n2.w).
+        let ground_of = |i: usize, m: u32| -> Option<(u32, [u32; 3])> {
+            let corners = *flat.prim_cover.get(i).filter(|c| c[0] != crate::wavefront::flat::NO_COVER)?;
+            let FlatMaterial::Host { object } = flat.materials[m as usize] else { return None };
+            grounds[object as usize].as_ref().map(|(material, _)| (*material, corners))
+        };
+        let to_gpu = |p: &Prim, m: u32, emitter: u32, ground: Option<(u32, [u32; 3])>| -> GpuPrim {
             let mut g = GpuPrim::zeroed();
-            g.info = UVec4::new(pathtrace::PRIM_TRIANGLE, material_index[m as usize], emitter, 0);
+            g.info = UVec4::new(pathtrace::PRIM_TRIANGLE, ground.map_or(material_index[m as usize], |g| g.0), emitter, 0);
             match p {
                 Prim::Triangle { v, n } => {
                     g.v0 = v4(&(v[0] - origin), 0.); g.v1 = v4(&(v[1] - origin), 0.); g.v2 = v4(&(v[2] - origin), 0.);
                     if let Some(n) = n {
                         g.n0 = v4(&n[0], 0.); g.n1 = v4(&n[1], 0.); g.n2 = v4(&n[2], 0.);
                         g.info.w = 1;
+                    }
+                    if let Some((_, c)) = ground {
+                        (g.v0.w, g.n1.w, g.n2.w) = (f32::from_bits(c[0]), f32::from_bits(c[1]), f32::from_bits(c[2]));
                     }
                 },
                 Prim::Sphere { center, radius } => { g.v0 = v4(&(center - origin), *radius as f32); g.info.x = pathtrace::PRIM_SPHERE; },
@@ -605,9 +630,9 @@ impl Buffers {
             g
         };
         let mut prims: Vec<GpuPrim> = flat.prims.iter().enumerate().map(|(i, p)| {
-            to_gpu(p, flat.prim_material[i], flat.emitter_index[i].map_or(0, |e| e + 1))
+            to_gpu(p, flat.prim_material[i], flat.emitter_index[i].map_or(0, |e| e + 1), ground_of(i, flat.prim_material[i]))
         }).collect();
-        prims.extend(flat.planes.iter().map(|(p, m)| to_gpu(p, *m, 0)));
+        prims.extend(flat.planes.iter().map(|(p, m)| to_gpu(p, *m, 0, None)));
         // The shapes, after the planes and tested as they are, outside the tree: the sea by
         // its kernel, the others never (the host's, as their vertices are: `MAT_HOST`).
         let ocean = sea.map(|k| (flat.shapes[k].0.geometry.ocean().expect("the sea"), flat.shapes[k].1));
@@ -650,6 +675,24 @@ impl Buffers {
         tables.extend(pathtrace::sobol_directions().iter().flatten().map(|&v| f32::from_bits(v)));
         let emitter_off = tables.len() as u32;
         tables.extend(flat.emitters.iter().map(|&p| f32::from_bits(p)));
+        // The grounds' covers, `pathtrace::COVER_SIZE` floats a vertex, and each ground's block
+        // (`pathtrace::GROUND_*`): its snow, its ice, and where the covers are.
+        if grounds.iter().any(Option::is_some) {
+            let covers_at = tables.len() as u32;
+            for c in &flat.covers {
+                let b = &c.bare;
+                tables.extend([b.albedo.rgb.x as f32, b.albedo.rgb.y as f32, b.albedo.rgb.z as f32, b.refractive_index as f32,
+                               b.roughness as f32, b.coat as f32, c.snow as f32, c.snow_age as f32, c.ice as f32, c.blue as f32, c.water as f32, 0.]);
+            }
+            for (material, g) in grounds.iter().flatten() {
+                let block = tables.len() as u32;
+                let rgb = |c: &crate::color::Color| [c.rgb.x as f32, c.rgb.y as f32, c.rgb.z as f32];
+                tables.extend(rgb(&g.snow[0])); tables.extend(rgb(&g.snow[1]));
+                tables.extend(rgb(&g.ice[0])); tables.extend(rgb(&g.ice[1]));
+                tables.extend([g.ice_index as f32, g.ice_roughness[0] as f32, g.ice_roughness[1] as f32, f32::from_bits(covers_at)]);
+                materials[*material as usize].a = block;
+            }
+        }
         let cdf_off = tables.len() as u32;
         let powers: Vec<f64> = (0..flat.emitters.len()).map(|e| flat.emitter_choice.probability(e)).collect();
         tables.extend(cdf(&powers));
@@ -1375,5 +1418,63 @@ mod host_kernel_tests {
         let varied = if varied.material_at(Vector3::zeros()).water().is_some() { varied } else { CheckeredYPlane::new(water(false), water(true), 1., 1.) };
         assert!(varied.material_at(Vector3::zeros()).water().is_some());
         assert!(host_kernel(&s, &varied).is_none());
+    }
+}
+
+#[cfg(test)]
+mod ground_tests {
+    use super::*;
+    use bytemuck::Zeroable;
+
+    /// A triangle whose corners' covers are `covers`, its ground's block before them: snow
+    /// albedos 0.8 and 0.7, ice 0.3 and 0.2 (grey), ice's index 1.31, roughness 0.1 and 0.2.
+    fn resolve(covers: [[f32; 12]; 3], h: Vec4, seed: u32) -> GpuMaterial {
+        let mut tables: Vec<f32> = vec![0.8, 0.8, 0.8, 0.7, 0.7, 0.7, 0.3, 0.3, 0.3, 0.2, 0.2, 0.2, 1.31, 0.1, 0.2, f32::from_bits(16)];
+        for c in covers { tables.extend(c); }
+        let mut prim = GpuPrim::zeroed();
+        prim.info = UVec4::new(pathtrace::PRIM_TRIANGLE, 0, 0, 0);
+        (prim.v0.w, prim.n1.w, prim.n2.w) = (f32::from_bits(0), f32::from_bits(1), f32::from_bits(2));
+        let prims = pathtrace::pack_prims(&[prim]);
+        let water = GpuMaterial { kind: pathtrace::MAT_WATER, ..GpuMaterial::zeroed() };
+        let materials = [GpuMaterial { kind: pathtrace::MAT_GROUND, a: 0, b: 1, ..GpuMaterial::zeroed() }, water];
+        let mut params = pathtrace::Params::zeroed();
+        params.counts.x = 1;
+        let s = pathtrace::Scene { params: &params, prims: &prims, nodes: &[], materials: &materials, lights: &[], tables: &tables, host: None };
+        let mut rng = seed;
+        pathtrace::ground_material(&s, &materials[0], 0, h, &mut rng)
+    }
+
+    /// A cover: bare ground of albedo `grey`, coated `coat` with index 1.5 and roughness `rough`,
+    /// and shares of snow, ice and water.
+    fn cover(grey: f32, coat: f32, rough: f32, snow: f32, ice: f32, water: f32) -> [f32; 12] {
+        [grey, grey, grey, 1.5, rough, coat, snow, 0., ice, 0., water, 0.]
+    }
+
+    #[test]
+    fn test_a_ground_resolves_to_what_covers_it_at_the_hit() {
+        let middle = Vec4::new(1., 1. / 3., 1. / 3., 1.);
+        // Bare and uncoated: Lambertian, its albedo the corners' interpolated.
+        let bare = resolve([cover(0.1, 0., 1., 0., 0., 0.), cover(0.4, 0., 1., 0., 0., 0.), cover(0.7, 0., 1., 0., 0., 0.)], middle, 1);
+        assert_eq!(bare.kind, pathtrace::MAT_DIFFUSE);
+        assert!((bare.c0.x - 0.4).abs() < 1e-6, "{:?}", bare.c0);
+        // At a corner, that corner's.
+        let corner = resolve([cover(0.1, 0., 1., 0., 0., 0.), cover(0.4, 0., 1., 0., 0., 0.), cover(0.7, 0., 1., 0., 0., 0.)], Vec4::new(1., 1., 0., 1.), 1);
+        assert!((corner.c0.x - 0.4).abs() < 1e-6);
+        // Coated by two thirds here: where a hit draws the coat, a plastic, its roughness only the
+        // coated corners'.
+        let coated = (1..100).map(|k| resolve([cover(0.2, 1., 0.3, 0., 0., 0.), cover(0.2, 0., 0.9, 0., 0., 0.), cover(0.2, 1., 0.5, 0., 0., 0.)], middle, k))
+            .find(|m| m.kind == pathtrace::MAT_PLASTIC).expect("some hit draws the coat");
+        assert!((coated.p.y - 0.4).abs() < 1e-6 && (coated.p.x - 1.5).abs() < 1e-6, "{:?}", coated.p);
+        // All snow: Lambertian of the snow's albedo (settled, its age 0); all ice: the plastic of
+        // white ice; all water: the ground's water.
+        let snow = resolve([cover(0.2, 0., 1., 1., 0., 0.); 3], middle, 1);
+        assert!(snow.kind == pathtrace::MAT_DIFFUSE && (snow.c0.x - 0.8).abs() < 1e-6);
+        let ice = resolve([cover(0.2, 0., 1., 0., 1., 0.); 3], middle, 1);
+        assert!(ice.kind == pathtrace::MAT_PLASTIC && (ice.c0.x - 0.3).abs() < 1e-6 && (ice.p.x - 1.31).abs() < 1e-6 && (ice.p.y - 0.1).abs() < 1e-6);
+        let water = resolve([cover(0.2, 0., 1., 0., 0., 1.); 3], middle, 1);
+        assert_eq!(water.kind, pathtrace::MAT_WATER);
+        // Half snow: about half the hits snow, over many.
+        let snowy = (0..2000).filter(|&k| (resolve([cover(0.2, 0., 1., 0.5, 0., 0.); 3], middle, k * 7919 + 1).c0.x - 0.8).abs() < 1e-6).count();
+        assert!((snowy as f64 / 2000. - 0.5).abs() < 0.05, "{} of 2000 snow", snowy);
     }
 }

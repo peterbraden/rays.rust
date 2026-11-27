@@ -1150,26 +1150,49 @@ pub struct Terrain {
     pub grid: Arc<HeightGrid>,
 }
 
-impl Geometry for Terrain {
-    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+impl Terrain {
+    /// The nearest hit in [min, max) (world distances), walking the grid only over that
+    /// stretch of the ray: a shadow ray, or one bounded by a nearer hit, stops at its end
+    /// rather than crossing the whole grid.
+    fn nearest(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
         let g = &self.grid;
         let grid = Grid2 { min: g.min, cell: g.cell, nx: g.nx, nz: g.nz };
+        let len = r.rd.norm();
+        let (from, to) = (min / len, max / len);
         let mut hit = None;
         // Slightly loose bounds: a ray along the flat top of the terrain is still inside.
-        walk_grid(&grid, g.y_range.0 - 1e-6, g.y_range.1 + 1e-6, r, |ix, iz, t0, t1| {
+        walk_grid_within(&grid, g.y_range.0 - 1e-6, g.y_range.1 + 1e-6, r, from, to, |ix, iz, t0, t1| {
             let (lo, hi) = g.ranges[iz * g.nx + ix];
             let eps = 1e-9 * (1. + t1.abs());
             if ray_spans(r, t0, t1, lo, hi) {
-                hit = g.intersect_cell(r, ix, iz, t0 - eps, t1 + eps);
+                hit = g.intersect_cell(r, ix, iz, t0 - eps, t1 + eps).filter(|(t, _)| *t >= from && *t < to);
             }
             hit.is_some()
         });
         hit.map(|(t, normal)| RawIntersection { part: 0,
             face: 0,
-            dist: t * r.rd.norm(),
+            dist: t * len,
             point: r.ro + r.rd * t,
             normal,
         })
+    }
+}
+
+impl Geometry for Terrain {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.nearest(r, 0., f64::INFINITY)
+    }
+
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.nearest(r, min, f64::INFINITY)
+    }
+
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.nearest(r, min, max)
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.nearest(r, min, max).is_some()
     }
 
     fn bounds(&self) -> BBox {
@@ -1199,6 +1222,36 @@ mod tests {
         let n = g.normal(0.3, 0.7);
         let expected = Vector3::new(-0.5, 1., -0.25).normalize();
         assert!((n - expected).norm() < 1e-9, "{}", n);
+    }
+
+    #[test]
+    fn test_a_ranged_walk_finds_what_the_whole_walk_does() {
+        // The terrain's own range searches (which walk only the stretch asked about) against the
+        // defaults over its whole walk, on rays down onto it and grazing it, near and far ranges.
+        struct Whole<'a>(&'a Terrain);
+        impl Geometry for Whole<'_> {
+            fn intersects(&self, r: &Ray) -> Option<RawIntersection> { self.0.intersects(r) }
+            fn bounds(&self) -> BBox { self.0.bounds() }
+        }
+        let source = NoiseHeight {
+            noise: PerlinNoise::new(), base: 0., amplitude: 2., scale: 5., octaves: 4,
+            persistence: 0.5, lacunarity: 2., ridged: false, offset: (0.1, 0.2),
+        };
+        let t = Terrain { grid: Arc::new(HeightGrid::sample(&source, (-10., -10.), (10., 10.), 0.25)) };
+        let whole = Whole(&t);
+        let mut rng = crate::geometry::Pcg32::new(7, 3);
+        let mut hits = 0;
+        for _ in 0 .. 2000 {
+            let ro = Vector3::new(rng.next_f64() * 20. - 10., 0.5 + rng.next_f64() * 4., rng.next_f64() * 20. - 10.);
+            let rd = Vector3::new(rng.next_f64() - 0.5, -0.3 * rng.next_f64(), rng.next_f64() - 0.5);
+            let r = Ray { ro, rd };
+            let (min, max) = (rng.next_f64() * 5., 1. + rng.next_f64() * 30.);
+            let (a, b) = (t.intersects_range(&r, min, max), whole.intersects_range(&r, min, max));
+            assert_eq!(a.map(|x| (x.dist * 1e9).round()), b.map(|x| (x.dist * 1e9).round()), "{:?} [{}, {})", r, min, max);
+            assert_eq!(t.occludes(&r, min, max), whole.occludes(&r, min, max));
+            hits += a.is_some() as usize;
+        }
+        assert!(hits > 200, "{} hits", hits);
     }
 
     #[test]

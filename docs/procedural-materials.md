@@ -437,6 +437,11 @@ thumbnail; neither applied. grey_granite is a variant (a `library` reference to 
 own palette), which the fit's renders don't follow, so nothing moved; it takes granite's
 structure as it is. A palette held in a variable (`"color_map": "$palette"`) is solved like any
 other colours once the reference names its stops.
+Refitted to Granite001A, a warm pinkish slab (its mean colour checked this time), granite
+went 4.13 → 2.40, applied: interlocking crystals of pink-beige, grey and black like the slab's.
+verde_marble, a variant of nero_marquina, could only move its colours and came out black with
+white speckle; calacatta_marble's scan (Marble014) is a beige marble, not calacatta's warm white
+with bold veins, and the fit made it beige and lacy. Neither applied.
 
 ### Presets modelled on scans
 

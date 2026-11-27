@@ -20639,5 +20639,960 @@
       }
     ],
     "scale": 1.3777
+  },
+  "burned_ground": {
+    "show": "landscape",
+    "doc": "Ground after a fire: charred black soil with grey ash in drifts and brown earth where it burned less, strewn with fallen needles bleached pale and charred twigs; modelled on Poly Haven's burned_ground_01.",
+    "variables": {
+      "char": [
+        0.05,
+        0.045,
+        0.04
+      ],
+      "char2": [
+        0.1,
+        0.09,
+        0.08
+      ],
+      "ash": [
+        0.38,
+        0.36,
+        0.33
+      ],
+      "earth": [
+        0.24,
+        0.17,
+        0.11
+      ],
+      "needle": [
+        0.55,
+        0.45,
+        0.32
+      ],
+      "needle2": [
+        0.35,
+        0.27,
+        0.18
+      ],
+      "twig": [
+        0.18,
+        0.13,
+        0.09
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "bombing",
+          "shape": "leaf",
+          "cell": 0.05,
+          "size": [
+            0.04,
+            0.12
+          ],
+          "width": 0.06,
+          "density": 0.5,
+          "seed": 1831,
+          "output": "mask"
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "bombing",
+                "shape": "leaf",
+                "cell": 0.025,
+                "size": [
+                  0.02,
+                  0.05
+                ],
+                "width": 0.07,
+                "density": 0.6,
+                "seed": 1821,
+                "output": "mask"
+              },
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "smoothstep",
+                      "from": 0.25,
+                      "to": 0.55,
+                      "input": {
+                        "node": "fractal",
+                        "scale": 0.08,
+                        "seed": 1811,
+                        "smallest": 0.003
+                      }
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        {
+                          "pattern": {
+                            "node": "smoothstep",
+                            "from": 0.3,
+                            "to": 0.6,
+                            "input": {
+                              "node": "fractal",
+                              "scale": 0.25,
+                              "seed": 1812,
+                              "smallest": 0.01
+                            }
+                          },
+                          "color_map": [
+                            [
+                              0,
+                              {
+                                "pattern": {
+                                  "node": "fractal",
+                                  "scale": 0.05,
+                                  "seed": 1813,
+                                  "smallest": 0.002
+                                },
+                                "color_map": [
+                                  [
+                                    -0.4,
+                                    "$char"
+                                  ],
+                                  [
+                                    0.4,
+                                    "$char2"
+                                  ]
+                                ]
+                              }
+                            ],
+                            [
+                              1,
+                              "$earth"
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        1,
+                        "$ash"
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  {
+                    "pattern": {
+                      "node": "bombing",
+                      "shape": "leaf",
+                      "cell": 0.025,
+                      "size": [
+                        0.02,
+                        0.05
+                      ],
+                      "width": 0.07,
+                      "density": 0.6,
+                      "seed": 1821,
+                      "output": "id"
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        "$needle2"
+                      ],
+                      [
+                        0.6,
+                        "$needle"
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            {
+              "pattern": {
+                "node": "bombing",
+                "shape": "leaf",
+                "cell": 0.05,
+                "size": [
+                  0.04,
+                  0.12
+                ],
+                "width": 0.06,
+                "density": 0.5,
+                "seed": 1831,
+                "output": "id"
+              },
+              "color_map": [
+                [
+                  0,
+                  "$twig"
+                ],
+                [
+                  1,
+                  "$needle2"
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0008,
+                {
+                  "node": "bombing",
+                  "shape": "leaf",
+                  "cell": 0.025,
+                  "size": [
+                    0.02,
+                    0.05
+                  ],
+                  "width": 0.07,
+                  "density": 0.6,
+                  "seed": 1821,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0015,
+                {
+                  "node": "bombing",
+                  "shape": "leaf",
+                  "cell": 0.05,
+                  "size": [
+                    0.04,
+                    0.12
+                  ],
+                  "width": 0.06,
+                  "density": 0.5,
+                  "seed": 1831,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.1,
+              "seed": 1841,
+              "smallest": 0.002,
+              "amplitude": 0.004
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:burned_ground_01",
+        "licence": "CC0",
+        "size": 1.0,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "char"
+              ],
+              [
+                "variables",
+                "char2"
+              ],
+              [
+                "variables",
+                "ash"
+              ],
+              [
+                "variables",
+                "earth"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "needle"
+              ],
+              [
+                "variables",
+                "needle2"
+              ],
+              [
+                "variables",
+                "twig"
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
+  },
+  "mossy_leaf_litter": {
+    "show": "landscape",
+    "doc": "Woodland floor: olive moss in patches over brown soil, fallen leaves orange-brown and pale, needles and twigs over it all; modelled on Poly Haven's forest_leaves_02.",
+    "variables": {
+      "moss": [
+        0.38,
+        0.38,
+        0.12
+      ],
+      "moss2": [
+        0.24,
+        0.26,
+        0.08
+      ],
+      "soil": [
+        0.3,
+        0.2,
+        0.1
+      ],
+      "leaf": [
+        0.62,
+        0.32,
+        0.12
+      ],
+      "leaf2": [
+        0.42,
+        0.22,
+        0.1
+      ],
+      "pale": [
+        0.62,
+        0.52,
+        0.36
+      ],
+      "twig": [
+        0.3,
+        0.22,
+        0.14
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "bombing",
+          "shape": "leaf",
+          "cell": 0.06,
+          "size": [
+            0.05,
+            0.15
+          ],
+          "width": 0.05,
+          "density": 0.4,
+          "seed": 1941,
+          "output": "mask"
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "multiply",
+                "inputs": [
+                  {
+                    "node": "bombing",
+                    "shape": "leaf",
+                    "cell": 0.05,
+                    "size": [
+                      0.03,
+                      0.07
+                    ],
+                    "width": 0.45,
+                    "density": 0.9,
+                    "seed": 1921,
+                    "output": "mask"
+                  },
+                  {
+                    "node": "subtract",
+                    "a": 1,
+                    "b": {
+                      "node": "multiply",
+                      "inputs": [
+                        0.7,
+                        {
+                          "node": "smoothstep",
+                          "from": -0.1,
+                          "to": 0.25,
+                          "input": {
+                            "node": "fractal",
+                            "scale": 0.4,
+                            "seed": 1911,
+                            "smallest": 0.01
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "bombing",
+                      "shape": "leaf",
+                      "cell": 0.025,
+                      "size": [
+                        0.02,
+                        0.045
+                      ],
+                      "width": 0.07,
+                      "density": 0.45,
+                      "seed": 1931,
+                      "output": "mask"
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        {
+                          "pattern": {
+                            "node": "smoothstep",
+                            "from": -0.1,
+                            "to": 0.25,
+                            "input": {
+                              "node": "fractal",
+                              "scale": 0.4,
+                              "seed": 1911,
+                              "smallest": 0.01
+                            }
+                          },
+                          "color_map": [
+                            [
+                              0,
+                              {
+                                "pattern": {
+                                  "node": "fractal",
+                                  "scale": 0.05,
+                                  "seed": 1912,
+                                  "smallest": 0.002
+                                },
+                                "color_map": [
+                                  [
+                                    -0.4,
+                                    "$soil"
+                                  ],
+                                  [
+                                    0.4,
+                                    "$pale"
+                                  ]
+                                ]
+                              }
+                            ],
+                            [
+                              1,
+                              {
+                                "pattern": {
+                                  "node": "fractal",
+                                  "scale": 0.02,
+                                  "seed": 1913,
+                                  "smallest": 0.001
+                                },
+                                "color_map": [
+                                  [
+                                    -0.4,
+                                    "$moss2"
+                                  ],
+                                  [
+                                    0.4,
+                                    "$moss"
+                                  ]
+                                ]
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        1,
+                        {
+                          "pattern": {
+                            "node": "bombing",
+                            "shape": "leaf",
+                            "cell": 0.025,
+                            "size": [
+                              0.02,
+                              0.045
+                            ],
+                            "width": 0.07,
+                            "density": 0.45,
+                            "seed": 1931,
+                            "output": "id"
+                          },
+                          "color_map": [
+                            [
+                              0,
+                              "$leaf2"
+                            ],
+                            [
+                              0.6,
+                              "$pale"
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  {
+                    "pattern": {
+                      "node": "bombing",
+                      "shape": "leaf",
+                      "cell": 0.05,
+                      "size": [
+                        0.03,
+                        0.07
+                      ],
+                      "width": 0.45,
+                      "density": 0.9,
+                      "seed": 1921,
+                      "output": "id"
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        "$leaf2"
+                      ],
+                      [
+                        0.5,
+                        "$leaf"
+                      ],
+                      [
+                        0.9,
+                        "$pale"
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            {
+              "pattern": {
+                "node": "bombing",
+                "shape": "leaf",
+                "cell": 0.06,
+                "size": [
+                  0.05,
+                  0.15
+                ],
+                "width": 0.05,
+                "density": 0.4,
+                "seed": 1941,
+                "output": "id"
+              },
+              "color_map": [
+                [
+                  0,
+                  "$twig"
+                ],
+                [
+                  1,
+                  "$pale"
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.001,
+                {
+                  "node": "bombing",
+                  "shape": "leaf",
+                  "cell": 0.025,
+                  "size": [
+                    0.02,
+                    0.045
+                  ],
+                  "width": 0.07,
+                  "density": 0.45,
+                  "seed": 1931,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.002,
+                {
+                  "node": "bombing",
+                  "shape": "leaf",
+                  "cell": 0.05,
+                  "size": [
+                    0.03,
+                    0.07
+                  ],
+                  "width": 0.45,
+                  "density": 0.9,
+                  "seed": 1921,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.002,
+                {
+                  "node": "bombing",
+                  "shape": "leaf",
+                  "cell": 0.06,
+                  "size": [
+                    0.05,
+                    0.15
+                  ],
+                  "width": 0.05,
+                  "density": 0.4,
+                  "seed": 1941,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.15,
+              "seed": 1951,
+              "smallest": 0.003,
+              "amplitude": 0.006
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:forest_leaves_02",
+        "licence": "CC0",
+        "size": 3.0,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "moss"
+              ],
+              [
+                "variables",
+                "moss2"
+              ],
+              [
+                "variables",
+                "soil"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "leaf"
+              ],
+              [
+                "variables",
+                "leaf2"
+              ],
+              [
+                "variables",
+                "pale"
+              ],
+              [
+                "variables",
+                "twig"
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
+  },
+  "wet_leaf_mat": {
+    "show": "landscape",
+    "doc": "Fallen leaves in winter, wet and matted: dark browns lying thickly over one another, a few paler, decaying into the soil; modelled on Poly Haven's winter_leaves.",
+    "variables": {
+      "leaf": [
+        0.3,
+        0.2,
+        0.13
+      ],
+      "leaf2": [
+        0.2,
+        0.13,
+        0.08
+      ],
+      "pale": [
+        0.4,
+        0.3,
+        0.2
+      ],
+      "dark": [
+        0.1,
+        0.07,
+        0.05
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "bombing",
+          "shape": "leaf",
+          "cell": 0.06,
+          "size": [
+            0.04,
+            0.09
+          ],
+          "width": 0.55,
+          "density": 1.2,
+          "seed": 2031,
+          "output": "mask"
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "bombing",
+                "shape": "leaf",
+                "cell": 0.04,
+                "size": [
+                  0.03,
+                  0.07
+                ],
+                "width": 0.5,
+                "density": 2.2,
+                "seed": 2021,
+                "output": "mask"
+              },
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "fractal",
+                      "scale": 0.1,
+                      "seed": 2011,
+                      "smallest": 0.003
+                    },
+                    "color_map": [
+                      [
+                        -0.4,
+                        "$dark"
+                      ],
+                      [
+                        0.4,
+                        "$leaf2"
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  {
+                    "pattern": {
+                      "node": "bombing",
+                      "shape": "leaf",
+                      "cell": 0.04,
+                      "size": [
+                        0.03,
+                        0.07
+                      ],
+                      "width": 0.5,
+                      "density": 2.2,
+                      "seed": 2021,
+                      "output": "id"
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        "$dark"
+                      ],
+                      [
+                        0.3,
+                        "$leaf2"
+                      ],
+                      [
+                        0.75,
+                        "$leaf"
+                      ],
+                      [
+                        1.0,
+                        "$pale"
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            {
+              "pattern": {
+                "node": "bombing",
+                "shape": "leaf",
+                "cell": 0.06,
+                "size": [
+                  0.04,
+                  0.09
+                ],
+                "width": 0.55,
+                "density": 1.2,
+                "seed": 2031,
+                "output": "id"
+              },
+              "color_map": [
+                [
+                  0,
+                  "$dark"
+                ],
+                [
+                  0.3,
+                  "$leaf2"
+                ],
+                [
+                  0.75,
+                  "$leaf"
+                ],
+                [
+                  1.0,
+                  "$pale"
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0015,
+                {
+                  "node": "bombing",
+                  "shape": "leaf",
+                  "cell": 0.04,
+                  "size": [
+                    0.03,
+                    0.07
+                  ],
+                  "width": 0.5,
+                  "density": 2.2,
+                  "seed": 2021,
+                  "output": "height"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.002,
+                {
+                  "node": "bombing",
+                  "shape": "leaf",
+                  "cell": 0.06,
+                  "size": [
+                    0.04,
+                    0.09
+                  ],
+                  "width": 0.55,
+                  "density": 1.2,
+                  "seed": 2031,
+                  "output": "height"
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:winter_leaves",
+        "licence": "CC0",
+        "size": 2.0,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "leaf"
+              ],
+              [
+                "variables",
+                "leaf2"
+              ],
+              [
+                "variables",
+                "pale"
+              ],
+              [
+                "variables",
+                "dark"
+              ]
+            ],
+            "chroma": 0.08
+          }
+        ]
+      }
+    ]
   }
 }

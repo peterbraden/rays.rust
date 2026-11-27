@@ -109,7 +109,9 @@ Rays.rust is a raytracer written in Rust with the following features:
   materials and the one-object-a-line writer are `scripts/christmas_tree.py` (`decorate(rng,
   add, at, turn)`), shared with `scripts/make-snow-cottage.py`, which writes
   `demo/scenes/snow-cottage.json` (the stone cottage at blue hour with the tree beside it, the
-  moon over it and smoke from its stack, a volume whose density is an `expr` plume; the tree
+  moon over it and smoke from its stack, a volume whose density is an `expr` plume, and a trail of
+  footprints from the door to the tree: a flat `terrain` patch displaced by an `expr` of dents,
+  trodden snow mixed in where they are deep; the tree
   placed by its distance from the camera, `TREE="ahead,right"` to try others; edit the script,
   not the JSON).
   Fixed scenes for measurements (`scripts/variance.sh`) are in demo/benchmarks/. Forests' levels

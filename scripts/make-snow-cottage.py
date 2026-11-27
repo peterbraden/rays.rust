@@ -64,7 +64,7 @@ objects = [
     # Blue hour: the sun just below the horizon to the front left, so its afterglow lights the
     # front of the cottage and the roof takes the blue of the sky.
     {"type": "skysphere", "sun_direction": [-0.85, -0.008, 0.5]},
-    {"type": "plane", "y": 0, "material": "SNOW", "normal": {"pattern": "bumps", "amount": 0.25, "scale": 1.5}},
+    {"type": "plane", "y": -0.004, "material": "SNOW", "normal": {"pattern": "bumps", "amount": 0.25, "scale": 1.5}},
     {"type": "cottage", "style": "stone", "location": [0, 0, 0], "yaw": YAW, "snow": 0.22, "seed": 3,
      # A stack on the far gable only; the near one keeps its window.
      "chimney": "left"},
@@ -146,6 +146,67 @@ objects.append({"type": "volume", "min": [round(SMOKE[0] - 4, 2), round(SMOKE[1]
 # The Christmas tree, dressed, with its presents; a warm lamp just in front of its star.
 star_y = decorate(rng, objects.append, TREE_AT, TURN)
 lamp = [round(q + a, 4) for q, a in zip(turned([0, star_y - 0.35, -0.3], TURN), TREE_AT)]
+
+# Footprints: someone has walked out of the door, across to the tree with the presents and
+# back off towards the camera's left. Each print a dent pressed into the snow, heel and toe,
+# its rim pushed up a little, laid left and right of a wandering path at a stride's spacing;
+# they are a displacement of a terrain patch over the clearing (the plane lies just below).
+door = local(-0.1, 2.5 + 0.275 + 0.5)
+out = local(-0.1, 2.5 + 0.275 + 2.0)
+near_tree = [TREE_AT[0] - 1.2 * math.sin(math.radians(TURN)), 0, TREE_AT[2] - 1.2 * math.cos(math.radians(TURN))]
+away = from_camera(4.0, -2.5)
+path = [door, out, near_tree, from_camera(6.5, 0.5), away]
+
+
+def along(points, step):
+    """Points every `step` metres along a smooth curve through `points` (Catmull-Rom), with the
+    heading there."""
+    pts = [points[0]] + points + [points[-1]]
+    dense = []
+    for i in range(1, len(pts) - 2):
+        p0, p1, p2, p3 = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
+        for k in range(40):
+            t = k / 40
+            dense.append([0.5 * ((2 * p1[j]) + (-p0[j] + p2[j]) * t + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t * t
+                                 + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t ** 3) for j in (0, 2)])
+    out, gone = [], step
+    for a, b in zip(dense, dense[1:]):
+        gone += math.dist(a, b)
+        if gone >= step:
+            gone -= step
+            out.append((b, math.atan2(b[0] - a[0], b[1] - a[1])))
+    return out
+
+
+prints = []
+for k, ((x, z), heading) in enumerate(along(path, 0.36)):
+    side = 0.11 if k % 2 == 0 else -0.11
+    jitter = rng.uniform(-0.03, 0.03)
+    px = x + math.cos(heading) * (side + jitter)
+    pz = z - math.sin(heading) * (side + jitter)
+    turn = heading + (0.12 if side > 0 else -0.12) + rng.uniform(-0.08, 0.08)
+    prints.append((px, pz, math.sin(turn), math.cos(turn), rng.uniform(0.14, 0.2)))
+terms = []
+for px, pz, sn, cs, deep in prints:
+    u = "((x - %.3f) * %.4f + (z - %.3f) * %.4f)" % (px, sn, pz, cs)   # along the foot
+    v = "((x - %.3f) * %.4f - (z - %.3f) * %.4f)" % (px, cs, pz, sn)   # across it
+    # A boot's outline: longer than wide, the waist narrower than heel and toe.
+    w = "(0.07 - 0.012 * exp(-sqr(%s / 0.035)))" % u
+    d = "(sqr(%s / 0.17) + sqr(%s / %s))" % (u, v, w)
+    terms.append("%.3f * (0.35 * exp(-sqr((sqrt(%s) - 1.4) / 0.3)) - exp(-sqr(sqr(%s))))" % (deep, d, d))
+# And the snow between them trodden and kicked about: a shallow trough along the way.
+for (x, z), heading in along(path, 0.18):
+    terms.append("-0.05 * exp(-(sqr(x - %.3f) + sqr(z - %.3f)) / 0.035)" % (x, z))
+FOOTPRINTS = {"node": "expr", "expr": " + ".join(terms), "range": [-0.3, 0.08]}
+materials["TRODDEN_SNOW"] = {"type": "snow", "preset": "settled", "grain_size": 1.5, "soot": 150, "dust": 40, "sparkle": 0.02, "seed": 2}
+xs = [p[0] for p in prints]
+zs = [p[1] for p in prints]
+objects.append({"type": "terrain", "heightmap": {"type": "flat", "min": [round(min(xs) - 1, 2), round(min(zs) - 1, 2)],
+                                                  "max": [round(max(xs) + 1, 2), round(max(zs) + 1, 2)], "cell_size": 0.25},
+                "displacement": FOOTPRINTS,
+                # Trodden snow is packed: its grains bonded coarser, a little greyer.
+                "material": {"type": "mix", "materials": ["SNOW", "TRODDEN_SNOW"],
+                             "amount": {"pattern": FOOTPRINTS, "color_map": [[-0.1, [1, 1, 1]], [-0.01, [0, 0, 0]]]}}, "normal": {"pattern": "bumps", "amount": 0.25, "scale": 1.5}})
 
 scene = {
     "width": WIDTH,

@@ -202,8 +202,18 @@ impl BenardAltocumulus {
         (shared::altocumulus::Benard { tops: grid, ..self.recipe() }, tops)
     }
 
-    /// The map of how high cloud can be over each texel, a quarter of a cell across (or
-    /// coarser, to keep it to a thousand a side). Sampled, not derived: the layer's highest
+    /// Texels a cell across in the map of tops (`tops`): four, or with turrets sixteen. A
+    /// texel's top is its neighbours' highest, so a turret raises the columns about it to its
+    /// own height, and turrets rise six times the layer: at a quarter of a cell, 99% of a walk's
+    /// densities through altocumulus castellanus were asked in clear air under such tops
+    /// (`measure_cloud_walks`). At a sixteenth, 2.7 times fewer, and the render 17% quicker on
+    /// the GPU; for plain domes, 2% at most, for the map's four seconds more.
+    fn texels_a_cell(&self) -> f64 {
+        if self.castellanus > 0. { 16. } else { 4. }
+    }
+
+    /// The map of how high cloud can be over each texel, `texels_a_cell` to a cell (or coarser,
+    /// to keep it to two thousand a side). Sampled, not derived: the layer's highest
     /// (`Benard::column_top`) at 25 points of every texel, its edges included, for cloudlets
     /// no smaller than the real ones and at least `LEAST_REACH` across; a texel's top is the
     /// highest of its own samples and its neighbours', and a little over. So it bounds the
@@ -221,12 +231,13 @@ impl BenardAltocumulus {
             let record = self.record(None);
             let recipe = pathtrace::load_benard(&record, 0);
             let tables = pathtrace::FloatTables(&record);
-            let n = ((2. * self.extent / (self.cell_size / 4.)).ceil() as usize).clamp(1, 1024);
+            let n = ((2. * self.extent / (self.cell_size / self.texels_a_cell())).ceil() as usize).clamp(1, 2048);
             let texel = 2. * self.extent / n as f64;
-            // Coarser than half a cell, a texel nearly always holds some cloudlet: no map is
-            // worth its three seconds then (cells a hundred metres across over a hundred
-            // kilometres: cirrocumulus), and the walk takes the slab.
-            if texel > self.cell_size / 2. {
+            // Coarser than a quarter of a cell, a texel nearly always holds some cloudlet: no
+            // map is worth its seconds then (cells a hundred and sixty metres across over a
+            // hundred and twenty kilometres: cirrocumulus, whose walks ask 7 densities a ray
+            // without one), and the walk takes the slab.
+            if texel > self.cell_size / 4. {
                 return Tops { origin: self.center - Vector2::new(self.extent, self.extent), texel, n: 0, tops: vec![] };
             }
             let origin = self.center - Vector2::new(self.extent, self.extent);

@@ -411,6 +411,22 @@ scree's cobbles were also set back to 2-5 cm and held, as its fit had grown them
 the scan (fine gravel) doesn't have. Refitted so: 1.99 → 1.67 on fresh patches, applied; its fit made the
 stones' facets more contrasting than the scan's, polished-looking close up.
 
+### Choosing scans
+
+Five more first fits were all left unapplied, though each scored better: asphalt (4.62 against
+8.33 as written), plaster (12.3 against 67.0), concrete (1.10 against 6.15), limestone_cliff
+(1.13 against 15.1) and gneiss (1.05 against 7.59). The man-made presets are generic clean
+surfaces and their scans one dirty example each (green-stained grey plaster, board-marked
+concrete), which the fits imitated in streaks and blotches; asphalt's aggregate grew into a
+mosaic of chips where the preset was already close. The cliffs' scans were the wrong rocks, a
+brown iron-stained face and dark rock strewn with leaves, and the fits turned limestone brown and
+wiped out the gneiss's banding. A scan must be of the material the preset names: the same rock,
+or for a generic surface a clean, typical one. Two presets were written for scans instead and
+fitted: crazed_sandstone (Poly Haven's rock_boulder_cracked: tan sandstone crazed into plates,
+pitted along its cracks; 4.96 → 1.30) and mossy_mud (brown_mud_leaves_01: red-brown mud with
+patches of small leaves, by `bombing`; 14.4 → 1.06, its smallest leaves a dense litter close up
+where the scan has bare mud between sprigs).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

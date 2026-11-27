@@ -2353,7 +2353,57 @@
         "graph": "$relief",
         "amount": 1
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Leather037",
+        "licence": "CC0",
+        "size": 0.5,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1,
+                "color_map",
+                1,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
   },
   "cork": {
     "doc": "Agglomerated cork: granules of bark pressed together, each its own shade, with dark gaps between.",
@@ -2462,7 +2512,67 @@
         },
         "amount": 1
       }
-    }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Cork003",
+        "licence": "CC0",
+        "size": 0.5,
+        "usage": {},
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.5,
+            "max": 2,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                0,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                1,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                0,
+                1,
+                "color_map",
+                2,
+                1
+              ],
+              [
+                "material",
+                "albedo",
+                "color_map",
+                1,
+                1
+              ]
+            ],
+            "chroma": 0.1
+          }
+        ]
+      }
+    ]
   },
   "car_paint": {
     "doc": "Glossy red car paint with the faint orange-peel waviness of a sprayed clear coat.",

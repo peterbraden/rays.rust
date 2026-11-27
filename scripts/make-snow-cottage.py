@@ -23,7 +23,10 @@ from christmas_tree import MATERIALS, decorate, turned, write_scene  # noqa: E40
 rng = random.Random(25)
 
 # The camera, looking past the tree at the cottage, the sky's afterglow low on the left.
-camera = {"location": [-6.0, 1.5, 11.5], "lookat": [1.4, 2.6, 1.8], "up": [0, 1, 0], "angle": 0.74, "aperture": 0.02}
+camera = {"location": [-6.0, 1.5, 11.5], "lookat": [1.4, 3.4, 1.8], "up": [0, 1, 0], "angle": 0.8, "aperture": 0.02}
+WIDTH, HEIGHT = 960, 600
+# Where the moon is in the picture: (-1, -1) bottom left to (1, 1) top right.
+MOON_ON_SCREEN = (-0.05, 1.3)
 
 # The cottage, turned to be seen three-quarter on (its front about 45 degrees from the
 # camera): its front, and its right-hand gable with its chimney. `local` places a point given in the cottage's own frame (x along the ridge, z
@@ -62,7 +65,9 @@ objects = [
     # front of the cottage and the roof takes the blue of the sky.
     {"type": "skysphere", "sun_direction": [-0.85, -0.008, 0.5]},
     {"type": "plane", "y": 0, "material": "SNOW", "normal": {"pattern": "bumps", "amount": 0.25, "scale": 1.5}},
-    {"type": "cottage", "style": "stone", "location": [0, 0, 0], "yaw": YAW, "snow": 0.22, "seed": 3},
+    {"type": "cottage", "style": "stone", "location": [0, 0, 0], "yaw": YAW, "snow": 0.22, "seed": 3,
+     # A stack on the far gable only; the near one keeps its window.
+     "chimney": "left"},
     # Trees framing the view, and boulders under the snow.
     {"type": "tree", "species": "norway-spruce", "seed": 31, "location": [-9.5, 0, 7.5], "bark": "SNOWY_BARK", "leaves": LADEN,
      "params": {"scale": 4.2, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}},
@@ -95,13 +100,56 @@ for i, (x, z, h, species) in enumerate([
     objects.append({"type": "tree", "species": species, "seed": 40 + i, "location": local(x, z), "bark": "SNOWY_BARK",
                     "leaves": LADEN, "params": {"scale": h, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}})
 
+def on_screen(sx, sy):
+    """The direction from the camera to the point (sx, sy) of its picture, each from -1 (left,
+    bottom) to 1 (right, top); the camera's `angle` is its horizontal field of view."""
+    eye, at = camera["location"], camera["lookat"]
+    f = [at[i] - eye[i] for i in range(3)]
+    n = math.sqrt(sum(c * c for c in f))
+    f = [c / n for c in f]
+    right = [-f[2], 0, f[0]]
+    n = math.hypot(right[0], right[2])
+    right = [c / n for c in right]
+    up = [right[1] * f[2] - right[2] * f[1], right[2] * f[0] - right[0] * f[2], right[0] * f[1] - right[1] * f[0]]
+    half = math.tan(camera["angle"] / 2)
+    aspect = HEIGHT / WIDTH
+    d = [f[i] + right[i] * sx * half + up[i] * sy * half * aspect for i in range(3)]
+    n = math.sqrt(sum(c * c for c in d))
+    return [round(c / n, 4) for c in d]
+
+
+# The moon, rising nearly full opposite the set sun, in the sky above the cottage: three
+# times its true size, as a longer lens would show it against the cottage.
+objects.append({"type": "moon", "seed": 1, "radius": 3 * 1737400, "direction": on_screen(*MOON_ON_SCREEN),
+                "from": camera["location"]})
+
+# Smoke from the far stack's pot: a plume rising, widening and thinning as it goes, carried
+# off on a light air and broken into puffs. Where the pot is, from the cottage's dimensions
+# (`Cottage::stone`: walls 2.4 m, 5 m deep between centres, 0.55 thick; pitch 40 degrees;
+# slates 0.15; the stack 0.75 over the crest, its cap 0.1, a pot about 0.4).
+pitch = math.radians(40)
+crest = 2.4 + (2.5 + 0.275) * math.tan(pitch) + 0.15 / math.cos(pitch)
+pot = local(-(3.75 + 0.275) + 0.3, 0.2)
+SMOKE = [pot[0], crest + 0.75 + 0.1 + 0.38, pot[2]]
+wind = [0.3, 0.12]  # metres across per metre risen: drifting right, across the sky
+h = "max(y - %.3f, 0)" % SMOKE[1]
+dx = "(x - %.3f - %.2f * %s)" % (SMOKE[0], wind[0], h)
+dz = "(z - %.3f - %.2f * %s)" % (SMOKE[2], wind[1], h)
+r = "(0.12 + 0.24 * %s)" % h
+smoke = ("12 * min(1, max(0, (y - %.3f) * 25)) * exp(-(%s * %s + %s * %s) / (%s * %s)) * (0.12 / %s) * exp(-%s / 6)"
+         " * (0.25 + 1.5 * max(0, noise3d(x * 2.5, y * 2.5 - 7, z * 2.5) + 0.25))") % (SMOKE[1], dx, dx, dz, dz, r, r, r, h)
+objects.append({"type": "volume", "min": [round(SMOKE[0] - 4, 2), round(SMOKE[1] - 0.05, 2), round(SMOKE[2] - 4, 2)],
+                "max": [round(SMOKE[0] + 4, 2), round(SMOKE[1] + 8, 2), round(SMOKE[2] + 4, 2)],
+                "density": {"node": "expr", "expr": smoke, "range": [0, 24]},
+                "albedo": [0.9, 0.9, 0.91], "g": 0.5})
+
 # The Christmas tree, dressed, with its presents; a warm lamp just in front of its star.
 star_y = decorate(rng, objects.append, TREE_AT, TURN)
 lamp = [round(q + a, 4) for q, a in zip(turned([0, star_y - 0.35, -0.3], TURN), TREE_AT)]
 
 scene = {
-    "width": 960,
-    "height": 600,
+    "width": WIDTH,
+    "height": HEIGHT,
     "supersamples": 256,
     "chunk_size": 32,
     "samples_per_chunk": 4,
@@ -114,6 +162,9 @@ scene = {
     # each a halo of its own colour, as in a photograph.
     "output": {"exposure": 6, "tonemap": "filmic", "glare": True},
     "camera": camera,
+    # The sun, below the horizon: no light of its own here, but the moon reflects it. Its
+    # intensity sets the sky's brightness: this one leaves it at a skysphere's default (20).
+    "sun": {"intensity": 7.663},
     "materials": materials,
     "objects": objects,
     "lights": [{"location": lamp, "intensity": 1.2, "temperature": 2600}],

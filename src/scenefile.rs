@@ -4203,14 +4203,16 @@ impl SceneFile {
     /// `"pitch"` (degrees, 38, 40), `"overhang"` (0.6, 0.2) and `"gable_overhang"` (0.5, 0.06),
     /// `"log_radius"` (0.13), `"wall_thickness"` (stone, 0.55), `"plinth"` (0.4, 0), `"snow"`
     /// (its depth on the roof, 0.3), `"icicles"` (0 to 1, 0.5), `"melt"` (how far the house's warmth
-    /// has melted the roof's snow, 0 to 1, 0.2), `"chimney"` and `"wreath"`
+    /// has melted the roof's snow, 0 to 1, 0.2), `"chimney"` (true, false, or
+    /// which gables carry a stack: "both", "left", "right", "none"; a gable with one has no
+    /// window) and `"wreath"`
     /// (true). Each part has a material of its own, replaced by a name or a definition in
     /// `"materials"`: `logs`, `log_ends`, `chinking`, `stone` (and for rubble `stone_2`,
     /// `stone_3`), `dressed_stone`, `mortar`, `pots`, `roof`, `trim`, `door`, `iron`, `snow`,
     /// `icicles`, `wreath`, `ribbon`, and `window`: by default glass over a lamplit room,
     /// `"light"` (4) bright at `"light_temperature"` (2700 K); `"lit": false` for dark glass.
     pub fn parse_cottage(o: &Value, materials: &Map<String, Value>) -> Vec<Arc<SceneObject>> {
-        use crate::procedural::building::{Cottage, Part, Style};
+        use crate::procedural::building::{Chimney, Cottage, Part, Style};
         let d = match o["style"].as_str().unwrap_or("log") {
             "log" => Cottage::default(),
             "stone" => Cottage::stone(),
@@ -4226,7 +4228,17 @@ impl SceneFile {
             overhang: n("overhang", d.overhang).max(0.), gable_overhang: n("gable_overhang", d.gable_overhang).max(if stone { 0. } else { 0.2 }),
             log_radius: n("log_radius", d.log_radius).clamp(0.05, 0.4), plinth: n("plinth", d.plinth).max(0.),
             snow: n("snow", d.snow).max(0.), icicles: n("icicles", d.icicles).clamp(0., 1.), melt: n("melt", d.melt).clamp(0., 1.),
-            chimney: o["chimney"].as_bool().unwrap_or(d.chimney), wreath: o["wreath"].as_bool().unwrap_or(d.wreath),
+            chimney: match &o["chimney"] {
+                Value::Null => d.chimney,
+                Value::Bool(true) => Chimney::Both,
+                Value::Bool(false) => Chimney::None,
+                Value::String(c) => match c.as_str() {
+                    "both" => Chimney::Both, "left" => Chimney::Left, "right" => Chimney::Right, "none" => Chimney::None,
+                    x => panic!("Unknown cottage chimney '{}': expected both, left, right or none", x),
+                },
+                x => panic!("A cottage's chimney is true, false, or \"both\", \"left\", \"right\" or \"none\", not {}", x),
+            },
+            wreath: o["wreath"].as_bool().unwrap_or(d.wreath),
             seed,
         };
         let built = cottage.build();

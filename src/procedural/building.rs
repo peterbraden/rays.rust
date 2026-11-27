@@ -696,6 +696,23 @@ struct Wall {
     openings: Vec<Opening>,
 }
 
+/// Which gables carry a chimney stack: the gable at -x (`Left`, seen from the front), at +x
+/// (`Right`), both, or neither.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Chimney { None, Left, Right, Both }
+
+impl Chimney {
+    /// Whether the gable at `end` (-1 or +1 along x) has a stack.
+    pub fn on(&self, end: f64) -> bool {
+        match self {
+            Chimney::None => false,
+            Chimney::Both => true,
+            Chimney::Left => end < 0.,
+            Chimney::Right => end > 0.,
+        }
+    }
+}
+
 /// What a cottage's walls are built of.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Style {
@@ -730,7 +747,9 @@ pub struct Cottage {
     pub icicles: f64,
     /// How much the house's warmth has melted the snow on its roof, 0 to 1.
     pub melt: f64,
-    pub chimney: bool,
+    /// Which chimneys it has: a stone cottage's stand on its gables, a log cottage's goes
+    /// through its roof (any but `None`).
+    pub chimney: Chimney,
     pub wreath: bool,
     pub seed: u64,
 }
@@ -740,14 +759,15 @@ impl Default for Cottage {
         Cottage {
             style: Style::Log, wall_thickness: 0.55,
             width: 7., depth: 5., wall_height: 2.5, pitch: 38., overhang: 0.6, gable_overhang: 0.5,
-            log_radius: 0.13, plinth: 0.4, snow: 0.3, icicles: 0.5, melt: 0.2, chimney: true, wreath: true, seed: 0,
+            log_radius: 0.13, plinth: 0.4, snow: 0.3, icicles: 0.5, melt: 0.2, chimney: Chimney::Both, wreath: true, seed: 0,
         }
     }
 }
 
 impl Cottage {
     /// A stone cottage of the British and Irish uplands: long and low, thick rubble walls,
-    /// small deep-set windows, a slate roof barely overhanging, a chimney on each gable.
+    /// small deep-set windows, a slate roof barely overhanging, a chimney on each gable (and so no
+    /// window in either).
     pub fn stone() -> Cottage {
         Cottage {
             style: Style::Stone, wall_thickness: 0.55,
@@ -828,8 +848,10 @@ impl Cottage {
         }
         // A window at the back, and in each gable.
         walls[1].openings.push(window(0.));
-        walls[2].openings.push(window(0.));
-        walls[3].openings.push(window(0.));
+        // A window in each gable; but a gable with a stack has its fireplace there, so none.
+        let stacked = |end: f64| self.style == Style::Stone && self.chimney.on(end);
+        if !stacked(1.) { walls[2].openings.push(window(0.)); }
+        if !stacked(-1.) { walls[3].openings.push(window(0.)); }
         walls
     }
 
@@ -889,8 +911,8 @@ impl Cottage {
                 // sides meet at the ridge at their mean. The house's warmth melts it in patches,
                 // most about the chimney stacks.
                 let deep = self.snow * if side > 0. { 1.12 } else { 0.85 };
-                let stacks: Vec<f64> = if self.chimney && self.style == Style::Stone {
-                    [1., -1.].iter().map(|e| e * (self.width / 2. + self.outer() - 0.3)).collect()
+                let stacks: Vec<f64> = if self.style == Style::Stone {
+                    [1., -1.].iter().filter(|&&e| self.chimney.on(e)).map(|e| e * (self.width / 2. + self.outer() - 0.3)).collect()
                 } else { vec![] };
                 let warm = |p: &V| stacks.iter().map(|&x| {
                     let d = ((p.x - x).abs() - 0.3).max(0.).hypot((p.z.abs() - 0.42).max(0.));
@@ -926,13 +948,13 @@ impl Cottage {
             parts.add(Part::Pots, ridge);
         }
 
-        // The chimney: on a stone cottage a stack on each gable, else through the back of the
-        // roof near one gable.
-        if self.chimney && self.style == Style::Stone {
-            for end in [1., -1.] {
+        // The chimney: on a stone cottage a stack on a gable or on each, else through the back
+        // of the roof near one gable.
+        if self.style == Style::Stone {
+            for end in [1., -1.].into_iter().filter(|&e| self.chimney.on(e)) {
                 self.gable_stack(&mut parts, &mut snow, end, thick, &mut rng, &noise);
             }
-        } else if self.chimney {
+        } else if self.chimney != Chimney::None {
             let (cx, cz, w) = (self.width / 2. - 1.1, -0.45, 0.36);
             let height = self.ridge() + thick / cos + 0.8;
             masonry(&mut parts, V::new(cx - w, top - 0.3, cz - w), V::new(cx + w, height, cz + w), 0.2, &mut rng, &noise);
@@ -1592,8 +1614,8 @@ mod tests {
         }
     }
 
-    /// A stone cottage has its rubble, quoins, mortar and chimney pots, five lit windows facing
-    /// out, and no stone rising through the roof.
+    /// A stone cottage has its rubble, quoins, mortar and chimney pots, its lit windows facing
+    /// out (three, none being in a gable with a stack), and no stone rising through the roof.
     #[test]
     fn test_a_stone_cottage_is_built_under_its_roof() {
         let c = Cottage::stone();
@@ -1601,7 +1623,7 @@ mod tests {
         for part in [Part::Stone, Part::Stone2, Part::Stone3, Part::Dressed, Part::Mortar, Part::Pots, Part::Roof, Part::Snow] {
             assert!(built.parts.meshes.contains_key(&part), "no {:?}", part);
         }
-        assert_eq!(built.windows.len(), 5);
+        assert_eq!(built.windows.len(), 3);
         for w in &built.windows {
             let patch = crate::shapes::bilinear::BilinearPatch::new(w[0], w[1], w[2], w[3]);
             let centre = (w[0] + w[3]) / 2.;
@@ -1616,6 +1638,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A gable with a chimney stack has no window under it; one without has.
+    #[test]
+    fn test_a_gable_with_a_stack_has_no_window() {
+        let windows = |chimney| Cottage { chimney, ..Cottage::stone() }.build().windows;
+        let in_gable = |w: &[V; 4], end: f64| ((w[0].x + w[3].x) / 2. * end) > Cottage::stone().width / 2. - 0.5;
+        let left = windows(Chimney::Left);
+        assert_eq!(left.len(), 4);
+        assert!(left.iter().any(|w| in_gable(w, 1.)) && !left.iter().any(|w| in_gable(w, -1.)));
+        assert_eq!(windows(Chimney::None).len(), 5);
     }
 
     /// The windows' lights face out of the walls they are in.
@@ -1648,7 +1681,7 @@ mod tests {
     /// roof's top.
     #[test]
     fn test_roof_snow_lies_on_the_roof() {
-        let c = Cottage { chimney: false, ..Cottage::default() };
+        let c = Cottage { chimney: Chimney::None, ..Cottage::default() };
         let built = c.build();
         let snow = &built.parts.meshes[&Part::Snow];
         let top = snow.iter().flat_map(|m| m.positions.iter()).map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);

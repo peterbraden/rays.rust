@@ -2413,6 +2413,47 @@ mod tests {
     /// samples the sky as the CPU does; skipped without a GPU adapter, such as Mesa's
     /// lavapipe).
     #[test]
+    fn test_rock_on_the_device_is_the_cpus() {
+        // The procedural rock in the kernels (`pathtrace::MAT_ROCK`, `shared::rock`) on the
+        // device: the CPU's kernels' picture, the same code in other arithmetic.
+        let s = SceneFile::from_string(r#"{
+            "width": 24, "height": 16, "supersamples": 64, "background": [0.2, 0.25, 0.3], "max_depth": 6,
+            "sun": { "direction": [-1, 2, -1], "intensity": 2 },
+            "lights": [ { "location": [1, 2, -1], "intensity": 3 } ],
+            "camera": { "location": [0, 1.5, -4], "lookat": [0, 0.4, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": {
+                "R": { "type": "rock", "preset": "sandstone", "scale": 0.3, "bump": 0.6, "seed": 4, "pits": 0.5, "fractal": 0.4,
+                       "layers": [[0, [0.6, 0.4, 0.3]], [0.8, [0.5, 0.5, 0.5]]], "varnish": 0.5 },
+                "G": { "type": "rock", "preset": "granite", "scale": 0.5, "seed": 2, "lichen": 0.3 }
+            },
+            "objects": [
+                { "type": "plane", "y": 0, "material": "R" },
+                { "type": "sphere", "location": [-0.5, 0.5, 0], "radius": 0.5, "material": "G" }
+            ]
+        }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        assert!(flat.hosts.is_empty(), "the rock is the kernels'");
+        let mut gpu = match GpuRenderer::new(&s, &flat) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            },
+        };
+        let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
+        gpu.render(&s, &flat, &rc, |_| ());
+        let gpu_image = rc.lock().unwrap().snapshot();
+        let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
+        crate::rendercontext::render(&s, &rc, Some(&crate::wavefront::integrator::Kernels::new(&s, &flat).unwrap()), |_| None::<()>, |_| ());
+        let cpu_image = rc.lock().unwrap().snapshot();
+        let total = |img: &crate::output::LinearImage| img.pixels.iter().fold(Vector3::zeros(), |a, c| a + c.rgb);
+        let (g, c) = (total(&gpu_image), total(&cpu_image));
+        for ch in 0..3 {
+            assert!((g[ch] - c[ch]).abs() < 0.02 * c[ch], "channel {}: GPU {} vs CPU {}", ch, g[ch], c[ch]);
+        }
+    }
+
+    #[test]
     fn test_agrees_with_the_wavefront_integrator() {
         let s = scene();
         let flat = FlatScene::build(&s).unwrap();

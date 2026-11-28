@@ -65,6 +65,8 @@ fn push_material(m: &FlatMaterial, out: &mut Vec<GpuMaterial>, kernels: &[Option
         // The kernels stop a path here for the host (`host`).
         // unless they have a kernel of this material after all (`host_kernels`).
         FlatMaterial::Host { object } => kernels[*object as usize].unwrap_or(GpuMaterial { kind: pathtrace::MAT_HOST, a: *object, ..blank }),
+        // Its record's place set once there are tables (`Buffers::build`).
+        FlatMaterial::Rock { .. } => GpuMaterial { kind: pathtrace::MAT_ROCK, ..blank },
     };
     out[index as usize] = g;
     index
@@ -691,6 +693,19 @@ impl Buffers {
                 tables.extend(rgb(&g.ice[0])); tables.extend(rgb(&g.ice[1]));
                 tables.extend([g.ice_index as f32, g.ice_roughness[0] as f32, g.ice_roughness[1] as f32, f32::from_bits(covers_at)]);
                 materials[*material as usize].a = block;
+            }
+        }
+        // The rocks' records (`pathtrace::load_rock`), each after the camera's place in the
+        // kernels' frame and how wide a pixel is at a unit's distance, times the square root of
+        // the samples a pixel (`pathtrace::ROCK_FOOTPRINT`: the renderer's `Rock::scatter`
+        // filters the relief to that), or 0 for no filtering.
+        for (m, material) in flat.materials.iter().enumerate() {
+            if let FlatMaterial::Rock { record } = material {
+                let block = tables.len() as u32;
+                let (location, spread) = s.footprint.as_ref().map_or((*origin, 0.), |f| (f.location, f.spread * (s.render.samples_per_pixel() as f64).sqrt()));
+                tables.extend([(location.x - origin.x) as f32, (location.y - origin.y) as f32, (location.z - origin.z) as f32, spread as f32]);
+                tables.extend(record);
+                materials[material_index[m] as usize].a = block;
             }
         }
         let cdf_off = tables.len() as u32;

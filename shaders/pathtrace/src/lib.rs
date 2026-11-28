@@ -243,6 +243,67 @@ pub const MAT_MEDIUM: u32 = 9;
 /// (`GROUND_*`), its water material is `b` (`NO_MATERIAL` for none). Resolved at each hit to
 /// one material (`ground_material`).
 pub const MAT_GROUND: u32 = 10;
+/// The procedural rock (the renderer's `material::rock`, by `shared::rock`): at the hit, its
+/// albedo and its bumped normal, then shaded as diffuse. `a` is where its block is in `tables`
+/// (`ROCK_FOOTPRINT`, then its record: `load_rock`).
+pub const MAT_ROCK: u32 = 11;
+/// A rock's block begins with the camera's place (in the frame about the origin) and how wide
+/// a pixel is a unit away times the square root of the samples a pixel, for its relief's
+/// fractal detail to stop at the pixel's size (0 for no filtering).
+pub const ROCK_FOOTPRINT: u32 = 4;
+/// A rock's record (the renderer's `Rock::export`): its eight colours, 22 numbers, the
+/// noise's offset (3) and octaves' rotation (9), its three thresholds, whether it has dark
+/// and light grains, how many beds and layers; then the permutation (512), the fractal
+/// rotations (144), the beds (3 each) and the layers (4 each).
+pub const ROCK_HEADER: u32 = 65;
+
+/// The rock whose block is at `block`, and its footprint (`ROCK_FOOTPRINT`).
+pub fn load_rock(tables: &[f32], block: u32) -> (shared::rock::Rock<f32>, Vec4) {
+    let footprint = Vec4::new(at(tables, block), at(tables, block + 1), at(tables, block + 2), at(tables, block + 3));
+    let b = block + ROCK_FOOTPRINT;
+    let n = b + 24;
+    let bed_count = at(tables, b + 63) as u32;
+    let perm = b + ROCK_HEADER;
+    let rock = shared::rock::Rock {
+        color: rock_rgb(tables, b), secondary: rock_rgb(tables, b + 3), dark_grain: rock_rgb(tables, b + 6), light_grain: rock_rgb(tables, b + 9),
+        strata_color: rock_rgb(tables, b + 12), lichen_color: rock_rgb(tables, b + 15), variety_color: rock_rgb(tables, b + 18),
+        varnish_color: rock_rgb(tables, b + 21),
+        grain_size: at(tables, n), strata_spacing: at(tables, n + 1), strata_amount: at(tables, n + 2), bump: at(tables, n + 3),
+        bump_size: at(tables, n + 4), cracks: at(tables, n + 5), scale: at(tables, n + 6), weathering: at(tables, n + 7),
+        lichen: at(tables, n + 8), wetness: at(tables, n + 9), layer_warp: at(tables, n + 10), variety: at(tables, n + 11),
+        varnish: at(tables, n + 12), flutes: at(tables, n + 13), cross_bedding: at(tables, n + 14), pits: at(tables, n + 15),
+        pit_size: at(tables, n + 16), fractal: at(tables, n + 17), fractal_size: at(tables, n + 18), fractal_h: at(tables, n + 19),
+        crackle: at(tables, n + 20), crackle_size: at(tables, n + 21),
+        offset: rock_rgb(tables, n + 22),
+        rotation: [at(tables, n + 25), at(tables, n + 26), at(tables, n + 27), at(tables, n + 28), at(tables, n + 29),
+                   at(tables, n + 30), at(tables, n + 31), at(tables, n + 32), at(tables, n + 33)],
+        dark_threshold: at(tables, n + 34), light_threshold: at(tables, n + 35), lichen_threshold: at(tables, n + 36),
+        dark_grains: at(tables, n + 37) > 0.5, light_grains: at(tables, n + 38) > 0.5,
+        perm, rotations: perm + 512, beds: perm + 656, bed_count,
+        layers: perm + 656 + 3 * bed_count, layer_count: at(tables, b + 64) as u32,
+    };
+    (rock, footprint)
+}
+
+/// Three numbers at `i` in `tables`, as `shared::rock` takes a colour or a point.
+fn rock_rgb(tables: &[f32], i: u32) -> (f32, f32, f32) {
+    (at(tables, i), at(tables, i + 1), at(tables, i + 2))
+}
+
+/// A rock at `point` (in the frame about the origin), seen along `rd` with shading normal `ns`:
+/// its albedo, and its bumped normal facing the ray, as the renderer's `Rock::scatter` finds
+/// them.
+pub fn rock_at(s: &Scene, block: u32, point: Vec3, rd: Vec3, ns: Vec3) -> (Vec3, Vec3) {
+    let (rock, footprint) = load_rock(s.tables, block);
+    let facing = if ns.dot(rd) > 0.0 { -ns } else { ns };
+    let width = (point - footprint.xyz()).length() * footprint.w / rd.normalize().dot(facing).abs().max(0.2);
+    let p = world(s, point);
+    let (p, facing3) = ((p.x, p.y, p.z), (facing.x, facing.y, facing.z));
+    let t = FloatTables(s.tables);
+    let n = rock.bumped_normal(&t, p, facing3, width);
+    let c = rock.albedo_after(&t, p, n, rock.albedo_before(&t, p));
+    (Vec3::new(c.0, c.1, c.2), Vec3::new(n.0, n.1, n.2))
+}
 pub const NO_MATERIAL: u32 = u32::MAX;
 /// A ground's block: snow's albedo settled and firn (3 each), ice's white and blue (3 each),
 /// ice's refractive index, its roughness white and blue, and where the covers are (bits).
@@ -3389,6 +3450,9 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
     let medium = s.params.media.x + (hit.prim & 0xff) * MEDIUM_SIZE;
     let (mut hit_ng, mut hit_ns) = (-rd, -rd);
     let mut mat = Material { kind: MAT_MEDIUM, a: 0, b: 0, pad: 0, c0: Vec4::ZERO, c1: Vec4::ZERO, p: Vec4::ZERO };
+    // A rock, shaded as the renderer's `Rock::scatter` is: diffuse about its bumped normal,
+    // its lights sampled alone, its bounce mirrored back out where the bump turned it in.
+    let mut rock = false;
     if !in_medium {
         let (g, n) = normals(s, hit.prim, ro, rd, p.hit);
         hit_ng = g;
@@ -3398,6 +3462,12 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
         mat = at(s.materials, m);
         if mat.kind == MAT_GROUND {
             mat = ground_material(s, &mat, hit.prim, p.hit, &mut rng);
+        }
+        if mat.kind == MAT_ROCK {
+            let (albedo, n) = rock_at(s, mat.a, point, rd, hit_ns);
+            hit_ns = n;
+            rock = true;
+            mat = Material { kind: MAT_DIFFUSE, a: 0, b: 0, pad: 0, c0: albedo.extend(0.0), c1: Vec4::ZERO, p: Vec4::ZERO };
         }
         if mat.kind == MAT_EMITTER {
             let le = emitted(s, m, hit_ns, -rd);
@@ -3419,7 +3489,9 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
     }
     let wo = -rd;
     let ng = if hit_ng.dot(wo) < 0.0 { -hit_ng } else { hit_ng };
-    let ns = if hit_ns.dot(wo) < 0.0 { -hit_ns } else { hit_ns };
+    // (A rock's bumped normal faces the ray's side of the surface already, and may lean away
+    // from the ray itself at a glance, which the renderer's rock leaves as it is.)
+    let ns = if !rock && hit_ns.dot(wo) < 0.0 { -hit_ns } else { hit_ns };
     let eps = offset_for(s, point);
     // (A medium has no surface to stand off.)
     let above = if in_medium { point } else { point + ng * eps };
@@ -3546,7 +3618,7 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
     }
     // A medium's lights, like the sea's, are counted by sampling them alone, and the sun as a
     // point; the sky is found by the path's next ray.
-    let exclusive = water || in_medium;
+    let exclusive = water || in_medium || rock;
     // Direct light, one shadow ray at a time, with one evaluation of the lobe and one call
     // of `occluded` (so one copy of each once rust-gpu inlines everything): every point
     // light, then the sun, one area light and the sky. Each gives a direction, a distance,
@@ -3732,6 +3804,24 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
         return carry_on(p, from, reflected.normalize(), beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED, 0.0, depth + 1, q0, q1);
     }
     let u = decide(s, pixel, p.state.w, depth, SOBOL_SCATTER, &mut rng);
+    if rock {
+        // Cosine-weighted about the bumped normal, weighted by the albedo; mirrored in the
+        // surface where the bump tilted it into it (`Rock::scatter`).
+        let mut wi = lobe.sample(wo, u.x, u.y, u.z);
+        if wi.dot(wi) == 0.0 {
+            wi = ns;
+        }
+        let into = wi.dot(ng);
+        if into < 0.0 {
+            wi -= ng * (2.0 * into);
+        }
+        let weight = mat.c0.xyz();
+        if !survives(s, depth, weight, &mut beta, &mut rng) {
+            return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+        }
+        beta *= weight;
+        return carry_on(p, point + ng * eps, wi.normalize(), beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED, 0.0, depth + 1, q0, q1);
+    }
     let wi = lobe.sample(wo, u.x, u.y, u.z);
     let (f, pdf) = lobe.eval_pdf(wo, wi);
     if wi.dot(wi) == 0.0 || pdf <= 0.0 {

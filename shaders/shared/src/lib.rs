@@ -17,8 +17,8 @@
 //!   naga take (the renderer's CLAUDE.md lists what they don't).
 //!
 //! So far: Perlin's noise, the walks through a medium (`media`), phase functions (`phase`),
-//! the Nubis clouds' density (`clouds`), altocumulus's (`altocumulus`), cirrus's (`cirrus`), precipitation's (`rain`), mammatus's (`mammatus`), cumulonimbus's (`cumulonimbus`) and the pattern of the
-//! sea's foam (`sea`).
+//! the Nubis clouds' density (`clouds`), altocumulus's (`altocumulus`), cirrus's (`cirrus`), precipitation's (`rain`), mammatus's (`mammatus`), cumulonimbus's (`cumulonimbus`), the pattern of the
+//! sea's foam (`sea`) and the procedural rock (`rock`).
 // No standard library and no allocator, on the CPU too: so `Box`, `Vec`, `String` and
 // `format!` aren't in scope for code here whichever machine it is first written and tested
 // on. (std is linked on the CPU only for the floats' functions that `Real`'s implementations
@@ -36,6 +36,7 @@ pub mod media;
 pub mod noise;
 pub mod phase;
 pub mod rain;
+pub mod rock;
 pub mod sea;
 
 use core::ops::{Add, Div, Mul, Neg, Sub};

@@ -402,8 +402,15 @@ impl Assorted {
 
 impl Medium for Assorted {
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
-        let i = self.pebble_at(&pt).map_or(0, |p| p.material);
-        &*self.materials[i.min(self.materials.len() - 1)]
+        &*self.materials[self.region_at(pt)]
+    }
+
+    fn flat_regions(&self) -> Option<Vec<Option<crate::wavefront::flat::FlatMaterial>>> {
+        Some(self.materials.iter().map(|m| m.flat()).collect())
+    }
+
+    fn region_at(&self, pt: Vector3<f64>) -> usize {
+        self.pebble_at(&pt).map_or(0, |p| p.material).min(self.materials.len() - 1)
     }
 }
 

@@ -18,6 +18,14 @@ pub trait Medium : Sync{
     /// The material as data, if the medium is one material throughout and it can be
     /// flattened (`wavefront::flat`).
     fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
+
+    /// For a medium of several materials by place (`procedural::rock::Assorted`, the pebbles):
+    /// each region's material as data, where it is (`MaterialModel::flat`), so that flattening
+    /// gives each triangle its region's (`region_at`, at its centre). None for one material.
+    fn flat_regions(&self) -> Option<Vec<Option<crate::wavefront::flat::FlatMaterial>>> { None }
+
+    /// The region (`flat_regions`) a point is in.
+    fn region_at(&self, _pt: Vector3<f64>) -> usize { 0 }
     /// The one material the medium is throughout, if it is one (as `Solid` is): what may be
     /// judged for the whole object. Not what `material_at` gives at some point, which for a
     /// medium that varies (a landscape: water in its rivers, ground elsewhere) is only that

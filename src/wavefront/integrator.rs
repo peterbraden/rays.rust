@@ -791,6 +791,40 @@ pub mod tests {
         }
     }
 
+    /// The procedural rock in the kernels (`pathtrace::MAT_ROCK`, by `shared::rock`), a floor
+    /// and spheres of it beside a diffuse one, under a sun, a point light and a sky: none of it
+    /// the host's, and the picture the path tracer's (whose rock samples its lights by
+    /// `functions::direct_lighting`, the kernels' as diffuse, so alike in expectation).
+    #[test]
+    fn test_rock_in_the_kernels_agrees_with_the_path_tracer() {
+        let s = SceneFile::from_string(r#"{
+            "width": 24, "height": 16, "background": [0.2, 0.25, 0.3], "max_depth": 6, "path_termination": "russian_roulette",
+            "sun": { "direction": [-1, 2, -1], "intensity": 2 },
+            "lights": [ { "location": [1, 2, -1], "intensity": 3 } ],
+            "camera": { "location": [0, 1.5, -4], "lookat": [0, 0.4, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": {
+                "R": { "type": "rock", "preset": "sandstone", "scale": 0.3, "bump": 0.6, "seed": 4, "pits": 0.5, "fractal": 0.4 },
+                "G": { "type": "rock", "preset": "granite", "scale": 0.5, "seed": 2, "lichen": 0.3 },
+                "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }
+            },
+            "objects": [
+                { "type": "plane", "y": 0, "material": "R" },
+                { "type": "sphere", "location": [-0.7, 0.45, 0], "radius": 0.45, "material": "G" },
+                { "type": "sphere", "location": [0.7, 0.4, 0.2], "radius": 0.4, "material": "F" }
+            ]
+        }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        assert!(flat.hosts.is_empty() && flat.materials.iter().filter(|m| matches!(m, FlatMaterial::Rock { .. })).count() == 2);
+        let n = 256;
+        let (w, h) = (s.image.width, s.image.height);
+        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
     /// Media beside vertices the host shades (a layered floor, a torus of its own code): the
     /// host's shadow rays cross the medium by the scene's own code with the path's state
     /// there (`kernels::host::volume_state`: truncated once the path has left a vertex, and as
@@ -937,8 +971,8 @@ pub mod tests {
     }
 
     /// A host's vertices' shadow rays left to the kernels' next round (as the GPU's are) give
-    /// the picture traced on the host does, but for the light's packing: on a floor of rock
-    /// (a material the host shades, whose light may be deferred) shadowed from a sun and a
+    /// the picture traced on the host does, but for the light's packing: on a floor of wet rock
+    /// (a material the host shades, a dry one being the kernels', whose light may be deferred) shadowed from a sun and a
     /// point light by a sphere and a box the kernels shade, and a rock ball of its own. Were
     /// the kernels to ignore the kept rays, the shadows would be lit; were they to trace the
     /// point light's past the light, the box behind it would shadow the floor. And with paths
@@ -958,7 +992,7 @@ pub mod tests {
             "lights": [ { "location": [1, 1.5, 0.5], "intensity": 3 } ],
             "camera": { "location": [0, 2.5, -5], "lookat": [0, 0.3, 0], "up": [0, 1, 0], "angle": 0.6 },
             "materials": {
-                "R": { "type": "rock", "preset": "granite", "scale": 0.2, "seed": 3 },
+                "R": { "type": "rock", "preset": "granite", "scale": 0.2, "seed": 3, "wetness": 0.2 },
                 "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }
             },
             "objects": [

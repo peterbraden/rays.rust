@@ -208,6 +208,8 @@ pub enum FlatMaterial {
     /// A material that isn't data: `FlatScene::hosts[object]`'s own, asked through
     /// `MaterialModel::scatter` as the recursive tracer does.
     Host { object: u32 },
+    /// The procedural rock (`material::rock::Rock::export`; `pathtrace::MAT_ROCK`).
+    Rock { record: Vec<f32> },
 }
 
 impl FlatMaterial {
@@ -430,10 +432,27 @@ impl FlatScene {
                 shapes.push((o.clone(), index));
                 continue;
             };
-            // A material its own code shades, at vertices if its medium bakes (a landscape's ground).
-            let baked = matches!(materials[index as usize], FlatMaterial::Host { .. })
+            // A medium of several materials by place (the pebbles): each triangle its region's,
+            // where that is data.
+            let regions: Option<Vec<Option<u32>>> = matches!(materials[index as usize], FlatMaterial::Host { .. }).then(|| o.medium.flat_regions()).flatten()
+                .map(|r| r.into_iter().map(|m| m.map(|m| { materials.push(m); materials.len() as u32 - 1 })).collect());
+            // A material its own code shades, at vertices if its medium bakes (a landscape's
+            // ground); not if every region is data.
+            let baked = (matches!(materials[index as usize], FlatMaterial::Host { .. }) && regions.as_ref().is_none_or(|r| r.iter().any(Option::is_none)))
                 .then(|| bake_vertices(s, o, &prims, &mut covers)).flatten();
+            // (Each triangle's region found in parallel: a lookup in the pebbles' grid each.)
+            let region_of: Vec<u32> = match &regions {
+                Some(r) => {
+                    use rayon::prelude::*;
+                    prims.par_iter().map(|(p, _)| match p {
+                        Prim::Triangle { v, .. } => r.get(o.medium.region_at((v[0] + v[1] + v[2]) / 3.)).copied().flatten().unwrap_or(index),
+                        _ => index,
+                    }).collect()
+                },
+                None => Vec::new(),
+            };
             for (k, (p, face)) in prims.into_iter().enumerate() {
+                let index = region_of.get(k).copied().unwrap_or(index);
                 match p {
                     Prim::Plane { .. } => planes.push((p, index)),
                     _ => bounded.push((p, index, face, baked.as_ref().map_or([NO_COVER; 3], |b| b[k]))),

@@ -234,6 +234,9 @@ pub struct Layer {
     pub spacing: f64,
     corners: Vec<f64>,
     class: Vec<u8>,
+    /// Whether its ground's classes are read from the layer around it instead (a close level:
+    /// `Layer::of_world`).
+    borrowed_class: bool,
     water: Option<WaterLines>,
     /// Width of the band inside a patch's edge over which it blends into what is around it.
     blend: f64,
@@ -272,7 +275,7 @@ impl Layer {
             }
             _ => None,
         };
-        Layer { spacing, corners, class, water, blend, fields, wind, domain: t.domain }
+        Layer { spacing, corners, class, borrowed_class: false, water, blend, fields, wind, domain: t.domain }
     }
 
     /// Tangent coordinates of `d` on a patch, if it is on the patch's side of the planet.
@@ -321,9 +324,9 @@ impl Layer {
             fine[0].fields.take_basins(&fine[0].domain, &around[0].fields, &around[0].domain);
             // And what covers its ground: its own simulation, with its edges held, leaves more or
             // less sediment than the patch around it does over the same ground, so its classes
-            // would stand out as a square of their own.
-            let (fine, around) = (&mut fine[0], &around[0]);
-            fine.class = fine.domain.dirs.iter().map(|d| around.class_at(d)).collect();
+            // would stand out as a square of their own. (Read from the patch around it, at that
+            // patch's cells, `Ground::cover`.)
+            fine[0].borrowed_class = true;
         }
         layers
     }
@@ -1317,11 +1320,26 @@ impl Ground {
         // the one around it (each with its own sediment, by its own simulation) the classes
         // mix over the blend, along a ragged line, rather than switch along its square edge.
         let threshold = (0.5 * rand() + 0.5 + 2. * (n(300., 0.47) - 0.5)).clamp(0.02, 0.98);
-        let class = match self.layers.iter().find(|l| l.weight(&d) > threshold).or_else(|| self.layer_at(&d)) {
-            Some(l) => {
-                let (t1, t2) = Relief::tangents(&d);
-                let j = (d + (t1 * (rand() - 0.5) + t2 * (rand() - 0.5)) * l.spacing / r).normalize();
-                if l.contains(&j) { l.class_at(&j) } else { self.layer_at(&j).map_or(LAND, |l| l.class_at(&j)) }
+        let chosen = self.layers.iter().position(|l| l.weight(&d) > threshold)
+            .or_else(|| self.layers.iter().position(|l| l.contains(&d)));
+        let read = |l: &Layer| {
+            let (t1, t2) = Relief::tangents(&d);
+            let j = (d + (t1 * (rand() - 0.5) + t2 * (rand() - 0.5)) * l.spacing / r).normalize();
+            if l.contains(&j) { l.class_at(&j) } else { self.layer_at(&j).map_or(LAND, |l| l.class_at(&j)) }
+        };
+        let class = match chosen {
+            Some(k) => {
+                let own = read(&self.layers[k]);
+                // A close level's sediment (bare land, alluvium, till) is the patch around it's;
+                // its ice (the patch's glaciers, taken at its own cells), sea and lava its own.
+                let kept = |c: u8| matches!(c, ICE | SEA_FLOOR | LAVA);
+                match self.layers.get(k + 1) {
+                    Some(around) if self.layers[k].borrowed_class && !kept(own) => {
+                        let theirs = read(around);
+                        if kept(theirs) { own } else { theirs }
+                    }
+                    _ => own,
+                }
             }
             None => LAND,
         };

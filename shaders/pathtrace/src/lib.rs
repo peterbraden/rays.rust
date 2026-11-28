@@ -291,9 +291,9 @@ fn rock_rgb(tables: &[f32], i: u32) -> (f32, f32, f32) {
 }
 
 /// A rock at `point` (in the frame about the origin), seen along `rd` with shading normal `ns`:
-/// its albedo, and its bumped normal facing the ray, as the renderer's `Rock::scatter` finds
-/// them.
-pub fn rock_at(s: &Scene, block: u32, point: Vec3, rd: Vec3, ns: Vec3) -> (Vec3, Vec3) {
+/// its albedo, its bumped normal facing the ray, as the renderer's `Rock::scatter` finds them,
+/// and its wetness.
+pub fn rock_at(s: &Scene, block: u32, point: Vec3, rd: Vec3, ns: Vec3) -> (Vec3, Vec3, f32) {
     let (rock, footprint) = load_rock(s.tables, block);
     let facing = if ns.dot(rd) > 0.0 { -ns } else { ns };
     let width = (point - footprint.xyz()).length() * footprint.w / rd.normalize().dot(facing).abs().max(0.2);
@@ -302,7 +302,7 @@ pub fn rock_at(s: &Scene, block: u32, point: Vec3, rd: Vec3, ns: Vec3) -> (Vec3,
     let t = FloatTables(s.tables);
     let n = rock.bumped_normal(&t, p, facing3, width);
     let c = rock.albedo_after(&t, p, n, rock.albedo_before(&t, p));
-    (Vec3::new(c.0, c.1, c.2), Vec3::new(n.0, n.1, n.2))
+    (Vec3::new(c.0, c.1, c.2), Vec3::new(n.0, n.1, n.2), rock.wetness)
 }
 pub const NO_MATERIAL: u32 = u32::MAX;
 /// A ground's block: snow's albedo settled and firn (3 each), ice's white and blue (3 each),
@@ -3453,6 +3453,7 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
     // A rock, shaded as the renderer's `Rock::scatter` is: diffuse about its bumped normal,
     // its lights sampled alone, its bounce mirrored back out where the bump turned it in.
     let mut rock = false;
+    let mut wetness = 0.0;
     if !in_medium {
         let (g, n) = normals(s, hit.prim, ro, rd, p.hit);
         hit_ng = g;
@@ -3464,9 +3465,10 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
             mat = ground_material(s, &mat, hit.prim, p.hit, &mut rng);
         }
         if mat.kind == MAT_ROCK {
-            let (albedo, n) = rock_at(s, mat.a, point, rd, hit_ns);
+            let (albedo, n, wet) = rock_at(s, mat.a, point, rd, hit_ns);
             hit_ns = n;
             rock = true;
+            wetness = wet;
             mat = Material { kind: MAT_DIFFUSE, a: 0, b: 0, pad: 0, c0: albedo.extend(0.0), c1: Vec4::ZERO, p: Vec4::ZERO };
         }
         if mat.kind == MAT_EMITTER {
@@ -3556,6 +3558,22 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
         // (Its lobe is set.)
     } else if mat.kind == MAT_DIFFUSE {
         lobe.albedo = mat.c0.xyz();
+        // A wet rock's film of water, reflecting by water's Fresnel factor, blurred a little
+        // (`Rock::scatter`): what goes into the surface is lost.
+        if rock && wetness > 0.0 {
+            let water_index = 1.33;
+            let film = wetness * fresnel_reflectance(rd.dot(ns).abs() / rd.length(), 1.0 / water_index, water_index);
+            if rand(&mut rng) < film {
+                let ball = uniform_sphere(rand(&mut rng), rand(&mut rng)) * rand(&mut rng).powf(1.0 / 3.0);
+                let d = reflect_about(rd.normalize(), ns) + ball * 0.05;
+                if d.dot(ng) <= 0.0 {
+                    return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+                }
+                delta = true;
+                next_dir = d;
+                next_from = point + ng * eps;
+            }
+        }
     } else if mat.kind == MAT_PLASTIC {
         let alpha = (mat.p.y * mat.p.y).max(floor_alpha);
         if alpha >= MIN_ALPHA {

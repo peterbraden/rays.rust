@@ -792,7 +792,7 @@ pub mod tests {
     }
 
     /// The procedural rock in the kernels (`pathtrace::MAT_ROCK`, by `shared::rock`), a floor
-    /// and spheres of it beside a diffuse one, under a sun, a point light and a sky: none of it
+    /// and a wet sphere of it (its film reflecting) beside a diffuse one, under a sun, a point light and a sky: none of it
     /// the host's, and the picture the path tracer's (whose rock samples its lights by
     /// `functions::direct_lighting`, the kernels' as diffuse, so alike in expectation).
     #[test]
@@ -804,7 +804,7 @@ pub mod tests {
             "camera": { "location": [0, 1.5, -4], "lookat": [0, 0.4, 0], "up": [0, 1, 0], "angle": 0.6 },
             "materials": {
                 "R": { "type": "rock", "preset": "sandstone", "scale": 0.3, "bump": 0.6, "seed": 4, "pits": 0.5, "fractal": 0.4 },
-                "G": { "type": "rock", "preset": "granite", "scale": 0.5, "seed": 2, "lichen": 0.3 },
+                "G": { "type": "rock", "preset": "granite", "scale": 0.5, "seed": 2, "lichen": 0.3, "wetness": 0.8 },
                 "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }
             },
             "objects": [
@@ -818,6 +818,30 @@ pub mod tests {
         let n = 256;
         let (w, h) = (s.image.width, s.image.height);
         let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
+    /// A wet rock's film in the kernels (`pathtrace::MAT_ROCK`): a floor of wet basalt seen at a
+    /// glance, where its film reflects most of a bright sky and the dark stone little, gives
+    /// the path tracer's picture; without the film it would be dark.
+    #[test]
+    fn test_a_wet_rocks_film_in_the_kernels_agrees_with_the_path_tracer() {
+        let s = SceneFile::from_string(r#"{
+            "width": 24, "height": 16, "background": [0.9, 0.95, 1.0], "max_depth": 6, "path_termination": "russian_roulette",
+            "camera": { "location": [0, 0.15, -4], "lookat": [0, 0, 4], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "B": { "type": "rock", "preset": "basalt", "scale": 0.3, "seed": 6, "wetness": 1 } },
+            "objects": [ { "type": "plane", "y": 0, "material": "B" } ]
+        }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        assert!(flat.hosts.is_empty(), "a wet rock is the kernels'");
+        let n = 256;
+        let (w, h) = (s.image.width, s.image.height);
+        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+        // (The floor is the lower tiles, the first three; their light most of it the film's.)
         for t in 0..6 {
             for ch in 0..3 {
                 assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
@@ -971,8 +995,8 @@ pub mod tests {
     }
 
     /// A host's vertices' shadow rays left to the kernels' next round (as the GPU's are) give
-    /// the picture traced on the host does, but for the light's packing: on a floor of wet rock
-    /// (a material the host shades, a dry one being the kernels', whose light may be deferred) shadowed from a sun and a
+    /// the picture traced on the host does, but for the light's packing: on a floor of crackled
+    /// rock (a material the host shades, others being the kernels', whose light may be deferred) shadowed from a sun and a
     /// point light by a sphere and a box the kernels shade, and a rock ball of its own. Were
     /// the kernels to ignore the kept rays, the shadows would be lit; were they to trace the
     /// point light's past the light, the box behind it would shadow the floor. And with paths
@@ -992,7 +1016,7 @@ pub mod tests {
             "lights": [ { "location": [1, 1.5, 0.5], "intensity": 3 } ],
             "camera": { "location": [0, 2.5, -5], "lookat": [0, 0.3, 0], "up": [0, 1, 0], "angle": 0.6 },
             "materials": {
-                "R": { "type": "rock", "preset": "granite", "scale": 0.2, "seed": 3, "wetness": 0.2 },
+                "R": { "type": "rock", "preset": "granite", "scale": 0.2, "seed": 3, "crackle": 0.3 },
                 "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }
             },
             "objects": [

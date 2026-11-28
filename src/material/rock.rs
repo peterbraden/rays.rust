@@ -441,11 +441,11 @@ impl Rock {
 impl MaterialModel for Rock {
     fn direct_emit(&self) -> bool { true }
 
-    /// For the kernels (`pathtrace::MAT_ROCK`), but not a wet rock (its film is a mirror the
-    /// kernels don't draw), one cross-bedded (its laminae are the renderer's alone) or one with
-    /// crackle (hashed by the sine of large arguments, which f32 can't follow).
+    /// For the kernels (`pathtrace::MAT_ROCK`, wet ones' film too), but not one cross-bedded
+    /// (its laminae are the renderer's alone) or one with crackle (hashed by the sine of large
+    /// arguments, which f32 can't follow).
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
-        (self.wetness <= 0. && self.cross_bedding <= 0. && self.crackle <= 0.)
+        (self.cross_bedding <= 0. && self.crackle <= 0.)
             .then(|| crate::wavefront::flat::FlatMaterial::Rock { record: self.export() })
     }
 

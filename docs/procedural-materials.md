@@ -607,6 +607,16 @@ lichen_crusted_rock (Rock045: buff rock with `disc` rosettes of lichen and green
 24.9) and crushed_stone (Gravel020: angular grey chippings in two layers of `stone` sprites;
 440 → 3.26).
 
+And seven more: chevron_parquet (ambientCG WoodFloor057: two flat `brick`s turned 45° either
+way, chosen by a `square` wave across the floor, so each column's strips lean the other way;
+94.5 → 8.01), algae_planks (ambientCG Planks038: olive boards greened by algae along the grain;
+16.4 → 2.85), mossy_pebble_paving (ambientCG PavingStones139: `disc` sprites as cobbles in moss;
+117 → 2.01), rubble_slate_wall (castle_wall_slates: flat slates in thick pale mortar, a warped
+`brick`; 12.8 → 5.84, more regular than the scan), leafy_lawn (leafy_grass: thin grass strewn
+with leaves; 6.45 → 1.68), concrete_rubble (rubble: broken slabs as large `stone` sprites; 24.6
+→ 1.07) and pantiles (roof_tiles: orange tiles fluted by a `scallop` wave; 15.2 → 11.6, its
+channels fainter than the scan's).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

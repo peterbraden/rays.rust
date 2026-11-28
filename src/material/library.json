@@ -33333,19 +33333,19 @@
     "doc": "Hessian: coarse jute threads in an open plain weave, tan and uneven, with dark gaps between them; modelled on Poly Haven's hessian_230.",
     "variables": {
       "jute": [
-        0.55,
-        0.42,
-        0.25
+        0.4439,
+        0.3221,
+        0.1839
       ],
       "jute2": [
-        0.4,
-        0.29,
-        0.16
+        0.2939,
+        0.1933,
+        0.094
       ],
       "hole": [
-        0.12,
-        0.09,
-        0.05
+        0.1414,
+        0.1068,
+        0.0559
       ]
     },
     "material": {
@@ -33593,32 +33593,63 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 34.52844,
+            "fitted": 9.444751
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.85529,
+            "variables.jute": [
+              0.4439,
+              0.3221,
+              0.1839
+            ],
+            "variables.jute2": [
+              0.2939,
+              0.1933,
+              0.094
+            ],
+            "variables.hole": [
+              0.1414,
+              0.1068,
+              0.0559
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.8553
   },
   "rusty_corrugated_iron": {
     "doc": "Rusty corrugated iron: sheets corrugated in vertical ridges, rusted through to deep red-brown, streaked orange and pale where rain has run down them; modelled on Poly Haven's rusty_corrugated_iron.",
     "variables": {
       "rust": [
-        0.32,
-        0.09,
-        0.04
+        0.0533,
+        0.01,
+        0.0062
       ],
       "rust2": [
-        0.2,
-        0.06,
-        0.03
+        0.1647,
+        0.0313,
+        0.0121
       ],
       "orange": [
-        0.55,
-        0.25,
-        0.1
+        0.1689,
+        0.0435,
+        0.0139
       ],
       "pale": [
-        0.6,
-        0.5,
-        0.4
+        0.5685,
+        0.4072,
+        0.198
       ]
     },
     "material": {
@@ -33777,32 +33808,68 @@
             ],
             "chroma": 0.06
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 1056.877566,
+            "fitted": 0.916712
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.2563,
+            "variables.rust": [
+              0.0533,
+              0.01,
+              0.0062
+            ],
+            "variables.rust2": [
+              0.1647,
+              0.0313,
+              0.0121
+            ],
+            "variables.orange": [
+              0.1689,
+              0.0435,
+              0.0139
+            ],
+            "variables.pale": [
+              0.5685,
+              0.4072,
+              0.198
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.2563
   },
   "cracked_red_ground": {
     "show": "landscape",
     "doc": "Cracked red ground: dry red-brown earth, mottled darker and paler, with a faint network of shallow cracks; modelled on Poly Haven's cracked_red_ground.",
     "variables": {
       "earth": [
-        0.36,
-        0.2,
-        0.12
+        0.0973,
+        0.0548,
+        0.0281
       ],
       "earth2": [
-        0.26,
-        0.14,
-        0.08
+        0.2029,
+        0.1151,
+        0.0533
       ],
       "pale": [
-        0.46,
-        0.3,
-        0.2
+        0.2661,
+        0.1187,
+        0.0562
       ],
       "crack": [
-        0.14,
-        0.08,
+        0.1386,
+        0.0792,
         0.05
       ]
     },
@@ -33975,48 +34042,84 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 482.751205,
+            "fitted": 4.161514
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.0633,
+            "variables.earth": [
+              0.0973,
+              0.0548,
+              0.0281
+            ],
+            "variables.earth2": [
+              0.2029,
+              0.1151,
+              0.0533
+            ],
+            "variables.pale": [
+              0.2661,
+              0.1187,
+              0.0562
+            ],
+            "variables.crack": [
+              0.1386,
+              0.0792,
+              0.05
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.0633
   },
   "pebble_concrete": {
     "show": "landscape",
     "doc": "Exposed-aggregate concrete: grey cement studded with small rounded pebbles, washed paler in broad streaks; modelled on Poly Haven's pebble_embedded_concrete.",
     "variables": {
       "cement": [
-        0.3,
-        0.29,
-        0.27
+        0.0976,
+        0.0704,
+        0.0449
       ],
       "cement2": [
-        0.2,
-        0.19,
-        0.18
+        0.1194,
+        0.0966,
+        0.0694
       ],
       "wash": [
-        0.5,
-        0.48,
-        0.45
+        0.3771,
+        0.3156,
+        0.2398
       ],
       "light": [
-        0.55,
-        0.52,
-        0.48
+        0.454,
+        0.384,
+        0.2972
       ],
       "mid": [
-        0.35,
-        0.33,
-        0.3
+        0.0935,
+        0.0565,
+        0.0264
       ],
       "dark": [
-        0.18,
-        0.17,
-        0.16
+        0.0678,
+        0.0604,
+        0.0484
       ],
       "rim": [
-        0.12,
-        0.11,
-        0.1
+        0.1128,
+        0.1002,
+        0.0871
       ]
     },
     "material": {
@@ -34303,43 +34406,94 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 418.807506,
+            "fitted": 7.815274
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.2672,
+            "variables.cement": [
+              0.0976,
+              0.0704,
+              0.0449
+            ],
+            "variables.cement2": [
+              0.1194,
+              0.0966,
+              0.0694
+            ],
+            "variables.wash": [
+              0.3771,
+              0.3156,
+              0.2398
+            ],
+            "variables.light": [
+              0.454,
+              0.384,
+              0.2972
+            ],
+            "variables.mid": [
+              0.0935,
+              0.0565,
+              0.0264
+            ],
+            "variables.dark": [
+              0.0678,
+              0.0604,
+              0.0484
+            ],
+            "variables.rim": [
+              0.1128,
+              0.1002,
+              0.0871
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.2672
   },
   "mossy_cobbles": {
     "show": "landscape",
     "doc": "Mossy cobbles: grey and buff setts in rows, rounded at their edges, with bright green moss filling every joint; modelled on Poly Haven's mossy_cobblestone.",
     "variables": {
       "stone": [
-        0.45,
-        0.42,
-        0.37
+        0.2652,
+        0.1947,
+        0.1169
       ],
       "stone2": [
-        0.3,
-        0.29,
-        0.27
+        0.1865,
+        0.1492,
+        0.1073
       ],
       "warm": [
-        0.5,
-        0.42,
-        0.33
+        0.3677,
+        0.2967,
+        0.2043
       ],
       "edge": [
-        0.2,
-        0.19,
-        0.17
+        0.0753,
+        0.0549,
+        0.0151
       ],
       "moss": [
-        0.3,
-        0.42,
-        0.08
+        0.1951,
+        0.2062,
+        0.0283
       ],
       "moss2": [
-        0.15,
-        0.22,
-        0.05
+        0.0316,
+        0.0364,
+        0.003
       ]
     },
     "material": {
@@ -34614,38 +34768,84 @@
             ],
             "chroma": 0.06
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 45.021162,
+            "fitted": 1.755224
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.98069,
+            "variables.stone": [
+              0.2652,
+              0.1947,
+              0.1169
+            ],
+            "variables.stone2": [
+              0.1865,
+              0.1492,
+              0.1073
+            ],
+            "variables.warm": [
+              0.3677,
+              0.2967,
+              0.2043
+            ],
+            "variables.edge": [
+              0.0753,
+              0.0549,
+              0.0151
+            ],
+            "variables.moss": [
+              0.1951,
+              0.2062,
+              0.0283
+            ],
+            "variables.moss2": [
+              0.0316,
+              0.0364,
+              0.003
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.9807
   },
   "snowy_asphalt": {
     "show": "landscape",
     "doc": "Asphalt under thin, broken snow: dark tarmac and grit showing through lacy white patches of snow and grey slush; modelled on Poly Haven's asphalt_snow.",
     "variables": {
       "tar": [
-        0.12,
-        0.12,
-        0.13
+        0.1626,
+        0.1453,
+        0.1544
       ],
       "tar2": [
-        0.07,
-        0.07,
-        0.08
+        0.0495,
+        0.0428,
+        0.0465
       ],
       "snow": [
-        0.75,
-        0.76,
-        0.8
+        0.6039,
+        0.5812,
+        0.6197
       ],
       "slush": [
-        0.4,
-        0.41,
-        0.44
+        0.3235,
+        0.3447,
+        0.3949
       ],
       "grit": [
-        0.3,
-        0.28,
-        0.26
+        0.348,
+        0.2933,
+        0.2624
       ]
     },
     "material": {
@@ -34876,32 +35076,73 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 32.479351,
+            "fitted": 10.188762
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.78007,
+            "variables.tar": [
+              0.1626,
+              0.1453,
+              0.1544
+            ],
+            "variables.tar2": [
+              0.0495,
+              0.0428,
+              0.0465
+            ],
+            "variables.grit": [
+              0.348,
+              0.2933,
+              0.2624
+            ],
+            "variables.snow": [
+              0.6039,
+              0.5812,
+              0.6197
+            ],
+            "variables.slush": [
+              0.3235,
+              0.3447,
+              0.3949
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7801
   },
   "wood_shingles": {
     "doc": "Wood shingles: narrow split shakes laid in overlapping courses, weathered silver-grey, each its own shade, shadowed under the course above; modelled on Poly Haven's roof_slates_02.",
     "variables": {
       "wood": [
-        0.4,
-        0.39,
-        0.36
+        0.3226,
+        0.2686,
+        0.1988
       ],
       "wood2": [
-        0.28,
-        0.27,
-        0.25
+        0.2574,
+        0.2237,
+        0.1737
       ],
       "pale": [
-        0.58,
-        0.57,
-        0.53
+        0.5222,
+        0.4654,
+        0.3874
       ],
       "shadow": [
-        0.08,
-        0.08,
-        0.07
+        0.0726,
+        0.0655,
+        0.0413
       ]
     },
     "material": {
@@ -35171,38 +35412,74 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 22.526211,
+            "fitted": 4.192603
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.157,
+            "variables.wood": [
+              0.3226,
+              0.2686,
+              0.1988
+            ],
+            "variables.wood2": [
+              0.2574,
+              0.2237,
+              0.1737
+            ],
+            "variables.pale": [
+              0.5222,
+              0.4654,
+              0.3874
+            ],
+            "variables.shadow": [
+              0.0726,
+              0.0655,
+              0.0413
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.157
   },
   "eucalyptus_bark": {
     "show": "bark",
     "doc": "Smooth eucalyptus bark: brown and rust, shedding in long patches to olive-green and grey beneath, streaked along the trunk; modelled on Poly Haven's eucalyptus_bark.",
     "variables": {
       "bark": [
-        0.3,
-        0.22,
-        0.14
+        0.0557,
+        0.0324,
+        0.0146
       ],
       "bark2": [
-        0.22,
-        0.15,
-        0.09
+        0.1103,
+        0.0903,
+        0.0523
       ],
       "green": [
-        0.28,
-        0.3,
-        0.2
+        0.1039,
+        0.0684,
+        0.0337
       ],
       "grey": [
-        0.38,
-        0.36,
-        0.32
+        0.2211,
+        0.1632,
+        0.0968
       ],
       "red": [
-        0.35,
-        0.15,
-        0.08
+        0.3421,
+        0.1523,
+        0.0813
       ]
     },
     "material": {
@@ -35365,28 +35642,69 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 732.395008,
+            "fitted": 6.912945
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.72783,
+            "variables.bark": [
+              0.0557,
+              0.0324,
+              0.0146
+            ],
+            "variables.bark2": [
+              0.1103,
+              0.0903,
+              0.0523
+            ],
+            "variables.red": [
+              0.3421,
+              0.1523,
+              0.0813
+            ],
+            "variables.green": [
+              0.1039,
+              0.0684,
+              0.0337
+            ],
+            "variables.grey": [
+              0.2211,
+              0.1632,
+              0.0968
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7278
   },
   "lunar_regolith": {
     "show": "landscape",
     "doc": "Lunar regolith: fine grey dust, faintly mottled, pocked by small soft craters; modelled on Poly Haven's moon_01.",
     "variables": {
       "dust": [
-        0.3,
-        0.28,
-        0.26
+        0.2071,
+        0.1824,
+        0.15
       ],
       "dust2": [
-        0.25,
-        0.235,
-        0.22
+        0.1999,
+        0.1777,
+        0.1493
       ],
       "pale": [
-        0.34,
-        0.32,
-        0.3
+        0.2924,
+        0.2678,
+        0.2369
       ]
     },
     "material": {
@@ -35506,8 +35824,39 @@
             ],
             "chroma": 0.02
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 37.815073,
+            "fitted": 29.483438
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.84608,
+            "variables.dust": [
+              0.2071,
+              0.1824,
+              0.15
+            ],
+            "variables.dust2": [
+              0.1999,
+              0.1777,
+              0.1493
+            ],
+            "variables.pale": [
+              0.2924,
+              0.2678,
+              0.2369
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.8461
   }
 }

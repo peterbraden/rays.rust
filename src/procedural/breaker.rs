@@ -733,7 +733,9 @@ impl crate::volume::DensityField for Aeration {
         let out = ((u / a).powi(2) + (v / b).powi(2)).sqrt();
         if out < 1. { return 0.; }
         // (Some from the roof on, more towards the tip: the tube's roof is turbid too.)
-        let thrown = (0.3 + 0.7 * crate::math::smoothstep(top, tip, phi)) * crate::math::smoothstep(top - 0.6, top, phi)
+        // Torn into air near its tip, the outer part of the throw; clear water nearer the roof.
+        // (Through the whole lip, from the roof on, it veiled the sky behind it in a white haze.)
+        let thrown = crate::math::smoothstep(top + 0.55 * (tip - top), tip - 0.05, phi)
             * (1. - crate::math::smoothstep(tip - 0.05, tip + 0.15, phi));
         let near = 1. - crate::math::smoothstep(1., 1. + 1.2 * ROOF * 3., out);
         let torn = 0.6 + 0.4 * self.noise.noise(p.x / 0.2, p.y / 0.2, p.z / 0.2);

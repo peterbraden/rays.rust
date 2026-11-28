@@ -559,6 +559,21 @@ mottled red-brown earth with faint cracks; 483 → 4.16), pebble_concrete
 and grey; 732 → 6.91) and lunar_regolith (moon_01: faintly mottled grey dust with soft craters
 in the bump; 37.8 → 29.5, the scan nearly featureless, so little for the loss to compare).
 
+And ten more, of buildings and things, fitted the same way: red_plaster (red_plaster_weathered:
+mottled terracotta render with dark runs and chips; 154 → 4.00), whitewashed_brick
+(whitewashed_brick: worn white over brick, red and blue-grey showing through; 539 → 2.67),
+mossy_brick (mossy_brick: dark sooty brick with moss in the joints; 78.7 → 2.05),
+green_painted_metal (green_metal_rust: faded green paint with rust spots, orange halos and runs,
+from one `cells` node's `f1`; 81.1 → 1.76), peeling_paint_wood (wood_peeling_paint_weathered:
+dark paint torn off along the grain, the tears a fractal stretched across; 851 → 5.58, its
+paint browner and blotchier than the scan's), denim (denim_fabric: a fine twill, a `wave` along
+[1, 1, 1] so it runs diagonally on floors and walls, faded in streaks; 12.3 → 5.11, without the
+scan's seam), osb (oriented_strand_board: three layers of `disc` sprites as flakes; 403 → 4.08),
+cracked_plaster (worn_cracked_plaster: pale plates crazed by cracks, grime gathered towards them
+from the cells' `edges`; 113 → 4.31), bamboo_screen (bamboo_wall: canes as upright `brick`s,
+rounded by a `wave`, the bricks' ends their nodes; 757 → 4.63) and cedar_bark
+(chinese_cedar_bark: long strips of stretched cells, dark furrows between; 22.2 → 4.34).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

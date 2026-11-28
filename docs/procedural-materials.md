@@ -523,6 +523,14 @@ slabs into the earth, which matches the scan at its scale but not close up; its 
 left them dark or chalky) and moss_carpet (aerial_grass_rock, 15 m: yellow-green moss over
 rock, bare patches and grit; 35.5 → 0.92).
 
+And four more: coral_rubble (coral_mud_01: a pale cream crust broken by hollows of rounded coral
+grains; 7.73 → 0.89, its hollows softer edged close up than the scan's), seedling_soil
+(mud_forest: dark crumbly soil with seedlings, leaf bits and twigs; 315 → 0.76, its twigs long
+close up), cobblestones (cobblestone_floor_08: blue-grey and buff setts in wavering rows of
+grit, a `brick` laid flat; 21.6 → 3.63, but the fit pinched the setts into stars, so only its
+colours were applied) and pitted_ochre_rock (rock_pitted_mossy: orange rock crazed by cracks,
+grey patina and pits; 41.1 → 1.25, its colours alone, as the fit's cracks became loops).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

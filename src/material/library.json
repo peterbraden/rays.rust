@@ -40841,19 +40841,19 @@
     "doc": "Berber carpet: a dense cream loop pile, flecked here and there with short brown strands; modelled on ambientCG's Carpet016.",
     "variables": {
       "wool": [
-        0.68,
-        0.64,
-        0.52
+        0.5607,
+        0.5096,
+        0.3601
       ],
       "wool2": [
-        0.56,
-        0.52,
-        0.42
+        0.4502,
+        0.3722,
+        0.2376
       ],
       "fleck": [
-        0.4,
-        0.3,
-        0.2
+        0.3912,
+        0.2913,
+        0.1923
       ]
     },
     "material": {
@@ -41068,27 +41068,58 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 837.590462,
+            "fitted": 21.444632
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.7,
+            "variables.wool": [
+              0.5607,
+              0.5096,
+              0.3601
+            ],
+            "variables.wool2": [
+              0.4502,
+              0.3722,
+              0.2376
+            ],
+            "variables.fleck": [
+              0.3912,
+              0.2913,
+              0.1923
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7
   },
   "woven_rug": {
     "doc": "A flat-woven rug: rust-red wool in fine ribs, picked out with short pale ticks in staggered rows; modelled on ambientCG's Carpet015.",
     "variables": {
       "rust": [
-        0.5,
-        0.2,
-        0.1
+        0.4608,
+        0.1443,
+        0.0728
       ],
       "rust2": [
-        0.36,
-        0.13,
-        0.07
+        0.2547,
+        0.0683,
+        0.0382
       ],
       "tick": [
-        0.8,
-        0.68,
-        0.55
+        0.4262,
+        0.227,
+        0.1508
       ]
     },
     "material": {
@@ -41353,27 +41384,58 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 478.031344,
+            "fitted": 6.556851
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.70228,
+            "variables.rust": [
+              0.4608,
+              0.1443,
+              0.0728
+            ],
+            "variables.rust2": [
+              0.2547,
+              0.0683,
+              0.0382
+            ],
+            "variables.tick": [
+              0.4262,
+              0.227,
+              0.1508
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7023
   },
   "upholstery_weave": {
     "doc": "Upholstery weave: a tight grey cloth whose light and dark threads cross in a fine two-tone check; modelled on ambientCG's Fabric061.",
     "variables": {
       "light": [
-        0.62,
-        0.62,
-        0.62
+        0.4221,
+        0.3771,
+        0.3261
       ],
       "dark": [
-        0.32,
-        0.32,
-        0.33
+        0.1263,
+        0.1255,
+        0.1297
       ],
       "mid": [
-        0.46,
-        0.46,
-        0.46
+        0.3504,
+        0.3521,
+        0.3472
       ]
     },
     "material": {
@@ -41493,27 +41555,58 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 1198.900694,
+            "fitted": 103.852667
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.3864,
+            "variables.light": [
+              0.4221,
+              0.3771,
+              0.3261
+            ],
+            "variables.dark": [
+              0.1263,
+              0.1255,
+              0.1297
+            ],
+            "variables.mid": [
+              0.3504,
+              0.3521,
+              0.3472
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.3864
   },
   "quilted_cotton": {
     "doc": "Quilted cotton: white cloth stitched in a grid of squares, each puffed into a soft pillow, shaded grey into the seams; modelled on ambientCG's Fabric048.",
     "variables": {
       "cotton": [
-        0.86,
-        0.86,
-        0.85
+        0.95,
+        0.95,
+        0.95
       ],
       "shade": [
-        0.7,
-        0.7,
-        0.7
+        0.875,
+        0.8736,
+        0.8661
       ],
       "seam": [
-        0.55,
-        0.55,
-        0.54
+        0.6872,
+        0.6818,
+        0.6695
       ]
     },
     "material": {
@@ -41714,32 +41807,63 @@
             ],
             "chroma": 0.02
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 386.481964,
+            "fitted": 202.345415
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.7,
+            "variables.cotton": [
+              0.95,
+              0.95,
+              0.95
+            ],
+            "variables.shade": [
+              0.875,
+              0.8736,
+              0.8661
+            ],
+            "variables.seam": [
+              0.6872,
+              0.6818,
+              0.6695
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7
   },
   "bamboo_blind": {
     "doc": "A bamboo blind: thin golden slats of split bamboo laid side by side, each its own shade and streaked with fibre, tied by fine cords; modelled on ambientCG's Wicker013.",
     "variables": {
       "slat": [
-        0.62,
-        0.4,
-        0.16
+        0.5584,
+        0.2718,
+        0.0736
       ],
       "slat2": [
-        0.45,
-        0.27,
-        0.09
+        0.4298,
+        0.1967,
+        0.0414
       ],
       "light": [
-        0.75,
-        0.55,
-        0.28
+        0.7422,
+        0.505,
+        0.2181
       ],
       "gap": [
-        0.18,
-        0.1,
-        0.04
+        0.1887,
+        0.0824,
+        0.0171
       ]
     },
     "material": {
@@ -41976,32 +42100,68 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 114.033459,
+            "fitted": 3.652065
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.7038,
+            "variables.slat": [
+              0.5584,
+              0.2718,
+              0.0736
+            ],
+            "variables.slat2": [
+              0.4298,
+              0.1967,
+              0.0414
+            ],
+            "variables.light": [
+              0.7422,
+              0.505,
+              0.2181
+            ],
+            "variables.gap": [
+              0.1887,
+              0.0824,
+              0.0171
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7038
   },
   "basket_weave": {
     "doc": "Basket weave: dark brown cane strips woven over and under pale ones, the pale squares showing in a staggered lattice; modelled on ambientCG's Wicker006.",
     "variables": {
       "strip": [
-        0.2,
-        0.11,
-        0.06
+        0.0732,
+        0.0313,
+        0.0153
       ],
       "strip2": [
-        0.13,
-        0.07,
-        0.04
+        0.0132,
+        0.003,
+        0.003
       ],
       "pale": [
-        0.5,
-        0.4,
-        0.32
+        0.334,
+        0.196,
+        0.1106
       ],
       "gap": [
-        0.04,
-        0.03,
-        0.02
+        0.0221,
+        0.006,
+        0.003
       ]
     },
     "material": {
@@ -42337,37 +42497,73 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 941.7954,
+            "fitted": 32.101872
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.72233,
+            "variables.strip": [
+              0.0732,
+              0.0313,
+              0.0153
+            ],
+            "variables.strip2": [
+              0.0132,
+              0.003,
+              0.003
+            ],
+            "variables.pale": [
+              0.334,
+              0.196,
+              0.1106
+            ],
+            "variables.gap": [
+              0.0221,
+              0.006,
+              0.003
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7223
   },
   "marble_checkerboard": {
     "doc": "A marble checkerboard floor: square tiles of cream marble and black marble veined with white, laid in a checker with fine grout; modelled on ambientCG's Tiles074.",
     "variables": {
       "cream": [
-        0.62,
-        0.55,
-        0.48
+        0.3839,
+        0.2958,
+        0.2335
       ],
       "cream2": [
-        0.5,
-        0.44,
-        0.38
+        0.2763,
+        0.1913,
+        0.1342
       ],
       "black": [
-        0.06,
-        0.06,
-        0.06
+        0.0038,
+        0.004,
+        0.0045
       ],
       "vein": [
-        0.55,
-        0.52,
-        0.48
+        0.0645,
+        0.0616,
+        0.0549
       ],
       "grout": [
-        0.3,
-        0.28,
-        0.26
+        0.2755,
+        0.2569,
+        0.2365
       ]
     },
     "material": {
@@ -42613,27 +42809,68 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 102.52878,
+            "fitted": 1.497619
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.83244,
+            "variables.cream": [
+              0.3839,
+              0.2958,
+              0.2335
+            ],
+            "variables.cream2": [
+              0.2763,
+              0.1913,
+              0.1342
+            ],
+            "variables.black": [
+              0.0038,
+              0.004,
+              0.0045
+            ],
+            "variables.vein": [
+              0.0645,
+              0.0616,
+              0.0549
+            ],
+            "variables.grout": [
+              0.2755,
+              0.2569,
+              0.2365
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.8324
   },
   "kraft_paper": {
     "doc": "Kraft paper: brown unbleached paper with a fine fibrous texture and faint ribs, as on the face of corrugated card; modelled on ambientCG's Paper004.",
     "variables": {
       "kraft": [
-        0.62,
-        0.42,
-        0.22
+        0.5314,
+        0.2872,
+        0.1175
       ],
       "kraft2": [
-        0.52,
-        0.34,
-        0.17
+        0.4658,
+        0.2389,
+        0.0676
       ],
       "light": [
-        0.7,
-        0.5,
-        0.28
+        0.6564,
+        0.4275,
+        0.213
       ]
     },
     "material": {
@@ -42789,8 +43026,39 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 778.887716,
+            "fitted": 29.011467
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.1372,
+            "variables.kraft": [
+              0.5314,
+              0.2872,
+              0.1175
+            ],
+            "variables.kraft2": [
+              0.4658,
+              0.2389,
+              0.0676
+            ],
+            "variables.light": [
+              0.6564,
+              0.4275,
+              0.213
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.1372
   }
 }

@@ -505,6 +505,7 @@ mod tests {
 /// The sea's heights and slopes (∂h/∂x, ∂h/∂z) over a periodic tile `size` metres across, and
 /// for a tile that displaces the surface, its choppy displacement and the displacement's
 /// gradient (see "Choppy crests and breaking" in the module docs).
+#[derive(Clone)]
 struct WaveTile {
     n: usize,
     size: f64,
@@ -746,6 +747,7 @@ const DISPLACED: usize = 2;
 /// The smallest Jacobian the slopes are sharpened by, short of the fold.
 const MIN_JACOBIAN: f64 = 0.2;
 
+#[derive(Clone)]
 pub struct WaveField {
     tiles: Vec<WaveTile>,
     /// Bounds on the height and the slope of the displaced surface.
@@ -2535,7 +2537,7 @@ pub fn create_ocean_over(opts: &Value, ground: Option<std::sync::Arc<crate::scen
         // The foam's own copy of the same waves (the geometry keeps the other).
         let coverage = SceneFile::parse_number(&opts["whitecaps"], whitecap_coverage(wind.norm())).clamp(0., 1.);
         if coverage > 0. {
-            m.foam = Some(Foam::new(waves_of(opts), wind, coverage, SceneFile::parse_color_def(opts, "foam_albedo", Color::new(0.6, 0.6, 0.6))));
+            m.foam = Some(Foam::new(waves.clone(), wind, coverage, SceneFile::parse_color_def(opts, "foam_albedo", Color::new(0.6, 0.6, 0.6))));
         }
         m.surf = surf.clone();
         Box::new(m)

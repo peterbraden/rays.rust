@@ -711,7 +711,7 @@ impl Weather {
 
     fn build_maps(&self) -> Maps {
         use rayon::prelude::*;
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         let n = self.params.map_size.max(2);
         let dirs = CubeMap::corner_directions(n);
         const K: usize = 26;

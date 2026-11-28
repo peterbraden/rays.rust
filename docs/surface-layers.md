@@ -59,6 +59,8 @@ value otherwise; either moved first by a `breakup`; `default`, 0, on surfaces wi
 | `sediment` | Loose sediment over the rock, metres: alluvium in basins, colluvium at the foot of slopes |
 | `ice` | Glacier ice, metres |
 | `lava` | Volcanic rock under the sediment, metres |
+| `lava_age` | Years since lava last flowed over the ground (1,000,000 where none has, in the landscape's time) |
+| `aa` | 0 to 1: how much of that lava is ʻaʻā (clinker rubble) rather than pāhoehoe (smooth and ropy) |
 | `flow` | log10 of the area draining through the point, m² |
 | `wetness` | Topographic wetness index, ln(a / tan β): high in hollows and on flats, low on ridges |
 | `convexity` | Metres above the mean of the neighbouring cells: ridges positive, gullies negative (depends on the simulation's cell size) |

@@ -114,7 +114,7 @@ use web_time::Instant;
 
 /// In every key: raise it when a stage's computation changes, so that what was built before
 /// isn't taken for what would be built now.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 14;
 /// A running stage saves where it has got to this often, seconds.
 pub const CHECKPOINT: f64 = 30.;
 /// `print` says how far a stage has got when nothing has been printed for this long, seconds.
@@ -273,32 +273,39 @@ struct Saved<T> { key: String, seconds: f64, state: T }
 #[derive(Serialize)]
 struct Saving<'a, T> { stage: &'a str, key: &'a str, seconds: f64, state: &'a T }
 
-/// The world directory, if there is one.
-struct Store { dir: Option<PathBuf> }
+/// The world directory, if there is one. Where it can't be written (a browser has no
+/// filesystem), what its host has provided of it (`assets::provide`, eg. a world built on
+/// the command line, fetched by the scene builder) is still read, and the rest is built in
+/// memory.
+struct Store { dir: Option<PathBuf>, writable: bool }
 
 impl Store {
     fn open(dir: Option<&Path>) -> Store {
-        let dir = dir.and_then(|d| match std::fs::create_dir_all(d) {
-            Ok(()) => Some(d.to_path_buf()),
-            Err(e) => { eprintln!("World: can't keep anything in {}: {}", d.display(), e); None },
-        });
-        Store { dir }
+        let Some(d) = dir else { return Store { dir: None, writable: false } };
+        match std::fs::create_dir_all(d) {
+            Ok(()) => Store { dir: Some(d.to_path_buf()), writable: true },
+            Err(_) if !crate::assets::provided_in(&d.to_string_lossy()).is_empty() => Store { dir: Some(d.to_path_buf()), writable: false },
+            Err(e) => { eprintln!("World: can't keep anything in {}: {}", d.display(), e); Store { dir: None, writable: false } },
+        }
     }
 
     fn path(&self, file: &str) -> Option<PathBuf> { self.dir.as_ref().map(|d| d.join(file)) }
 
-    fn has(&self, file: &str) -> bool { self.path(file).is_some_and(|p| p.exists()) }
+    fn has(&self, file: &str) -> bool {
+        self.path(file).is_some_and(|p| p.exists() || crate::assets::is_provided(&p.to_string_lossy()))
+    }
 
     /// The result in `file`, if it is there, whole, and of this key.
     fn read<T: serde::de::DeserializeOwned>(&self, file: &str, key: &str) -> Option<Saved<T>> {
-        let f = std::fs::File::open(self.path(file)?).ok()?;
-        let saved: Saved<T> = serde_json::from_reader(std::io::BufReader::new(f)).ok()?;
+        let bytes = crate::assets::read(&self.path(file)?.to_string_lossy()).ok()?;
+        let saved: Saved<T> = serde_json::from_slice(&bytes).ok()?;
         (saved.key == key).then_some(saved)
     }
 
     /// Write `value` as `file` (`pretty`: laid out to be read): under another name first, so
     /// that the file is never there in part. Whether it was written.
     fn write_json<T: serde::Serialize>(&self, file: &str, value: &T, pretty: bool) -> bool {
+        if !self.writable { return false; }
         let Some(path) = self.path(file) else { return false };
         #[cfg(not(target_arch = "wasm32"))]
         let process = std::process::id();
@@ -327,8 +334,12 @@ impl Store {
     /// of the same years.
     fn states(&self, prefix: &str) -> Vec<(u64, bool, String)> {
         let Some(dir) = &self.dir else { return vec![] };
-        let mut found: Vec<(u64, bool, String)> = std::fs::read_dir(dir).into_iter().flatten().flatten().filter_map(|e| {
-            let name = e.file_name().into_string().ok()?;
+        let mut names: Vec<String> = std::fs::read_dir(dir).into_iter().flatten().flatten()
+            .filter_map(|e| e.file_name().into_string().ok()).collect();
+        names.extend(crate::assets::provided_in(&dir.to_string_lossy()));
+        names.sort();
+        names.dedup();
+        let mut found: Vec<(u64, bool, String)> = names.into_iter().filter_map(|name| {
             let rest = name.strip_prefix(prefix)?.strip_suffix(".json")?;
             let (years, part) = match rest.strip_suffix(".part") { Some(y) => (y, true), None => (rest, false) };
             Some((years.parse().ok()?, part, name))
@@ -360,8 +371,12 @@ pub enum Site {
     Coast,
     /// ... a plateau of flat strata in the subtropics (mesa country), ...
     Plateau,
-    /// ... or a stretched province of fault blocks in the subtropics (basin and range).
+    /// ... a stretched province of fault blocks in the subtropics (basin and range), ...
     Rift,
+    /// ... a hotspot's young shield volcano, the one standing highest above the sea, ...
+    Hotspot,
+    /// ... or the youngest atoll of a hotspot's chain.
+    Atoll,
 }
 
 /// Samples of the planet a site is chosen from.
@@ -377,6 +392,8 @@ impl Site {
             Site::Coast => planet.most_coastal(SITE_SAMPLES),
             Site::Plateau => planet.most_plateau(SITE_SAMPLES),
             Site::Rift => planet.most_rifted(SITE_SAMPLES),
+            Site::Hotspot => planet.young_shield().unwrap_or_else(|| planet.most_volcanic(SITE_SAMPLES)),
+            Site::Atoll => planet.atoll().or_else(|| planet.young_shield()).unwrap_or_else(|| planet.most_volcanic(SITE_SAMPLES)),
         }
     }
 }
@@ -475,6 +492,8 @@ pub struct World {
     pub globe: Option<Terrain>,
     /// The patches, finest first.
     pub patches: Vec<Terrain>,
+    /// Whether the finest patch is a close level (`close_level`).
+    pub close: bool,
     pub manifest: Manifest,
     /// Where the manifest is, if there is a directory.
     pub manifest_path: Option<PathBuf>,
@@ -546,9 +565,11 @@ impl Builder<'_> {
     }
 
     /// The picture `file` of a stage, drawn by `draw` (given its path) if it isn't there.
+    /// None where the directory can't be written and the picture wasn't provided.
     fn picture(&self, file: String, draw: impl FnOnce(&str)) -> Option<String> {
-        let path = self.store.path(&file)?;
-        if !path.exists() { draw(path.to_str()?); }
+        if self.store.has(&file) { return Some(file); }
+        if !self.store.writable { return None; }
+        draw(self.store.path(&file)?.to_str()?);
         Some(file)
     }
 
@@ -564,7 +585,12 @@ impl Builder<'_> {
         let begun = Instant::now();
         let width = l.cells as f64 * l.spacing;
         let snap = |c: f64| (c / (width / 8.)).round() * (width / 8.);
+        // To a billionth of a degree (0.1 mm): trigonometry got them, which differs in the last
+        // bit between platforms (a browser's libm and the system's), and the key below, and so
+        // whether a world built on one is found on another, depends on every digit.
+        let quantise = |degrees: f64| (degrees * 1e9).round() / 1e9;
         let (lat, lon) = Domain::lat_lon(&frame.dir(snap(fx), snap(fz)));
+        let (lat, lon) = (quantise(lat), quantise(lon));
         let mut lp = params.clone();
         if !glaciers { lp.glacier = None; }
         if !channels { lp.channels = None; }
@@ -598,7 +624,7 @@ impl Builder<'_> {
         let mut outcome = None;
         let crust = crate::terrain::tectonics::crust_from(tp, params.seed, params.radius, || {
             if let Some(saved) = self.store.read::<CrustState>(&file, &key)
-                && let Some(c) = Crust::from_state(saved.state, tp.cells, params.radius) {
+                && let Some(c) = Crust::from_state(saved.state, tp.cells, tp.hotspots, params.radius) {
                 outcome = Some((true, saved.seconds, Some(format!("Tectonics: the crust of {} cells read from {}", c.plate.len(), file))));
                 return c;
             }
@@ -758,12 +784,34 @@ pub fn build(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&P
     build_with(d, dir, on_progress, CHECKPOINT)
 }
 
+/// Whether the world whose manifest is at `path` can be read whole, without simulating any of
+/// it: the manifest and every stage's file are there, on disk or provided (`assets`), and
+/// every stage is done.
+pub fn readable(path: &Path) -> bool {
+    let Some(manifest) = crate::assets::read(&path.to_string_lossy()).ok().and_then(|b| serde_json::from_slice::<Manifest>(&b).ok()) else { return false };
+    let dir = path.parent().unwrap_or(Path::new(""));
+    manifest.done() && manifest.stages.iter().all(|s| s.file.as_ref().is_none_or(|f| {
+        let p = dir.join(f);
+        p.exists() || crate::assets::is_provided(&p.to_string_lossy())
+    }))
+}
+
+/// The world's key: a hash of its description.
+fn world_key(d: &Description) -> String {
+    key(&["world", &format!("{:?}", d)])
+}
+
+/// The name of the world's manifest in its directory: `world-<key>.json`.
+pub fn manifest_file(d: &Description) -> String {
+    format!("world-{}.json", world_key(d))
+}
+
 fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&Progress) -> bool, checkpoint: f64) -> Result<World, Stopped> {
     let mut b = Builder::new(dir, on_progress);
     b.checkpoint = checkpoint;
-    let world_key = key(&["world", &format!("{:?}", d)]);
+    let world_key = world_key(d);
     b.manifest = Manifest { format: FORMAT, key: world_key.clone(), seed: d.params.planet.seed, stages: d.stages().iter().map(|n| Stage::pending(n)).collect() };
-    b.manifest_file = Some(format!("world-{}.json", world_key));
+    b.manifest_file = Some(manifest_file(d));
     b.save();
 
     let params = &d.params;
@@ -795,7 +843,9 @@ fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&
         // only run on the finest, where they are drawn.
         b.patch(d, &d.patch_name(k), l, (k == 0, k == 0), &centre, &frame, &mut outer, &mut built)?;
     }
+    let mut close = false;
     if let (Some(l), Some(camera)) = (close_level(d, &frame, built.last()), &d.close) {
+        close = true;
         let centre = camera.centre(&frame, 0.25 * l.cells as f64 * l.spacing);
         // Its glaciers are the finest level's: ice moving over cells this fine needs steps
         // too short to run (25 times as many as there for the same cells), and the ice's
@@ -803,13 +853,14 @@ fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&
         b.patch(d, &format!("patch {} m", l.spacing), &l, (false, true), &centre, &frame, &mut outer, &mut built)?;
         let n = built.len();
         let (around, close) = built.split_at_mut(n - 1);
+        take_shape(&mut close[0], &around[n - 2], CLOSE_FINER);
         take_glaciers(&mut close[0], &around[n - 2]);
     }
     let mut patches = built;
     let globe = d.planet_cells.map(|_| patches.remove(0));
     patches.reverse();
     let manifest_path = b.manifest_file.as_deref().and_then(|f| b.store.path(f));
-    Ok(World { site, frame, planet, climate, globe, patches, manifest: b.manifest, manifest_path })
+    Ok(World { site, frame, planet, climate, globe, patches, close, manifest: b.manifest, manifest_path })
 }
 
 /// The close level `d` adds (`Description::close_level`), if its focus is a camera within
@@ -822,6 +873,62 @@ fn close_level(d: &Description, frame: &Frame, finest: Option<&Terrain>) -> Opti
         h - scenery::sample(&t.domain, &scenery::corner_heights(t), &foot)
     };
     (height < CLOSE_HEIGHT).then_some(Level { cells: l.cells, spacing: l.spacing / CLOSE_FINER })
+}
+
+/// Give the close level the shape of the patch around it at that patch's scale, keeping its
+/// own finer relief: its surface raised or lowered by the difference between the two,
+/// smoothed over `finer` of its cells (one cell of the patch around it). Run five times finer,
+/// its rivers cut their valleys tens of metres deeper than the coarser patch's, which would
+/// leave its edges standing as walls against the ground around it. At its edges it is that
+/// patch's ground exactly, its own relief growing in over the next two of that patch's cells:
+/// its simulation holds its edges at their first heights while the ground inside wears down,
+/// leaving a rim with gullies along it.
+///
+/// And where that patch has a closed basin's floor (`Basins::floor`), the close level's is its
+/// level floor: the close level's edges are outlets, so its rivers drained the basin and cut
+/// gullies across the floor where the water stands and dries.
+fn take_shape(close: &mut Terrain, around: &Terrain, finer: f64) {
+    let crate::terrain::domain::Layout::Patch { n, .. } = close.domain.layout else { return };
+    let surface = scenery::corner_values(around, &around.surface());
+    let outer: Vec<f64> = close.domain.dirs.iter().map(|d| scenery::sample(&around.domain, &surface, d)).collect();
+    let raw: Vec<f64> = (0..close.domain.len()).map(|i| outer[i] - close.bed[i] - close.ice[i]).collect();
+    // Two box filters a cell of the patch around wide: a tent, smooth enough not to show.
+    let r = (finer / 2.).round().max(1.) as isize;
+    let mut diff = raw.clone();
+    for _ in 0..2 {
+        diff = box_filter(&diff, n, r);
+    }
+    let basins = around.basins();
+    let floors: Vec<f64> = (0..around.domain.len()).map(|i| if basins.closed[i] && basins.floor[i] { 1. } else { 0. }).collect();
+    let floors = scenery::corner_values(around, &floors);
+    let fade = 2. * finer;
+    for (i, b) in close.bed.iter_mut().enumerate() {
+        let (x, z) = (i % n, i / n);
+        let edge = x.min(z).min(n - 1 - x).min(n - 1 - z) as f64;
+        let own = crate::procedural::nubis_clouds::smoothstep(0., fade, edge);
+        // (Out to a cell beyond, where the ground cover's ragged shores of salt reach:
+        // `scenery::Ground::cover`.)
+        let floor = crate::procedural::nubis_clouds::smoothstep(0.02, 0.25, scenery::sample(&around.domain, &floors, &close.domain.dirs[i]));
+        *b += raw[i] + own * (1. - floor) * (diff[i] - raw[i]);
+    }
+}
+
+/// A box filter of radius `r` cells over an `n` x `n` grid (cell (i, j) at j * n + i), along
+/// each axis in turn, clamped at the edges.
+fn box_filter(v: &[f64], n: usize, r: isize) -> Vec<f64> {
+    let pass = |v: &[f64], at: &dyn Fn(usize, usize) -> usize| {
+        let mut out = vec![0.; v.len()];
+        for line in 0..n {
+            for k in 0..n {
+                let (lo, hi) = ((k as isize - r).max(0) as usize, ((k as isize + r) as usize).min(n - 1));
+                let sum: f64 = (lo..=hi).map(|m| v[at(line, m)]).sum();
+                out[at(line, k)] = sum / (hi - lo + 1) as f64;
+            }
+        }
+        out
+    };
+    let rows = pass(v, &|j, i| j * n + i);
+    pass(&rows, &|i, j| j * n + i)
 }
 
 /// Give `close`, a close level evolved without glaciers, those of `around`, the patch around it:
@@ -842,7 +949,13 @@ fn take_glaciers(close: &mut Terrain, around: &Terrain) {
             close.sediment[i] += w * (at(&sediment).max(0.) - close.sediment[i]);
             close.ice[i] = h;
         }
-        close.till[i] = close.till[i].max(at(&till).min(close.sediment[i]));
+        // (Till is sediment: where the ice left more than the close level's own rivers did,
+        // the ground there is till to that depth.)
+        let t = at(&till).max(0.);
+        if t > close.till[i] {
+            close.till[i] = t;
+            close.sediment[i] = close.sediment[i].max(t);
+        }
     }
 }
 
@@ -909,11 +1022,56 @@ mod tests {
         }
     }
 
+    /// A world directory that can't be written, as in a browser, is read from the files its
+    /// host provided: a world built elsewhere is taken whole from them, and nothing is written.
+    #[test]
+    fn test_a_world_is_read_from_provided_files() {
+        let d = tiny(31);
+        let dir = directory("provided");
+        let built = quietly(&d, Some(&dir));
+        // Under a file, so no directory can be made there.
+        let elsewhere = PathBuf::from(format!("Cargo.toml/world-provided-{}", std::process::id()));
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let name = e.file_name().into_string().unwrap();
+            crate::assets::provide(&elsewhere.join(&name).to_string_lossy(), std::fs::read(e.path()).unwrap());
+        }
+        assert!(crate::assets::is_provided(&elsewhere.join(manifest_file(&d)).to_string_lossy()));
+        let again = quietly(&d, Some(&elsewhere));
+        same(&built, &again);
+        assert!(again.manifest.stages.iter().all(|s| s.reused), "{:?}", again.manifest.stages);
+        assert!(again.manifest_path.is_none_or(|p| !p.exists()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_close_level_takes_the_shape_of_the_patch_around_it() {
+        // The finest level, and a close level five times finer about the camera.
+        let mut d = tiny(5);
+        d.close = Some(Focus::Camera { location: Vector3::new(0., 300., 0.), lookat: Vector3::new(0., 0., -1000.), above_ground: true });
+        let w = quietly(&d, None);
+        let (close, around) = (&w.patches[0], &w.patches[1]);
+        assert_eq!(w.patches.len(), 3);
+        assert_eq!(close.domain.area[0].sqrt().round(), 200.);
+        let corners = scenery::corner_values(around, &around.surface());
+        // At the scale of the patch around it, the close level is that patch's ground: no
+        // higher or lower on the whole, nor along its edges, where it meets that patch.
+        let surface = close.surface();
+        let outer: Vec<f64> = close.domain.dirs.iter().map(|d| scenery::sample(&around.domain, &corners, d)).collect();
+        let offset = |keep: &dyn Fn(usize) -> bool| {
+            let cells: Vec<usize> = (0..surface.len()).filter(|&i| keep(i)).collect();
+            cells.iter().map(|&i| surface[i] - outer[i]).sum::<f64>() / cells.len() as f64
+        };
+        let (whole, edges) = (offset(&|_| true), offset(&|i| close.domain.boundary[i]));
+        assert!(whole.abs() < 3. && edges.abs() < 0.01, "{} {}", whole, edges);
+        // A constant is its own average.
+        assert!(box_filter(&vec![2.; 25], 5, 2).iter().all(|&v| (v - 2.).abs() < 1e-12));
+    }
+
     #[test]
     fn test_keys_are_fnv_and_keep_their_parts_apart() {
-        // FNV-1a of "1" (the format), a zero byte and "a", worked by hand from the definition.
+        // FNV-1a of the format, a zero byte and "a", worked by hand from the definition.
         let mut h: u64 = 0xcbf29ce484222325;
-        for b in [b'1', 0, b'a'] { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
+        for b in FORMAT.to_string().bytes().chain([0, b'a']) { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
         assert_eq!(key(&["a"]), format!("{:016x}", h));
         assert_ne!(key(&["ab", "c"]), key(&["a", "bc"]));
         assert_ne!(key(&["a", ""]), key(&["a"]));
@@ -993,7 +1151,7 @@ mod tests {
         let radius = d.params.planet.radius;
         let stage = w.manifest.stage("plates").unwrap();
         let saved = store.read::<CrustState>(stage.file.as_ref().unwrap(), stage.key.as_ref().unwrap()).unwrap();
-        let crust = Crust::from_state(saved.state, 12, radius).unwrap();
+        let crust = Crust::from_state(saved.state, 12, d.params.planet.tectonics.as_ref().unwrap().hotspots, radius).unwrap();
         let ours = w.planet.crust.as_ref().unwrap();
         assert_eq!(serde_json::to_string(&crust.state()).unwrap(), serde_json::to_string(&ours.state()).unwrap());
         let stage = w.manifest.stage("climate").unwrap();
@@ -1010,7 +1168,7 @@ mod tests {
         // A file of another key, or of another grid, isn't taken for this one.
         assert!(store.read::<CrustState>(w.manifest.stage("plates").unwrap().file.as_ref().unwrap(), "0000000000000000").is_none());
         let saved = store.read::<CrustState>(w.manifest.stage("plates").unwrap().file.as_ref().unwrap(), w.manifest.stage("plates").unwrap().key.as_ref().unwrap()).unwrap();
-        assert!(Crust::from_state(saved.state, 16, radius).is_none());
+        assert!(Crust::from_state(saved.state, 16, d.params.planet.tectonics.as_ref().unwrap().hotspots, radius).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

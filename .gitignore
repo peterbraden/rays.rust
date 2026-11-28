@@ -21,6 +21,8 @@ Cargo.lock
 
 # Simulation states cached by harris_cumulus scenes, and animation frames
 .cumulus-cache/
+# Trees grown by forests with a "cache"
+.forest-cache/
 /demo/scenes/*-frames/
 
 # Saved render states (resumable renders)
@@ -35,3 +37,4 @@ Cargo.lock
 /src/gpu/pathtrace.spv
 /src/gpu/pathtrace.wgsl
 /src/gpu/pathtrace.spv.sources
+__pycache__/

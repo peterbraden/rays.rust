@@ -25,6 +25,31 @@ directions in that space. And candidates are rendered at twice the resolution an
 down in linear light, as the reference was, so detail finer than a pixel averages out rather
 than showing as sampling noise.
 
+That loss sees colour, and little else: scripts/loss-benchmark.py, which tests a loss on
+pairs of scan crops whose answer is known, found it scored a scan's other half no nearer than
+a different scan coloured like it (a third of the time), barely told a scan from its own
+phase-randomised blobs, and was least at the right scale for an eighth of the scans. So
+structure is compared besides (`StructureLoss`, on lightness normalised to mean 0 and
+deviation 1): the joint distribution of an oriented filter bank's responses with the next
+level's (after Portilla and Simoncelli), which tells shapes from blobs, and the radially
+averaged power spectrum, which tells sizes, and so holds the scale.
+
+Its colour term had blind spots too: a third less contrast, or the right colours in the wrong
+places (brown on the stones and grey on the leaves, every histogram the same), scored like a
+quadrant of the same scan. So colour is compared in Oklab (`ColourLoss`), where distances are
+about as different as they look: the mean colours, and the colours' distribution about their
+mean, each axis over the reference's deviation along it so chroma counts as much as lightness,
+jointly with each pixel's neighbourhood's colour, which sees where colours are. `FitLoss` is
+colour and structure together, each weighed to be about 1 between two different scans;
+`--no-structure` falls back to the patch loss alone, as fits before these were.
+
+And a fit sees the scan twice: whole, at --resolution pixels, and in detail, a quarter of it
+across at the same pixels (four times as fine), compared with four tiles of the scan, one in
+each quadrant (`DETAIL_TILES`). At 128 pixels across a two-metre scan a pebble is a few
+pixels and a leaf one or two, too few for any loss to see their shapes; in detail they're
+there (the benchmark's structure and identity scores rise threefold at that sampling). The
+detail view doubles the renders; `--no-detail` leaves it out.
+
 The parameters are found by CMA-ES (Hansen, "The CMA evolution strategy: a tutorial", 2016),
 which needs no gradients: the renderer isn't differentiable.
 
@@ -39,7 +64,8 @@ and `overlay`):
 
 A reference's `"view": "wall"` renders it on a vertical plane facing the camera, for scans of
 cliffs and walls (taken facing them, their up the scene's up); by default it is ground, seen
-from above.
+from above. A reference's `"rotate"` turns the scan by quarter turns anticlockwise before it
+is compared: a wood scanned with its grain across, for a preset whose grain runs up the wall.
 
 Fit it with `scripts/fit-material.py scree` (its first reference; `scree:1` the second): the
 scan is fetched into references/materials/ if it isn't there (fetch-material-reference.py), and
@@ -78,10 +104,20 @@ turned blue, ochre turned pink.) Give colours that cover little of the surface a
 `chroma`: their hue hardly moves the loss, so it drifts (trail_dirt's stones, a tenth of its
 area, turned mint green at 0.12).
 
+All that is how colours were searched for. Now they are solved for instead (`ColourSolve`;
+`--no-solve` searches as above): a preset's image is linear in its colours, so a few renders
+of each candidate give each colour's share of every pixel, and the colours nearest the scan
+follow by transport and least squares in moments, drawn to their author's where they hardly
+show. The search is left the pattern alone (often just the scale), and every candidate is
+judged with its best colours. The bounds above then don't apply: granite_outcrop, whose
+scan is darker and browner than any gain could take it, went from 167 to 9 by its colours
+alone, where forty generations of searching them had reached 62.
+
     scripts/fit-material.py scree|spec.json [--iterations 30] [--resolution 160] [--samples 8] [--record] [-o out_dir]
 
 Writes to out_dir: fitted.json (a library file with the fitted preset under `name`, and the
-library material using it), compare.png (reference, start, fitted), and log.csv.
+library material using it), compare.png (reference, start, fitted; a second row for the
+detail view, against the scan's first tile), and log.csv.
 """
 import argparse, copy, csv, json, math, os, subprocess, sys, tempfile, time
 
@@ -95,20 +131,61 @@ def srgb_to_linear(c):
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
-def load_reference(path, resolution):
+ROTATE = 0  # quarter turns of the scan, anticlockwise: a reference's "rotate", as its preset lies
+
+
+def load_reference(path, resolution, crop=None):
     """The reference albedo, sRGB-encoded in [0, 1], resampled to resolution square (averaged
-    in linear light, as the render's pixels average it)."""
+    in linear light, as the render's pixels average it); or a crop of it, (x, y, width) as
+    fractions of its width. Turned by `ROTATE` quarter turns first: a wood scanned with its grain
+    across, for a preset whose grain runs up."""
     im = np.asarray(Image.open(path).convert("RGB"), dtype=np.float64) / 255.
-    lin = srgb_to_linear(im)
+    lin = np.rot90(srgb_to_linear(im), ROTATE)
+    if crop:
+        n = min(lin.shape[:2])
+        x, y, w = (int(round(c * n)) for c in crop)
+        lin = lin[y:y + w, x:x + w]
     channels = [Image.fromarray(lin[:, :, k].astype(np.float32), mode="F").resize((resolution, resolution), Image.BOX)
                 for k in range(3)]
     lin = np.stack([np.asarray(c, dtype=np.float64) for c in channels], axis=2)
     return linear_to_srgb(lin)
 
 
+# The detail view: a quarter of the scan across, compared with these tiles of it (x, y and
+# width as fractions of the scan's width), one in each quadrant, so no one tile's lighting or
+# odd stone decides the fit.
+DETAIL = 0.25
+ROAM = 25  # how far a roaming fit's patches lie from the origin, in the scan's sizes
+DETAIL_TILES = [(0.125, 0.125, DETAIL), (0.625, 0.125, DETAIL), (0.125, 0.625, DETAIL), (0.625, 0.625, DETAIL)]
+
+
 def linear_to_srgb(c):
     c = np.clip(c, 0, None)
     return np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
+
+
+def oklab(srgb):
+    """sRGB-encoded colours to Oklab (Ottosson, 2020): lightness L and the opponent axes a
+    (green-red) and b (blue-yellow), scaled so equal distances look about equally different;
+    0.02 is about as small a difference as one notices."""
+    lin = srgb_to_linear(np.clip(srgb, 0, 1))
+    lms = lin @ np.array([[0.4122214708, 0.5363325363, 0.0514459929],
+                          [0.2119034982, 0.6806995451, 0.1073969566],
+                          [0.0883024619, 0.2817188376, 0.6299787005]]).T
+    lms = np.cbrt(lms)
+    return lms @ np.array([[0.2104542553, 0.7936177850, -0.0040720468],
+                           [1.9779984951, -2.4285922050, 0.4505937099],
+                           [0.0259040371, 0.7827717662, -0.8086757660]]).T
+
+
+def from_oklab(lab):
+    lms = lab @ np.array([[1., 0.3963377774, 0.2158037573],
+                          [1., -0.1055613458, -0.0638541728],
+                          [1., -0.0894841775, -1.2914855480]]).T
+    lin = (lms ** 3) @ np.array([[4.0767416621, -3.3077115913, 0.2309699292],
+                                 [-1.2684380046, 2.6097574011, -0.3413193965],
+                                 [-0.0041960863, -0.7034186147, 1.7076147010]]).T
+    return linear_to_srgb(lin)
 
 
 # Opponent colour axes: lightness, red-green, blue-yellow.
@@ -175,6 +252,421 @@ class PatchLoss:
         return total / self.levels
 
 
+def luminance(img):
+    """Lightness along the first opponent axis, normalised to mean 0 and deviation 1: what's
+    left is structure, its contrast and colour being the colour terms' business."""
+    l = img @ OPPONENT[:, 0]
+    return (l - l.mean()) / (l.std() + 1e-6)
+
+
+class StructureLoss:
+    """What things look like, not their colour: the shapes, sizes and orientations of the
+    pattern, compared on lightness normalised to mean 0 and deviation 1 (so neither a scan's
+    uneven lighting nor a candidate's contrast passes for structure). Three parts:
+
+    - `patch`: the sliced Wasserstein distance between contrast-normalised 7x7 patches (each
+      patch less its own mean, over the image's deviation) at each level of a pyramid: edges,
+      corners and textures in a neighbourhood, wherever they are, whatever their brightness.
+    - `bank`: an oriented filter bank's responses, jointly with the coarser level's: at each
+      level, a pixel's complex responses to four orientations of a log-Gabor filter an octave
+      wide about a quarter of the sampling rate (even and odd parts: lines and edges), with the
+      magnitudes of the next level's at the same place. The joint distribution of these is a
+      texture's signature in Portilla and Simoncelli's sense ("A parametric texture model based
+      on joint statistics of complex wavelet coefficients", IJCV 2000): which orientations
+      occur together, and how detail sits within larger forms, tell a leaf from a blob of the
+      same size; compared by sliced Wasserstein distance, as Heitz et al. compare a network's
+      features, without the network.
+    - `spectrum`: the radially averaged power spectrum in half-octave bands, as log power: the
+      sizes things come in. It moves along the frequency axis when the material is scaled, so
+      it is what holds a fit's scale.
+    """
+
+    # Each part's weight makes it 1 for two different scans (the median over the scans that
+    # the library's presets name, at 256 pixels a quadrant; scripts/loss-benchmark.py).
+    WEIGHTS = {"patch": 50., "bank": 360., "spectrum": 2.4}
+
+    def __init__(self, parts=("bank", "spectrum"), levels=4, samples=4096, projections=64, seed=3):
+        self.parts, self.levels, self.samples, self.seed = parts, levels, samples, seed
+        self.weights = self.WEIGHTS
+        rng = np.random.default_rng(seed)
+        self.proj = {}
+        for name, d in (("patch", 49), ("bank", 12)):
+            p = rng.normal(size=(d, projections))
+            self.proj[name] = p / np.linalg.norm(p, axis=0)
+
+    @staticmethod
+    def swd(fa, fb, proj):
+        n = min(len(fa), len(fb))
+        qa, qb = np.sort(fa[:n] @ proj, axis=0), np.sort(fb[:n] @ proj, axis=0)
+        return float(np.mean((qa - qb) ** 2))
+
+    def patches(self, l, rng):
+        p = 7
+        h, w = l.shape[0] - p + 1, l.shape[1] - p + 1
+        n = min(self.samples, h * w)
+        ys, xs = rng.integers(0, h, n), rng.integers(0, w, n)
+        x = np.stack([l[ys + dy, xs + dx] for dy in range(p) for dx in range(p)], axis=1)
+        return x - x.mean(axis=1, keepdims=True)
+
+    @staticmethod
+    def bank(l):
+        """Complex responses to four orientations of a log-Gabor filter, (h, w, 4)."""
+        h, w = l.shape
+        fy, fx = np.meshgrid(np.fft.fftfreq(h), np.fft.fftfreq(w), indexing="ij")
+        r = np.hypot(fx, fy) + 1e-9
+        radial = np.exp(-np.log(r / 0.25) ** 2 / (2 * (0.55 * np.log(2)) ** 2))
+        radial[0, 0] = 0.
+        phi = np.arctan2(fy, fx)
+        f = np.fft.fft2(l)
+        out = []
+        for k in range(4):
+            d = np.cos(phi - k * np.pi / 4)
+            angular = np.where(d > 0, d ** 4, 0.) * 2.
+            out.append(np.fft.ifft2(f * radial * angular))
+        return np.stack(out, axis=2)
+
+    def bank_features(self, levels, rng):
+        feats = []
+        for k in range(len(levels) - 1):
+            fine, coarse = self.bank(levels[k]), np.abs(self.bank(levels[k + 1]))
+            h, w = fine.shape[:2]
+            coarse = np.repeat(np.repeat(coarse, 2, axis=0), 2, axis=1)[:h, :w]
+            n = min(self.samples, h * w)
+            idx = rng.integers(0, h * w, n)
+            f = np.concatenate([fine.real.reshape(-1, 4), fine.imag.reshape(-1, 4), coarse.reshape(-1, 4)], axis=1)[idx]
+            feats.append(f)
+        return feats
+
+    @staticmethod
+    def spectrum(l):
+        h, w = l.shape
+        p = np.abs(np.fft.fft2(l)) ** 2 / (h * w)
+        fy, fx = np.meshgrid(np.fft.fftfreq(h), np.fft.fftfreq(w), indexing="ij")
+        r = np.hypot(fx, fy)
+        # Half-octave bands from four cycles across the image to the sampling limit.
+        edges = 0.5 * 2. ** -np.arange(0., np.log2(min(h, w) / 8.) + 0.25, 0.5)[::-1]
+        bands = [p[(r >= lo) & (r < hi)].mean() for lo, hi in zip(edges[:-1], edges[1:])]
+        return np.log(np.array(bands) + 1e-8)
+
+    def parts_of(self, a, b):
+        la, lb = luminance(a), luminance(b)
+        pa, pb = PatchLoss.pyramid(la, self.levels), PatchLoss.pyramid(lb, self.levels)
+        out = {}
+        if "patch" in self.parts:
+            t = 0.
+            for k, (x, y) in enumerate(zip(pa, pb)):
+                rng = np.random.default_rng(self.seed + k)
+                t += self.swd(self.patches(x, rng), self.patches(y, rng), self.proj["patch"])
+            out["patch"] = t / self.levels
+        if "bank" in self.parts:
+            fa, fb = self.bank_features(pa, np.random.default_rng(self.seed)), self.bank_features(pb, np.random.default_rng(self.seed))
+            out["bank"] = sum(self.swd(x, y, self.proj["bank"]) for x, y in zip(fa, fb)) / len(fa)
+        if "spectrum" in self.parts:
+            out["spectrum"] = float(np.mean((self.spectrum(la) - self.spectrum(lb)) ** 2))
+        return out
+
+    def __call__(self, a, b):
+        return sum(self.weights[k] * v for k, v in self.parts_of(a, b).items())
+
+
+# About the least difference one notices along each of Oklab's axes, for the muted colours of
+# natural ground: lightness 0.02; chroma less, as near grey the eye sees a tint of 0.005 to
+# 0.01 (a scree fitted with 0.02 for both went teal and khaki over a grey scan, its mean 0.007
+# off along a, which cost next to nothing).
+JND = np.array([0.02, 0.008, 0.008])
+
+
+class ColourLoss:
+    """Colour compared in Oklab, where distances are about as different as they look, in
+    three parts, each of which the patch loss's colour term was nearly blind to one way
+    (scripts/loss-benchmark.py):
+
+    - `mean`: the squared distance between the images' mean colours, each axis in units of
+      the least noticeable difference along it (`JND`).
+    - `spread`: the colours' distribution about its mean, at each pyramid level: the sliced
+      Wasserstein distance between the centred colours, each axis over the reference's own
+      deviation along it (and half a noticeable difference, so a flat colour's noise isn't
+      magnified), so a material's chroma counts as much as its lightness and a
+      contrast flattened or boosted shows (it didn't: a third less contrast scored as a
+      quadrant of the same scan).
+    - `binding`: which colours go where: each pixel's colour with its neighbourhood's (the
+      next pyramid level's, at the same place), centred and scaled as above, compared jointly.
+      Brown leaves on grey stones and grey leaves on brown stones have the same histograms;
+      a pixel's colour beside its surroundings' tells them apart.
+    """
+
+    WEIGHTS = {"mean": 0.25, "spread": 3., "binding": 1.}
+
+    def __init__(self, parts=("mean", "spread", "binding"), levels=4, samples=8192, projections=48, seed=5):
+        self.parts, self.levels, self.samples, self.seed = parts, levels, samples, seed
+        rng = np.random.default_rng(seed)
+        self.proj = {}
+        for name, d in (("spread", 3), ("binding", 6)):
+            p = rng.normal(size=(d, projections))
+            self.proj[name] = p / np.linalg.norm(p, axis=0)
+
+    def parts_of(self, a, b):
+        la, lb = oklab(a), oklab(b)
+        out = {}
+        if "mean" in self.parts:
+            d = (la.reshape(-1, 3).mean(0) - lb.reshape(-1, 3).mean(0)) / JND
+            out["mean"] = float(np.sum(d * d))
+        pa, pb = PatchLoss.pyramid(la, self.levels), PatchLoss.pyramid(lb, self.levels)
+        spread = binding = 0.
+        for k in range(self.levels):
+            x, y = pa[k], pb[k]
+            mx, my = x.reshape(-1, 3).mean(0), y.reshape(-1, 3).mean(0)
+            scale = x.reshape(-1, 3).std(0) + 0.5 * JND
+            rng = np.random.default_rng(self.seed + k)
+            fx, fy = ((x - mx) / scale).reshape(-1, 3), ((y - my) / scale).reshape(-1, 3)
+            n = min(self.samples, len(fx))
+            ix, iy = rng.permutation(len(fx))[:n], rng.permutation(len(fy))[:n]
+            if "spread" in self.parts:
+                spread += StructureLoss.swd(fx[ix], fy[iy], self.proj["spread"])
+            if "binding" in self.parts and k + 1 < self.levels:
+                def joint(img, m, f):
+                    c = np.repeat(np.repeat(img, 2, axis=0), 2, axis=1)
+                    h, w = (img.shape[0] * 2, img.shape[1] * 2)
+                    c = ((c - m) / scale).reshape(-1, 3)
+                    return np.concatenate([f.reshape(h, w, 3)[:h, :w].reshape(-1, 3), c], axis=1)
+                h2, w2 = pa[k + 1].shape[0] * 2, pa[k + 1].shape[1] * 2
+                gx = joint(pa[k + 1], mx, fx.reshape(x.shape)[:h2, :w2])
+                gy = joint(pb[k + 1], my, fy.reshape(y.shape)[:h2, :w2])
+                n = min(self.samples, len(gx))
+                binding += StructureLoss.swd(gx[rng.permutation(len(gx))[:n]], gy[rng.permutation(len(gy))[:n]],
+                                             self.proj["binding"])
+        if "spread" in self.parts:
+            out["spread"] = spread / self.levels
+        if "binding" in self.parts:
+            out["binding"] = binding / (self.levels - 1)
+        return out
+
+    def __call__(self, a, b):
+        return sum(self.WEIGHTS[k] * v for k, v in self.parts_of(a, b).items())
+
+
+def components(classes):
+    """Connected regions (4-neighbours) of equal class: each pixel's label is the least index
+    in its region, by propagating minima to equal neighbours and jumping along labels."""
+    h, w = classes.shape
+    labels = np.arange(h * w).reshape(h, w)
+    while True:
+        old = labels
+        new = labels.copy()
+        for axis, shift in ((0, 1), (0, -1), (1, 1), (1, -1)):
+            nb = np.roll(labels, shift, axis=axis)
+            same = np.roll(classes, shift, axis=axis) == classes
+            # Not across the image's edge.
+            if axis == 0:
+                same[0 if shift == 1 else -1, :] = False
+            else:
+                same[:, 0 if shift == 1 else -1] = False
+            new = np.where(same & (nb < new), nb, new)
+        flat = new.ravel()
+        for _ in range(4):
+            flat = flat[flat]
+        labels = flat.reshape(h, w)
+        if np.array_equal(labels, old):
+            return labels
+
+
+class PaletteLoss:
+    """The scan as a palette of colours, and how each is laid out: what a histogram misses.
+
+    The reference's colours are clustered (k-means in Oklab, each axis in units of its just
+    noticeable difference, `JND`, after a 3 x 3 average so a pixel's noise doesn't make
+    speckle), and each pixel of both images is given its nearest entry. Then:
+
+    - `share`: how much each entry covers (total variation, 0 to 1).
+    - `instances`: each entry's connected patches and their sizes: for each entry, the
+      distribution of its area over patch sizes (in octaves of area), compared by the
+      Wasserstein distance in octaves and weighed by the entry's share. Lichen in patches
+      four times too big costs 2 octaves of area (two of size) wherever there is lichen; the
+      colour histograms didn't see it at all.
+    - `adjacency`: which entries lie next to which, at 1, 3 and 9 pixels: the co-occurrence
+      of the pair (total variation between the two images' matrices). The colours in the
+      wrong places, the wrong grain, stones without their dark rims.
+
+    - `spectra`: the power spectra of the colour itself, Oklab's lightness and both opponent
+      axes in units of the just noticeable difference (not normalised, so how much the colour
+      changes at each size counts as well as at which sizes it does), in half-octave bands,
+      compared as logarithms: the sizes over which the colour changes, the grain's included,
+      where `StructureLoss`'s spectrum sees only the shape of lightness's.
+    - `entry_spectra`: the same for each entry's indicator (1 where the entry is, 0 elsewhere),
+      weighed by its share: the sizes over which each colour comes and goes, and the
+      sharpness of its edges (a soft-edged blob has less power at the finest bands than a
+      crisp flake of the same size).
+
+    A candidate of the wrong colours falls mostly into one or two entries, and its shares say
+    so; one whose stones are the right colours but the wrong size, its instances and spectra."""
+
+    WEIGHTS = {"share": 4., "instances": 1., "adjacency": 2., "spectra": 1., "entry_spectra": 1.}
+    OFFSETS = (1, 3, 9)
+    BINS = np.arange(0., 15.)  # log2 of a patch's area in pixels
+
+    def __init__(self, k=6, parts=("share", "instances", "adjacency", "spectra", "entry_spectra"), seed=1):
+        self.k, self.parts, self.seed = k, parts, seed
+        self.cache = {}
+
+    @staticmethod
+    def smooth(img):
+        p = np.pad(img, ((1, 1), (1, 1), (0, 0)), mode="edge")
+        h, w = img.shape[:2]
+        return sum(p[dy:dy + h, dx:dx + w] for dy in range(3) for dx in range(3)) / 9.
+
+    def features(self, img):
+        return oklab(self.smooth(img)) / JND
+
+    def palette(self, ref):
+        key = hash(ref.tobytes())
+        if key not in self.cache:
+            x = self.features(ref).reshape(-1, 3)
+            rng = np.random.default_rng(self.seed)
+            # k-means++ seeding, then Lloyd's iterations.
+            centres = [x[rng.integers(len(x))]]
+            for _ in range(self.k - 1):
+                d = np.min(((x[:, None] - np.array(centres)[None]) ** 2).sum(-1), axis=1)
+                centres.append(x[rng.choice(len(x), p=d / d.sum())])
+            c = np.array(centres)
+            for _ in range(25):
+                lab = np.argmin(((x[:, None] - c[None]) ** 2).sum(-1), axis=1)
+                c = np.array([x[lab == j].mean(0) if np.any(lab == j) else c[j] for j in range(self.k)])
+            self.cache[key] = c
+        return self.cache[key]
+
+    def classes(self, img, centres):
+        x = self.features(img)
+        return np.argmin(((x[:, :, None] - centres[None, None]) ** 2).sum(-1), axis=2)
+
+    def sizes(self, classes):
+        """For each entry, its area's distribution over patch sizes (rows sum to its share)."""
+        labels = components(classes).ravel()
+        area = np.bincount(labels, minlength=labels.size)[labels]
+        bins = np.clip(np.log2(area).astype(int), 0, len(self.BINS) - 1)
+        out = np.zeros((self.k, len(self.BINS)))
+        np.add.at(out, (classes.ravel(), bins), 1.)
+        return out / labels.size
+
+    def cooccurrence(self, classes, d):
+        k = self.k
+        out = np.zeros((k, k))
+        for a, b in ((classes[:-d], classes[d:]), (classes[:, :-d], classes[:, d:])):
+            np.add.at(out, (a.ravel(), b.ravel()), 1.)
+        out = out + out.T
+        return out / out.sum()
+
+    def parts_of(self, a, b):
+        centres = self.palette(a)
+        ca, cb = self.classes(a, centres), self.classes(b, centres)
+        out = {}
+        if "share" in self.parts:
+            sa, sb = np.bincount(ca.ravel(), minlength=self.k) / ca.size, np.bincount(cb.ravel(), minlength=self.k) / cb.size
+            out["share"] = 0.5 * float(np.abs(sa - sb).sum())
+        if "instances" in self.parts:
+            ha, hb = self.sizes(ca), self.sizes(cb)
+            sa, sb = ha.sum(1), hb.sum(1)
+            w1 = 0.
+            for j in range(self.k):
+                if sa[j] > 0 and sb[j] > 0:
+                    w1 += 0.5 * (sa[j] + sb[j]) * np.abs(np.cumsum(ha[j] / sa[j] - hb[j] / sb[j])).sum()
+            out["instances"] = float(w1)
+        if "adjacency" in self.parts:
+            out["adjacency"] = float(np.mean([0.5 * np.abs(self.cooccurrence(ca, d) - self.cooccurrence(cb, d)).sum()
+                                              for d in self.OFFSETS]))
+        if "spectra" in self.parts:
+            # Not smoothed: the finest band is the grain's.
+            fa, fb = oklab(a) / JND, oklab(b) / JND
+            out["spectra"] = float(np.mean([np.mean((self.log_spectrum(fa[:, :, c], 1e-3) - self.log_spectrum(fb[:, :, c], 1e-3)) ** 2)
+                                            for c in range(3)]))
+        if "entry_spectra" in self.parts:
+            t, total = 0., 0.
+            for j in range(self.k):
+                ia, ib = (ca == j).astype(np.float64), (cb == j).astype(np.float64)
+                w = 0.5 * (ia.mean() + ib.mean())
+                if w > 0:
+                    t += w * np.mean((self.log_spectrum(ia, 1e-5) - self.log_spectrum(ib, 1e-5)) ** 2)
+                    total += w
+            out["entry_spectra"] = float(t / max(total, 1e-9))
+        return {k: self.WEIGHTS[k] * v for k, v in out.items()}
+
+    @staticmethod
+    def log_spectrum(x, eps):
+        """Half-octave bands of x's power spectrum (less its mean), as StructureLoss's."""
+        h, w = x.shape
+        p = np.abs(np.fft.fft2(x - x.mean())) ** 2 / (h * w)
+        fy, fx = np.meshgrid(np.fft.fftfreq(h), np.fft.fftfreq(w), indexing="ij")
+        r = np.hypot(fx, fy)
+        edges = 0.5 * 2. ** -np.arange(0., np.log2(min(h, w) / 8.) + 0.25, 0.5)[::-1]
+        return np.log(np.array([p[(r >= lo) & (r < hi)].mean() for lo, hi in zip(edges[:-1], edges[1:])]) + eps)
+
+    def __call__(self, a, b):
+        return sum(self.parts_of(a, b).values())
+
+
+class FitLoss:
+    """What a fit minimises: colour (`ColourLoss`) and structure (`StructureLoss`), and
+    optionally the older `PatchLoss` (`patch`), each weighed to be about 1 between two
+    different scans (the median over the scans the presets name, a quadrant each at 128
+    pixels), so each counts about as much as the others."""
+
+    WEIGHTS = {"colour": 1., "structure": 0.5, "patch": 3.6, "palette": 1.}
+
+    def __init__(self, parts=("colour", "structure")):
+        self.losses = {k: {"colour": ColourLoss, "structure": StructureLoss, "patch": PatchLoss, "palette": PaletteLoss}[k]()
+                       for k in parts}
+
+    def parts_of(self, a, b):
+        return {k: self.WEIGHTS[k] * loss(a, b) for k, loss in self.losses.items()}
+
+    def __call__(self, a, b):
+        return sum(self.parts_of(a, b).values())
+
+
+class FloorLoss:
+    """Every part of every loss (`ColourLoss`, `StructureLoss`, `PaletteLoss`) as a multiple of
+    the scan's own: what it is between the scan's detail tiles, which are the same material
+    and differ only as the material does from place to place. So 1 is a candidate as like the
+    scan as the scan is like itself, whatever the part: no part's units or weight decide how
+    much it counts, and a scan whose colour varies a lot across it (granite_outcrop's tiles
+    differ by many times what a candidate's mean colour needs to be within) doesn't let a fit
+    off for the parts where it varies little.
+
+    The ratios are combined by their root mean square, so the worst part leads: a fit of the
+    right colours in the wrong patches (granite_outcrop's lichen in patches four times too
+    big, three and a half times the scan's own) isn't averaged into looking good by the
+    parts it gets right. Each floor has a guard, a quarter of the median floor over the
+    library's scans, so a part a scan happens to agree with itself on almost perfectly
+    doesn't make noise look enormous."""
+
+    FAMILIES = {"colour": ColourLoss, "structure": StructureLoss, "palette": PaletteLoss}
+    # The median between two quadrants of the same scan over the library's scans, in each
+    # family's `parts_of` units.
+    TYPICAL = {"colour.mean": 0.0531, "colour.spread": 0.0118, "colour.binding": 0.0107,
+               "structure.bank": 0.000626, "structure.spectrum": 0.021,
+               "palette.share": 0.3975, "palette.instances": 0.6878, "palette.adjacency": 0.2594,
+               "palette.spectra": 0.0961, "palette.entry_spectra": 0.0514}
+    GUARD = 0.25
+
+    def __init__(self, tiles, power=2.):
+        self.losses = {k: c() for k, c in self.FAMILIES.items()}
+        self.power = power
+        pairs = [self.raw(tiles[j], tiles[i]) for i in range(len(tiles)) for j in range(len(tiles)) if i != j]
+        self.floor = {k: float(np.mean([p[k] for p in pairs])) + self.GUARD * self.TYPICAL[k] for k in pairs[0]}
+
+    def raw(self, a, b):
+        out = {}
+        for family, loss in self.losses.items():
+            out.update({family + "." + k: v for k, v in loss.parts_of(a, b).items()})
+        return out
+
+    def parts_of(self, a, b):
+        return {k: v / self.floor[k] for k, v in self.raw(a, b).items()}
+
+    def __call__(self, a, b):
+        r = np.array(list(self.parts_of(a, b).values()))
+        return float(np.mean(r ** self.power) ** (1. / self.power))
+
+
 def get(obj, path):
     for k in path:
         obj = obj[k]
@@ -187,19 +679,144 @@ def put(obj, path, value):
     obj[path[-1]] = value
 
 
+def free_params(preset, taken=(), hold=()):
+    """Every number of a preset's graphs a fit can move, as spec params (`--free`): the sizes
+    of its noises and cells (`scale`, `smallest`, a warp's `amount`, a bombing's `cell` and
+    `size`; up to four times either way, on a log scale), roughness and jitter (within a
+    quarter), weights in `multiply` (up to 2.5 times) and offsets in `add`, `smoothstep`'s
+    thresholds, `transform`'s stretches, scalar variables (shares, densities: three times),
+    a layer's coverage, and each colour map's stops (an offset and a stretch). Seeds and
+    octave counts stay. Nodes of the same seed and value are one parameter: a cell pattern's
+    `id` and its `stones` must stay the same cells. `taken` are paths the spec already has;
+    `hold` (the reference's `"hold"`) names numbers to keep as written, each `{"node", "field",
+    "seed"}` (a missing key matches any): a size the scan shows plainly, which the search would
+    otherwise trade for a better palette."""
+    params, tied = [], {}
+    taken = {tuple(t) for t in taken}
+    # A bump ("normal") isn't rendered for a fit, so its numbers aren't searched; but where it
+    # repeats a node the albedo has (a stone's `height` beside its `mask`), it moves with it,
+    # or the fitted stones lose their relief.
+    bump, bumps = False, []
+
+    def held(node, k, seed):
+        return any(h.get("node", node) == node and h.get("field", k) == k and h.get("seed", seed) == seed
+                   for h in hold)
+
+    def add(path, v, kind, key=None):
+        if tuple(path) in taken or v == 0:
+            return
+        if key is not None and key in tied:
+            tied[key]["paths"].append(list(path))
+            return
+        if bump:
+            return  # a bump's own numbers aren't searched: it isn't rendered (strip_relief)
+        if kind == "length":
+            p = {"min": abs(v) / 4., "max": abs(v) * 4., "log": True} if v > 0 else None
+        elif kind == "factor":
+            p = {"min": v / 2.5, "max": v * 2.5, "log": True} if v > 0 else None
+        elif kind == "count":
+            p = {"min": v / 3., "max": v * 3., "log": True} if v > 0 else None
+        elif kind == "unit":
+            p = {"min": max(0., v - 0.25), "max": min(1., v + 0.25)}
+        else:  # an offset or a threshold
+            p = {"min": v - 0.3, "max": v + 0.3}
+        if p is None:
+            return
+        p.update(path=list(path), paths=[list(path)], free=kind)
+        params.append(p)
+        if key is not None:
+            tied[key] = p
+
+    def number(x):
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+    def walk(o, path):
+        if isinstance(o, list):
+            for i, x in enumerate(o):
+                walk(x, path + [i])
+            return
+        if not isinstance(o, dict):
+            return
+        node, seed = o.get("node"), o.get("seed")
+        for k, v in o.items():
+            if k == "normal" and not bump:
+                bumps.append((v, path + [k]))
+                continue  # walked after the rest, below
+            here = path + [k]
+            if held(node, k, seed):
+                continue
+            key = lambda: (node, k, seed, v) if seed is not None else None
+            if k in ("scale", "smallest", "cell", "wavelength") and number(v) and node:
+                add(here, v, "length", key())
+            elif k == "amount" and node == "warp" and number(v):
+                add(here, v, "length", key())
+            elif k in ("amplitude", "density") and number(v) and node:
+                add(here, v, "factor", key())
+            elif k in ("roughness", "jitter", "spread") and number(v) and node:
+                add(here, v, "unit", key())
+            elif k == "width" and node == "bombing" and number(v):
+                add(here, v, "unit", key())
+            elif k == "size" and node == "bombing" and isinstance(v, list):
+                for i, x in enumerate(v):
+                    add(here + [i], x, "length", (node, k, i, seed, x))
+            elif k == "scale" and node == "transform" and isinstance(v, list):
+                for i, x in enumerate(v):
+                    if number(x) and x != 1:
+                        add(here + [i], x, "factor")
+            elif k in ("from", "to") and node == "smoothstep" and number(v):
+                add(here, v, "offset")
+            elif k == "coverage" and number(v):
+                add(here, v, "unit")
+            elif k == "inputs" and node in ("multiply", "add") and isinstance(v, list):
+                for i, x in enumerate(v):
+                    if number(x):
+                        add(here + [i], x, "factor" if node == "multiply" else "offset")
+            elif k == "color_map" and isinstance(v, list):
+                stops = [here + [i, 0] for i, e in enumerate(v) if isinstance(e, list) and number(e[0])]
+                if len(stops) >= 2 and not bump and not any(tuple(s) in taken for s in stops):
+                    params.append({"kind": "stops", "paths": stops, "free": "stops"})
+            walk(v, here)
+
+    for name, v in preset.get("variables", {}).items():
+        if number(v):
+            add(["variables", name], v, "count")
+    walk(preset.get("variables", {}), ["variables"])
+    walk(preset.get("material", {}), ["material"])
+    bump = True
+    for v, path in bumps:
+        walk(v, path)
+    return params
+
+
 class Problem:
     """The spec's parameters as a vector in [0, 1]^n, and the material they make."""
 
-    def __init__(self, spec, preset):
+    def __init__(self, spec, preset, colours=True):
+        """With colours False, the spec's colours are left out of the vector (ColourSolve
+        finds them)."""
         self.spec, self.preset = spec, preset
         self.slots = []  # (param, component or None)
         for p in spec["params"]:
+            if p.get("kind") in ("color", "colours") and not colours:
+                continue
             if p.get("kind") == "color":
                 self.slots += [(p, c) for c in range(3)]
             elif p.get("kind") == "colours":
                 self.slots += [(p, ("group", c)) for c in range(4)]
+            elif p.get("kind") == "stops":
+                self.slots += [(p, ("stops", c)) for c in range(2)]
             else:
                 self.slots.append((p, None))
+
+    def apply_stops(self, preset, p, offset, stretch):
+        """A colour map's stops moved together: offset by up to `offset` of their span and
+        stretched about their middle by up to `stretch` either way, so they keep their order."""
+        positions = [get(self.preset, path) for path in p["paths"]]
+        mid, span = 0.5 * (min(positions) + max(positions)), max(max(positions) - min(positions), 0.1)
+        o = (2. * min(max(offset, 0.), 1.) - 1.) * p.get("offset", 0.3) * span
+        st = p.get("stretch", 2.) ** (2. * min(max(stretch, 0.), 1.) - 1.)
+        for path, v in zip(p["paths"], positions):
+            put(preset, path, float("%.5g" % (mid + st * (v - mid) + o)))
 
     def group_bounds(self, p, c):
         """The group's numbers: a gain on lightness, two tint shifts, a contrast."""
@@ -277,6 +894,9 @@ class Problem:
     def start(self, usage):
         x = []
         for p, c in self.slots:
+            if isinstance(c, tuple) and c[0] == "stops":
+                x.append(0.5)  # no offset, no stretch
+                continue
             if isinstance(c, tuple):
                 lo, hi = self.group_bounds(p, c[1])
                 x.append(0.5 if c[1] in (1, 2) else (0. - math.log(lo)) / (math.log(hi) - math.log(lo)))
@@ -303,6 +923,10 @@ class Problem:
         k = 0
         while k < len(self.slots):
             p, c = self.slots[k]
+            if isinstance(c, tuple) and c[0] == "stops":
+                self.apply_stops(preset, p, float(x[k]), float(x[k + 1]))
+                k += 2
+                continue
             if isinstance(c, tuple):
                 self.apply_group(preset, p, [self.group_value(p, j, float(x[k + j])) for j in range(4)])
                 k += 4
@@ -316,23 +940,170 @@ class Problem:
             if "field" in p:
                 usage[p["field"]] = v
             else:
-                put(preset, p["path"], v)
+                for path in p.get("paths", [p["path"]]):
+                    put(preset, path, float("%.5g" % v))
             k += 1
+        legal_bombing(preset)
         return preset, usage
 
 
-def scene(usage, library_path, size, resolution, samples, seed, view="ground"):
+def legal_bombing(o):
+    """Bombing nodes' sizes kept as the parser takes them, [smallest, largest] and at most four
+    cells, however the free search has scaled the cell and the sizes apart (a little inside four,
+    so a recorded value rounded up stays legal)."""
+    if isinstance(o, list):
+        for x in o:
+            legal_bombing(x)
+    elif isinstance(o, dict):
+        if o.get("node") == "bombing" and isinstance(o.get("size"), list) and len(o["size"]) == 2:
+            cell = o.get("cell", 0.05)
+            a, b = sorted(min(float(v), 3.98 * cell) for v in o["size"])
+            o["size"] = [a, b]
+        for v in o.values():
+            legal_bombing(v)
+
+
+def sliced_transport(x, y, passes=12, seed=1):
+    """x's points moved to y's distribution (iterated sliced optimal transport, Pitié et al.
+    2005, Rabin et al. 2011): along each of three orthogonal directions a pass, each point to
+    the value of y's at its rank. Points stay where they were as far as the distributions
+    allow, so each pixel's colour goes to the scan's colour nearest it in kind."""
+    rng = np.random.default_rng(seed)
+    x = x.copy()
+    q = np.linspace(0, 1, len(x))
+    for _ in range(passes):
+        axes, _ = np.linalg.qr(rng.normal(size=(3, 3)))
+        for d in axes.T:
+            px, py = x @ d, np.sort(y @ d)
+            target = np.interp(q, np.linspace(0, 1, len(py)), py)
+            order = np.argsort(px)
+            step = np.empty_like(px)
+            step[order] = target - px[order]
+            x += step[:, None] * d
+    return x
+
+
+class ColourSolve:
+    """The spec's colours found for each candidate rather than searched for.
+
+    Seen top-down under the white sky, a preset's image is linear in its colours: each pixel
+    is what doesn't depend on them (the gloss of a plastic, colours not fitted) plus each
+    colour times how much of it the pixel shows (its share in the colour maps and mixes, its
+    shading). So a candidate is rendered with the fitted colours black (`B`), then with three
+    of them at a time, one in each channel (each colour's share `W`, its channel's render less
+    B), and any colours make the image B + W c without rendering it.
+
+    Which colours: each pixel's colour moved to the scan's distribution in Oklab by sliced
+    optimal transport, then the colours that come nearest those targets by least squares
+    (errors weighed to be about Oklab's lightness: by the cube root's slope at the target), a
+    few times over. Each colour is drawn toward its author's by as much as a fiftieth of the
+    surface would draw it (`prior`), so a colour that hardly shows keeps its own (left free,
+    trail_dirt's stones went mint green) and the visible ones go where the scan says. As each
+    colour answers for the pixels it paints, the colours keep their places: the stones' colour
+    is fitted to the scan's stones, not swapped with the ground's.
+
+    For a search this means far fewer dimensions (scree's 34 become 1, its scale) and the best
+    colours for every candidate, at the cost of a render for every three colours more."""
+
+    def __init__(self, spec, preset, prior=0.02, iterations=6):
+        paths = []
+        for p in spec["params"]:
+            if p.get("kind") == "colours":
+                paths += [tuple(q) for q in p["paths"]]
+            elif p.get("kind") == "color":
+                paths.append(tuple(p["path"]))
+        self.paths = list(dict.fromkeys(paths))
+        self.own = np.array([get(preset, list(p)) for p in self.paths], dtype=np.float64)
+        self.prior, self.iterations = prior, iterations
+        self.black_base = None
+
+    @property
+    def renders(self):
+        return 1 + (len(self.paths) + 2) // 3
+
+    def basis(self, preset, r):
+        """The preset with the fitted colours black (r = 0), or colours 3(r - 1) to 3r - 1 each
+        white in one channel."""
+        out = copy.deepcopy(preset)
+        for j, path in enumerate(self.paths):
+            c = [0., 0., 0.]
+            if r > 0 and j // 3 == r - 1:
+                c[j % 3] = 1.
+            put(out, list(path), c)
+        return out
+
+    def shares(self, images):
+        """(B, W) from the renders (linear light): W is height x width x colours."""
+        b = images[0]
+        w = np.stack([images[1 + j // 3][:, :, j % 3] - b[:, :, j % 3] for j in range(len(self.paths))], axis=-1)
+        return b, w
+
+    @staticmethod
+    def compose(view, colours):
+        b, w = view
+        return b + w @ colours
+
+    @staticmethod
+    def slope(lin):
+        """d(cube root)/d(linear): an error in linear light as one in Oklab's lightness."""
+        return 1. / (3. * np.maximum(lin, 0.004) ** (2. / 3.))
+
+    def solve(self, views, targets):
+        """The colours (colours x 3, linear) bringing each view nearest its target (sRGB
+        pixels)."""
+        c = self.own.copy()
+        k = len(self.paths)
+        prior = self.prior * sum(v[0].shape[0] * v[0].shape[1] for v in views) * self.slope(self.own) ** 2
+        for _ in range(self.iterations):
+            a = np.zeros((3, k, k))
+            rhs = np.zeros((3, k))
+            for view, y in zip(views, targets):
+                b, w = view
+                lin = np.clip(self.compose(view, c), 0, 1).reshape(-1, 3)
+                moved = sliced_transport(oklab(linear_to_srgb(lin)), oklab(y.reshape(-1, 3)))
+                t = srgb_to_linear(np.clip(from_oklab(moved), 0, 1))
+                weight = self.slope(t) ** 2
+                wf, bf = w.reshape(-1, k), b.reshape(-1, 3)
+                for ch in range(3):
+                    ww = wf * weight[:, ch:ch + 1]
+                    a[ch] += ww.T @ wf
+                    rhs[ch] += ww.T @ (t[:, ch] - bf[:, ch])
+            for ch in range(3):
+                m = a[ch] + np.diag(prior[:, ch])
+                c[:, ch] = np.linalg.solve(m, rhs[ch] + prior[:, ch] * self.own[:, ch])
+            c = np.clip(c, 0.003, 0.95)
+        return c
+
+    def apply(self, preset, colours):
+        out = copy.deepcopy(preset)
+        for path, c in zip(self.paths, colours):
+            put(out, list(path), [round(float(v), 4) for v in c])
+        return out
+
+
+def scene(usage, library_path, size, resolution, samples, seed, view="ground", lighting="sun", offset=(0., 0.)):
     # A scan of a cliff was taken facing the cliff, its up the scene's up: seen as a wall (the
     # plane z = 0, from in front), so a preset's beds and streaks along y line up with it.
+    # Lit by a sun behind the camera, of irradiance pi so a matte surface facing it shows its
+    # albedo, under a black sky: each point's light is then exact (a white sky's is sampled,
+    # and its noise, a tenth of the albedo at a sample a pixel, reads as grain to the spectra).
+    # The scans are albedo maps, lit evenly; `strip_relief` takes the preset's bump and gloss off so the
+    # sun doesn't shade it (under the white sky a matte surface showed its albedo regardless).
+    toward = [0, 0, -1] if view == "wall" else [0, 1, 0]
+    light = {"background": [0, 0, 0], "sun": {"direction": toward, "intensity": math.pi, "angular_radius": 0.01}} \
+        if lighting == "sun" else {"background": [1, 1, 1]}
+    # The camera looks at the surface `offset` (metres along it) from the origin: a fit that
+    # roams scores each generation on another patch, so it can't fit one patch's accidents.
+    ox, oy = offset
     if view == "wall":
-        camera = {"type": "orthographic", "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "height": size}
+        camera = {"type": "orthographic", "location": [ox, oy, -5], "lookat": [ox, oy, 0], "up": [0, 1, 0], "height": size}
         ground = {"type": "plane", "normal": [0, 0, -1], "distance": 0, "material": "M"}
     else:
-        camera = {"type": "orthographic", "location": [0, 5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "height": size}
+        camera = {"type": "orthographic", "location": [ox, 5, oy], "lookat": [ox, 0, oy], "up": [0, 0, 1], "height": size}
         ground = {"type": "plane", "y": 0, "material": "M"}
     return {
         "width": 2 * resolution, "height": 2 * resolution, "supersamples": samples, "max_depth": 2, "seed": seed,
-        "background": [1, 1, 1], "output": {"tonemap": "none", "exposure": 1.0},
+        **light, "output": {"tonemap": "none", "exposure": 1.0},
         "library": library_path,
         "camera": camera,
         "materials": {"M": usage},
@@ -340,18 +1111,71 @@ def scene(usage, library_path, size, resolution, samples, seed, view="ground"):
     }
 
 
-def render(preset, usage, name, args, size, tmp, tag):
+def sig(x):
+    """x to five significant figures, as a fit records it: places would round a millimetre's
+    cell by a few percent, and could push a bombing's stones past the four cells it allows."""
+    return float("%.5g" % x) if isinstance(x, float) else x
+
+
+def strip_relief(o):
+    """o without its bump maps (every "normal" key), and matte: a glossy layer (`plastic`, wet
+    sand and mud) seen straight down with the sun behind the camera mirrors the sun into it, a
+    white sheet the scan, an albedo map, never shows; so it is drawn as `lambertian` in its own
+    albedo, and a `conductor` in its `reflectance` (a named metal's, which the JSON doesn't
+    give, as mid grey)."""
+    if isinstance(o, dict):
+        if o.get("type") == "plastic" and "albedo" in o:
+            return {"type": "lambertian", "albedo": strip_relief(o["albedo"])}
+        if o.get("type") == "conductor":  # a metal, likewise: drawn in its reflectance's colour
+            return {"type": "lambertian", "albedo": strip_relief(o.get("reflectance", [0.6, 0.6, 0.6]))}
+        return {k: strip_relief(v) for k, v in o.items() if k != "normal"}
+    if isinstance(o, list):
+        return [strip_relief(v) for v in o]
+    return o
+
+
+class RenderFailed(Exception):
+    """The renderer refused a candidate (a panic, say, at an extreme of its parameters)."""
+
+
+def resolve_variant(preset, library=None):
+    """A variant (a preset whose material is another preset, `{"type": "library", "name", ...}`,
+    its other fields setting that preset's variables, as a palette) as the base preset with those
+    variables set: so the fitting render can strip its gloss (`strip_relief` sees only the base's
+    materials), and a fit's paths into the variant's fields still reach it."""
+    m = preset.get("material", {})
+    if not (isinstance(m, dict) and m.get("type") == "library" and "name" in m):
+        return preset
+    library = library or json.load(open(os.path.join(ROOT, "src/material/library.json")))
+    base = json.loads(json.dumps(library[m["name"]]))
+    base["variables"] = dict(base.get("variables", {}),
+                             **{k: v for k, v in m.items() if k not in ("type", "name", "scale", "seed", "over")})
+    if "scale" in m or "scale" in preset:
+        base["scale"] = base.get("scale", 1.) * m.get("scale", 1.) * preset.get("scale", 1.)
+    return resolve_variant(base, library)
+
+
+def render(preset, usage, name, args, size, tmp, tag, linear=False):
+    lighting = getattr(args, "lighting", "sun")
+    preset = resolve_variant(preset)
+    if lighting == "sun":
+        preset = strip_relief(preset)
     library_path = os.path.join(tmp, "library-%s.json" % tag)
     json.dump({name: preset}, open(library_path, "w"))
     path = os.path.join(tmp, "scene-%s.json" % tag)
-    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view), open(path, "w"))
+    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view, lighting,
+                    getattr(args, "offset", (0., 0.))), open(path, "w"))
     out = os.path.join(tmp, "render-%s.png" % tag)
-    subprocess.run([args.rays, path, "--fresh", "-o", out], check=True, cwd=ROOT,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    run = subprocess.run([args.rays, path, "--fresh", "-o", out], cwd=ROOT,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if run.returncode != 0:
+        lines = run.stderr.strip().splitlines()
+        at = next((i for i, l in enumerate(lines) if "panicked" in l), max(len(lines) - 1, 0))
+        raise RenderFailed("%s: %s" % (tag, " ".join(lines[at:at + 2]) or "exit %d" % run.returncode))
     img = srgb_to_linear(np.asarray(Image.open(out).convert("RGB"), dtype=np.float64) / 255.)
     # Rendered at twice the size and averaged down in linear light, as the reference was.
     img = 0.25 * (img[0::2, 0::2] + img[1::2, 0::2] + img[0::2, 1::2] + img[1::2, 1::2])
-    return linear_to_srgb(img)
+    return img if linear else linear_to_srgb(img)
 
 
 def main():
@@ -360,11 +1184,25 @@ def main():
     a.add_argument("--record", action="store_true", help="write the fit into the preset's reference in library.json")
     a.add_argument("--iterations", type=int, default=30)
     a.add_argument("--resolution", type=int, default=160, help="pixels across (at least 64, for the loss's four levels)")
-    a.add_argument("--samples", type=int, default=8)
+    a.add_argument("--samples", type=int, default=1, help="a pixel's samples (each of 2 x 2 subpixels): the sun's light is exact, so one does")
     a.add_argument("--seed", type=int, default=1)
     a.add_argument("--sigma", type=float, default=0.2, help="CMA-ES's initial step, in the unit cube")
     a.add_argument("--rays", default=os.path.join(ROOT, "target/release/rays"))
     a.add_argument("-o", "--output", default="fit")
+    a.add_argument("--loss", choices=["floor", "fit"], default="floor",
+                   help="floor: each part as a multiple of the scan's own (FloorLoss); fit: FitLoss's weighted sum")
+    a.add_argument("--no-structure", dest="structure", action="store_false",
+                   help="the colour loss alone (PatchLoss), as fits before the structure term were")
+    a.add_argument("--free", action="store_true",
+                   help="search every number of the preset's graphs too (free_params), not only the spec's")
+    a.add_argument("--no-solve", dest="solve", action="store_false",
+                   help="search for the colours with the rest (as fits before ColourSolve did)")
+    a.add_argument("--fixed", dest="roam", action="store_false",
+                   help="score every candidate on the same patch (by default each generation is scored on another,"
+                        " and the fit chosen by its loss on patches it was never scored on)")
+    a.add_argument("--judges", type=int, default=3, help="fresh patches the final choice is scored on, when roaming")
+    a.add_argument("--no-detail", dest="detail", action="store_false",
+                   help="the whole scan only, without the detail view (half the renders)")
     args = a.parse_args()
     import cma
 
@@ -394,43 +1232,170 @@ def main():
     usage = {"type": "library", "name": name, **spec.get("usage", {})}
     size = float(spec["size"])
     args.view = spec.get("view", "ground")
+    global ROTATE
+    ROTATE = int(spec.get("rotate", 0))
     reference = load_reference(os.path.join(base, spec["reference"]), args.resolution)
-    loss = PatchLoss()
-    problem = Problem(spec, preset)
+    details = [load_reference(os.path.join(base, spec["reference"]), args.resolution, t) for t in DETAIL_TILES] \
+        if args.detail else []
+    if args.loss == "floor" and not details:
+        sys.exit("--loss floor measures against the scan's detail tiles: drop --no-detail")
+    loss = FloorLoss(details) if args.loss == "floor" else FitLoss() if args.structure else PatchLoss()
+    if args.free:
+        taken = [p["path"] for p in spec["params"] if "path" in p]
+        extra = free_params(preset, taken, spec.get("hold", ()))
+        spec = dict(spec, params=spec["params"] + extra)
+        print("free: %d more parameters (%s)" % (len(extra), ", ".join(
+            "%s %d" % (k, sum(p["free"] == k for p in extra)) for k in sorted({p["free"] for p in extra}))), file=sys.stderr)
+    solver = ColourSolve(spec, preset) if args.solve else None
+    if solver is not None and not solver.paths:
+        solver = None
+    problem = Problem(spec, preset, colours=solver is None)
     os.makedirs(args.output, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
+        sizes = [size] + ([size * DETAIL] if details else [])
+        # The detail view's colours are fitted to its tiles together.
+        targets = [reference] + ([np.concatenate([t.reshape(-1, 3) for t in details])] if details else [])
+
+        def score(imgs):
+            total = loss(reference, imgs[0])
+            if details:
+                # The detail view: as much again, its loss the mean over the scan's tiles.
+                total += float(np.mean([loss(t, imgs[1]) for t in details]))
+                if args.loss == "floor":
+                    total *= 0.5  # so 1 is as like the scan as it is like itself
+            return total
+
+        def rendered(p, u, tag):
+            return [render(p, u, name, args, s, tmp, tag + "v%d" % v) for v, s in enumerate(sizes)]
+
         def evaluate(x, tag):
+            """The loss at x, its images and the preset (with its colours solved for)."""
             p, u = problem.make(x, usage)
-            img = render(p, u, name, args, size, tmp, tag)
-            return loss(reference, img), img
+            if solver is None:
+                imgs = rendered(p, u, tag)
+                return score(imgs), imgs, p
+            views = []
+            for v, s in enumerate(sizes):
+                imgs = [None if r == 0 and solver.black_base else
+                        render(solver.basis(p, r), u, name, args, s, tmp, tag + "v%dr%d" % (v, r), linear=True)
+                        for r in range(solver.renders)]
+                if imgs[0] is None:
+                    imgs[0] = np.zeros_like(imgs[1])
+                elif solver.black_base is None:
+                    # A matte preset is black without its colours: once seen, not rendered again.
+                    solver.black_base = bool(imgs[0].max() < 1e-4)
+                views.append(solver.shares(imgs))
+            colours = solver.solve(views, targets)
+            imgs = [linear_to_srgb(np.clip(solver.compose(view, colours), 0, 1)) for view in views]
+            return score(imgs), imgs, solver.apply(p, colours)
 
         x0 = problem.start(usage)
-        start_loss, start_img = evaluate(x0, "start")
-        print("start: loss %.5f" % start_loss, file=sys.stderr)
-        es = cma.CMAEvolutionStrategy(list(x0), args.sigma, {"bounds": [0, 1], "seed": args.seed, "verbose": -9})
-        best = (start_loss, x0, start_img)
+        p0, u0 = problem.make(x0, usage)
+        start_img = rendered(p0, u0, "start")
+        start_loss = score(start_img)
+        print("start: loss %.5f%s" % (start_loss, "; solving for %d colours, %d renders a view" % (
+            len(solver.paths), solver.renders) if solver else ""), file=sys.stderr)
+        best = (start_loss, x0, start_img, p0)
         log = [("iteration", "evaluations", "best", "generation_best", "seconds")]
         t0 = time.time()
-        for it in range(args.iterations):
+        if solver is not None:
+            # The author's pattern with its colours solved for, before any search.
+            r = evaluate(x0, "solved")
+            best = (r[0], x0, r[1], r[2])
+            print("colours solved: loss %.5f" % r[0], file=sys.stderr)
+        es = cma.CMAEvolutionStrategy(list(x0), args.sigma, {"bounds": [0, 1], "seed": args.seed, "verbose": -9}) \
+            if len(x0) > 1 else None
+        if es is None and len(x0) == 1:
+            # One number (CMA-ES needs two): a grid over its range, then finer about the best.
+            lo, hi, step = 0., 1., 0.1
+            for it in range(4):
+                xs = [np.array([u]) for u in np.arange(lo, hi + 1e-9, step)]
+                for k, x in enumerate(xs):
+                    r = evaluate(x, "g%d" % k)
+                    if r[0] < best[0]:
+                        best = (r[0], x, r[1], r[2])
+                log.append((it + 1, len(xs), best[0], best[0], round(time.time() - t0, 1)))
+                print("round %d: best %.5f at %.4f" % (it + 1, best[0], best[1][0]), file=sys.stderr)
+                lo, hi, step = max(best[1][0] - step, 0.), min(best[1][0] + step, 1.), step / 4
+        # Roaming: each generation's candidates share a patch, a new one each generation, up to
+        # ROAM sizes from the origin, so all of a generation are compared alike but none can fit
+        # one patch's accidents. A generation's best is then partly its patch's luck, so the fit is
+        # chosen afterwards from the generations' bests by their loss on patches no generation saw.
+        roam = np.random.default_rng(args.seed + 7919)
+        leaders = []  # (generation's best loss, x)
+        for it in range(args.iterations if es else 0):
+            if args.roam:
+                args.offset = tuple(float(v) for v in roam.uniform(-ROAM * size, ROAM * size, 2))
             xs = es.ask()
-            results = [evaluate(np.array(x), "c%d" % k) for k, x in enumerate(xs)]
+            results = []
+            for k, x in enumerate(xs):
+                try:
+                    results.append(evaluate(np.array(x), "c%d" % k))
+                except RenderFailed as e:
+                    # A candidate the renderer can't take is scored as far off, and the search goes on.
+                    print("render failed, scored as far off: %s" % e, file=sys.stderr)
+                    results.append((1e6, None, None))
             es.tell(xs, [r[0] for r in results])
             k = int(np.argmin([r[0] for r in results]))
+            leaders.append((results[k][0], np.array(xs[k]), it))
             if results[k][0] < best[0]:
-                best = (results[k][0], np.array(xs[k]), results[k][1])
+                best = (results[k][0], np.array(xs[k]), results[k][1], results[k][2])
             log.append((it + 1, es.countevals, best[0], results[k][0], round(time.time() - t0, 1)))
             print("iteration %d: best %.5f (this generation %.5f)" % (it + 1, best[0], results[k][0]), file=sys.stderr)
+        judged = None
+        if args.roam and leaders:
+            # The judges: patches drawn apart from the generations'. Candidates: CMA-ES's mean and
+            # the best of the generations in the search's last half, a few of the lowest.
+            judges = [tuple(float(v) for v in np.random.default_rng(args.seed + 104729 + j).uniform(-ROAM * size, ROAM * size, 2))
+                      for j in range(args.judges)]
+            late = sorted([l for l in leaders if l[2] >= len(leaders) // 2], key=lambda l: l[0])[:3]
+            candidates = [("author's, colours solved", x0)] + [("generation %d's best" % (l[2] + 1), l[1]) for l in late] \
+                + [("the search's mean", np.array(es.result.xfavorite))]
 
-        fitted, fitted_usage = problem.make(best[1], usage)
-        json.dump({"library": {name: fitted}, "material": fitted_usage, "loss": {"start": start_loss, "fitted": best[0]}},
+            def judge(x, label):
+                scores, last = [], None
+                for j, o in enumerate(judges):
+                    args.offset = o
+                    try:
+                        last = evaluate(x, "j%d" % j)
+                    except RenderFailed:
+                        return float("inf"), None
+                    scores.append(last[0])
+                print("judged on %d fresh patches: %.5f (%s)" % (len(judges), np.mean(scores), label), file=sys.stderr)
+                return float(np.mean(scores)), last
+
+            verdicts = [(judge(x, label), label, x) for label, x in candidates]
+            author = verdicts[0][0][0]
+            (score_, last), label, x = min(verdicts[1:], key=lambda v: v[0][0])
+            if score_ < author:
+                best = (score_, x, last[1], last[2])
+            else:
+                label, a_last = "the author's, colours solved", verdicts[0][0][1]
+                best = (author, x0, a_last[1], a_last[2])
+            judged = {"fitted": round(score_ if score_ < author else author, 6), "author_solved": round(author, 6),
+                      "patches": len(judges), "chosen": label}
+            print("chosen: %s" % label, file=sys.stderr)
+            args.offset = (0., 0.)
+        _, fitted_usage = problem.make(best[1], usage)
+        fitted = best[3]
+        if solver is not None:
+            # The images composed from the shares, checked by rendering the fit itself.
+            composed = best[0]
+            imgs = rendered(fitted, fitted_usage, "fitted")
+            best = (score(imgs), best[1], imgs, fitted)
+            print("fitted, rendered: loss %.5f (composed %.5f)" % (best[0], composed), file=sys.stderr)
+        json.dump({"library": {name: fitted}, "material": fitted_usage, "loss": {"start": start_loss, "fitted": best[0]},
+                   **({"judged": judged} if judged else {})},
                   open(os.path.join(args.output, "fitted.json"), "w"), indent=1)
         with open(os.path.join(args.output, "log.csv"), "w", newline="") as f:
             csv.writer(f).writerows(log)
+        # A row a view: the scan (its first tile, for the detail), the start and the fit.
         r = args.resolution
-        sheet = Image.new("RGB", (3 * r, r))
-        for k, img in enumerate([reference, start_img, best[2]]):
-            sheet.paste(Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)), (k * r, 0))
+        sheet = Image.new("RGB", (3 * r, r * len(start_img)))
+        for row, ref in enumerate([reference] + details[:1]):
+            for k, img in enumerate([ref, start_img[row], best[2][row]]):
+                sheet.paste(Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)), (k * r, row * r))
         sheet.save(os.path.join(args.output, "compare.png"))
         print("loss %.5f -> %.5f; wrote %s" % (start_loss, best[0], args.output), file=sys.stderr)
         if args.record:
@@ -438,20 +1403,24 @@ def main():
                 sys.exit("--record needs a preset's reference, not a spec file")
             values = {}
             for p in spec["params"]:
-                if p.get("kind") == "colours":
+                if "paths" in p:
                     for path in p["paths"]:
-                        values[".".join(map(str, path))] = get(fitted, path)
+                        v = get(fitted, path)
+                        values[".".join(map(str, path))] = [sig(c) for c in v] if isinstance(v, list) else sig(v)
                     continue
                 if "field" in p:
-                    values[p["field"]] = round(fitted_usage[p["field"]], 4)
+                    values[p["field"]] = sig(fitted_usage[p["field"]])
                 else:
                     v = get(fitted, p["path"])
-                    values[".".join(map(str, p["path"]))] = [round(c, 4) for c in v] if isinstance(v, list) else round(v, 4)
+                    values[".".join(map(str, p["path"]))] = [sig(c) for c in v] if isinstance(v, list) else sig(v)
             library = json.load(open(library_path))
             name, index = reference_at
             library[name]["references"][index]["fit"] = {
                 "loss": {"start": round(start_loss, 6), "fitted": round(best[0], 6)},
                 "iterations": args.iterations, "resolution": args.resolution, "samples": args.samples,
+                "loss_kind": ("floor" if args.loss == "floor" else "structure" if args.structure else "colour") + ("+detail" if args.detail else "")
+                + ("+solved" if solver else "") + ("+free" if args.free else "") + ("+roam" if judged else ""),
+                **({"judged": judged} if judged else {}),
                 "date": time.strftime("%Y-%m-%d"), "applied": False, "values": values}
             with open(library_path, "w") as f:
                 json.dump(library, f, indent=2)

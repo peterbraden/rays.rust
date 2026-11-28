@@ -8,7 +8,7 @@ out="${1:-_site}"
 test -f web/www/pkg/rays_web_bg.wasm || { echo "web/www/pkg is missing: run scripts/build-web.sh first" >&2; exit 1; }
 rm -rf "$out"
 mkdir -p "$out/web/www/pkg" "$out/demo/scenes"
-cp web/index.html web/style.css web/app.js web/worker.js web/gpu-worker.js web/rays.js "$out/web/"
+cp web/index.html web/style.css web/app.js web/worker.js web/gpu-worker.js web/rays.js web/raycaster.js "$out/web/"
 cp web/www/pkg/rays_web.js web/www/pkg/rays_web_bg.wasm "$out/web/www/pkg/"
 # Scenes and the files they name; not the rendered images, which the page doesn't use.
 cp demo/*.json demo/*.obj "$out/demo/"

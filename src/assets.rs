@@ -19,6 +19,21 @@ pub fn read(path: &str) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
+/// Whether a file's contents have been provided.
+pub fn is_provided(path: &str) -> bool {
+    PROVIDED.lock().unwrap().as_ref().is_some_and(|m| m.contains_key(path))
+}
+
+/// The names of the files provided directly in directory `dir` (as a scene names it: a
+/// trailing slash or not), as a listing of it would give them.
+pub fn provided_in(dir: &str) -> Vec<String> {
+    let dir = dir.trim_end_matches('/');
+    PROVIDED.lock().unwrap().as_ref().map_or(vec![], |m| m.keys().filter_map(|p| {
+        let name = p.strip_prefix(dir)?.strip_prefix('/')?;
+        (!name.is_empty() && !name.contains('/')).then(|| name.to_string())
+    }).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

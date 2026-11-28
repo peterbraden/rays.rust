@@ -380,6 +380,156 @@ pub fn brick(p: Vector3<f64>, size: Vector3<f64>, mortar: f64, filter: f64, styl
     }
 }
 
+/// The shapes `Bombing` scatters.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpriteShape {
+    /// A lens, pointed at both ends, widest at its middle: a leaf's blade, with a midrib.
+    Leaf,
+    /// An ellipse (a circle at `width` 1): pebbles, petals, flakes.
+    Disc,
+    /// An irregular convex polygon of 5 to 8 corners at random radii, stretched to `width`:
+    /// broken, angular stones lying on one another.
+    Stone,
+}
+
+/// The most corners a `SpriteShape::Stone` has.
+const STONE_CORNERS: usize = 8;
+
+/// What `Bombing` gives at a point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BombingOutput {
+    /// How much of the point the sprites cover, 0 to 1, softened over the footprint.
+    Mask,
+    /// The topmost sprite's random value in [0, 1), 0 where there is none: to colour each its
+    /// own shade.
+    Id,
+    /// 1 on the topmost leaf's midrib, falling to 0 a little way off it.
+    Vein,
+    /// The topmost sprite's height: higher sprites lie on lower ones, each rounded at its edge.
+    Height,
+    /// 1 at the topmost sprite's outline, falling to 0 a fifth of the way in (0 where there is
+    /// none): the dark rim where one stone meets the next or the ground below.
+    Edge,
+    /// A slope of shade across the topmost sprite, 0 on one side and 1 on the other, each its
+    /// own way: the faces of broken stones, catching more light or less. 0.5 where there is none.
+    Facet,
+}
+
+/// Texture bombing (Glanville, "Texture Bombing", GPU Gems, 2004): sprites scattered over the
+/// plane x-z by a grid of cells, each cell holding a Poisson number of them (`density` on
+/// average) at random places, angles and sizes; at a point, the cells about it that could
+/// reach it are searched and the topmost sprite covering it is kept (each sprite has a random
+/// layer). Unlike Voronoi cells, which tile the plane, sprites overlap and leave gaps, and each
+/// has its own orientation: leaves lying every which way on gravel, petals, flakes.
+#[derive(Clone, Debug)]
+pub struct Bombing {
+    pub shape: SpriteShape,
+    /// The grid's cell, metres.
+    pub cell: f64,
+    /// Sprites' lengths, smallest and largest, metres (at most four cells).
+    pub size: (f64, f64),
+    /// Width over length.
+    pub width: f64,
+    pub density: f64,
+    pub seed: u64,
+    pub output: BombingOutput,
+}
+
+impl Bombing {
+    pub fn eval(&self, x: f64, z: f64, filter: f64) -> f64 {
+        self.eval_seeded(x, z, filter, self.seed)
+    }
+
+    /// As `eval`, scattered by another seed: the sprites a surface facing another way shows
+    /// (`graph`'s bombing node projects them along the axis nearest the surface's normal).
+    pub fn eval_seeded(&self, x: f64, z: f64, filter: f64, seed: u64) -> f64 {
+        let (gx, gz) = (x / self.cell, z / self.cell);
+        let (ci, cj) = (gx.floor() as i64, gz.floor() as i64);
+        // How many cells away a sprite's centre can be and still reach the point.
+        let reach = (0.5 * self.size.1 / self.cell).ceil().max(1.) as i64;
+        let soft = 0.5 * filter;
+        // (layer, id, d, across, half width, facet)
+        let (mut cover, mut top) = (0f64, None::<(f64, f64, f64, f64, f64, f64)>);
+        for i in ci - reach ..= ci + reach {
+            for j in cj - reach ..= cj + reach {
+                let mut rng = CellRng::new(i, 0, j, seed);
+                for _ in 0 .. rng.poisson(self.density).min(8) {
+                    let (u, v) = (rng.uniform(), rng.uniform());
+                    let angle = 2. * PI * rng.uniform();
+                    let length = self.size.0 + (self.size.1 - self.size.0) * rng.uniform();
+                    let (layer, id) = (rng.uniform(), rng.uniform());
+                    let (dx, dz) = (x - (i as f64 + u) * self.cell, z - (j as f64 + v) * self.cell);
+                    let (s, c) = angle.sin_cos();
+                    let (along, across) = (dx * c + dz * s, -dx * s + dz * c);
+                    let half = 0.5 * length;
+                    let t = along / half;
+                    if t.abs() >= 1. {
+                        continue;
+                    }
+                    let mut facet = 0.5;
+                    let (w, d) = match self.shape {
+                        SpriteShape::Leaf | SpriteShape::Disc => {
+                            let w = self.width * half * if self.shape == SpriteShape::Leaf { 1. - t * t } else { (1. - t * t).sqrt() };
+                            // How far inside its edge, metres (across the sprite, which is near
+                            // enough for a narrow one).
+                            (w, w - across.abs())
+                        },
+                        SpriteShape::Stone => {
+                            // Drawn after the leaf's and disc's numbers, so those are unchanged.
+                            let w = self.width * half;
+                            let corners = 5 + (rng.uniform() * 4.) as usize;
+                            let turn = rng.uniform();
+                            let mut at = [(0f64, 0f64); STONE_CORNERS];
+                            for (k, c) in at.iter_mut().enumerate().take(corners) {
+                                let a = 2. * PI * (k as f64 + turn + 0.35 * (rng.uniform() - 0.5)) / corners as f64;
+                                let r = 0.7 + 0.3 * rng.uniform();
+                                *c = (r * half * a.cos(), r * w * a.sin());
+                            }
+                            let tilt = 2. * PI * rng.uniform();
+                            let (ts, tc) = tilt.sin_cos();
+                            facet = (0.5 + 0.5 * (along * tc / half + across * ts / w.max(1e-12))).clamp(0., 1.);
+                            if across.abs() >= w {
+                                continue;
+                            }
+                            // Inside a convex polygon, the distance to its outline is the least
+                            // distance to its edges' lines.
+                            let mut d = f64::INFINITY;
+                            for k in 0 .. corners {
+                                let (a, b) = (at[k], at[(k + 1) % corners]);
+                                let (ex, ez) = (b.0 - a.0, b.1 - a.1);
+                                let len = (ex * ex + ez * ez).sqrt().max(1e-12);
+                                d = d.min((ex * (across - a.1) - ez * (along - a.0)) / len);
+                            }
+                            (w, d)
+                        },
+                    };
+                    let m = if soft > 0. { smoothstep(-soft, soft, d) } else if d > 0. { 1. } else { 0. };
+                    cover = cover.max(m);
+                    if d > 0. && top.is_none_or(|(l, ..)| layer > l) {
+                        top = Some((layer, id, d, across, if self.shape == SpriteShape::Stone { w } else { self.width * half }, facet));
+                    }
+                }
+            }
+        }
+        match self.output {
+            BombingOutput::Mask => cover,
+            BombingOutput::Id => top.map_or(0., |(_, id, ..)| id),
+            BombingOutput::Vein => top.map_or(0., |(_, _, _, across, w, _)| {
+                let rib = (0.06 * w).max(soft);
+                1. - smoothstep(0., rib, across.abs())
+            }),
+            BombingOutput::Height => top.map_or(0., |(layer, _, d, _, w, _)| (0.5 + 0.5 * layer) * (d / (0.3 * w)).min(1.).sqrt()),
+            BombingOutput::Edge => top.map_or(0., |(_, _, d, _, w, _)| 1. - smoothstep(0., (0.2 * w).max(soft), d)),
+            BombingOutput::Facet => top.map_or(0.5, |(.., f)| f),
+        }
+    }
+
+    /// The finest detail: the narrowest sprite's width.
+    pub fn finest(&self) -> f64 {
+        self.width * self.size.0
+    }
+}
+
 fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
     let t = ((x - lo) / (hi - lo)).clamp(0., 1.);
     t * t * (3. - 2. * t)
@@ -461,6 +611,83 @@ mod tests {
         assert_eq!(checker(Vector3::new(1.5, 0.5, 0.5), 1., 0., false), 1.);
         assert_eq!(checker(Vector3::new(1.5, 1.5, 0.5), 1., 0., false), 0.);
         assert!((checker(Vector3::new(0.3, 0.7, 0.2), 1., 20., false) - 0.5).abs() < 0.05);
+    }
+
+    fn leaves(density: f64, output: BombingOutput) -> Bombing {
+        Bombing { shape: SpriteShape::Leaf, cell: 0.05, size: (0.03, 0.08), width: 0.35, density, seed: 7, output }
+    }
+
+    #[test]
+    fn test_bombing_scatters_overlapping_leaves() {
+        let points: Vec<(f64, f64)> = samples(4000).map(|p| (p.x, p.z)).collect();
+        let cover = |b: &Bombing| points.iter().filter(|(x, z)| b.eval(*x, *z, 0.) > 0.5).count() as f64 / points.len() as f64;
+        // More sprites cover more, and some ground is left between them.
+        let (sparse, dense) = (cover(&leaves(0.5, BombingOutput::Mask)), cover(&leaves(3., BombingOutput::Mask)));
+        assert!(sparse > 0.05 && sparse < dense && dense < 0.95, "{} {}", sparse, dense);
+        // A sprite's id is the same all over it, and the midrib lies along it.
+        let id = leaves(1., BombingOutput::Id);
+        let vein = leaves(1., BombingOutput::Vein);
+        let mut ribs = 0;
+        for (x, z) in &points {
+            let v = id.eval(*x, *z, 0.);
+            if v > 0. {
+                assert_eq!(v, id.eval(x + 1e-5, *z, 0.).max(v).min(v), "id varies across a leaf");
+                if vein.eval(*x, *z, 0.) > 0.5 { ribs += 1 }
+            }
+        }
+        assert!(ribs > 0);
+        // Seen from afar, edges are soft: coverage between 0 and 1.
+        let m = leaves(1., BombingOutput::Mask);
+        assert!(points.iter().any(|(x, z)| { let v = m.eval(*x, *z, 0.01); v > 0.05 && v < 0.95 }));
+        for (x, z) in &points {
+            for out in [BombingOutput::Mask, BombingOutput::Id, BombingOutput::Vein, BombingOutput::Height] {
+                let v = leaves(2., out).eval(*x, *z, 0.002);
+                assert!((0. ..= 1.).contains(&v), "{:?} {}", out, v);
+            }
+        }
+    }
+
+    fn stones(output: BombingOutput) -> Bombing {
+        Bombing { shape: SpriteShape::Stone, cell: 0.05, size: (0.04, 0.09), width: 0.8, density: 2., seed: 3, output }
+    }
+
+    #[test]
+    fn test_stones_are_angular_with_dark_rims_and_faces() {
+        let points: Vec<(f64, f64)> = samples(4000).map(|p| (p.x, p.z)).collect();
+        let (mask, edge, facet, id) = (stones(BombingOutput::Mask), stones(BombingOutput::Edge),
+                                       stones(BombingOutput::Facet), stones(BombingOutput::Id));
+        let cover = points.iter().filter(|(x, z)| mask.eval(*x, *z, 0.) > 0.5).count() as f64 / points.len() as f64;
+        assert!(cover > 0.3 && cover < 0.99, "{}", cover);
+        let (mut rims, mut faces) = (0, (f64::INFINITY, f64::NEG_INFINITY));
+        for (x, z) in &points {
+            for out in [BombingOutput::Mask, BombingOutput::Id, BombingOutput::Height, BombingOutput::Edge, BombingOutput::Facet] {
+                let v = stones(out).eval(*x, *z, 0.002);
+                assert!((0. ..= 1.).contains(&v), "{:?} {}", out, v);
+            }
+            if id.eval(*x, *z, 0.) > 0. {
+                if edge.eval(*x, *z, 0.) > 0.5 { rims += 1 }
+                let f = facet.eval(*x, *z, 0.);
+                faces = (faces.0.min(f), faces.1.max(f));
+            } else {
+                assert_eq!(edge.eval(*x, *z, 0.), 0.);
+                assert_eq!(facet.eval(*x, *z, 0.), 0.5);
+            }
+        }
+        assert!(rims > 40, "{}", rims);
+        assert!(faces.0 < 0.2 && faces.1 > 0.8, "{:?}", faces);
+        // A polygon, not an ellipse: along a line through a stone, its edge comes in straight
+        // runs, so the distance inside changes at a constant rate between corners. Checked by
+        // the coverage of a lone stone staying convex: the midpoint of two covered points is
+        // covered.
+        let lone = Bombing { density: 0.05, ..stones(BombingOutput::Mask) };
+        let inside: Vec<_> = points.iter().filter(|(x, z)| lone.eval(*x, *z, 0.) > 0.5).take(200).collect();
+        let near = |a: &(f64, f64), b: &(f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() < 0.02;
+        for a in &inside {
+            for b in inside.iter().filter(|b| near(a, b)) {
+                let m = (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1));
+                assert!(lone.eval(m.0, m.1, 0.) > 0.5, "{:?} {:?}", a, b);
+            }
+        }
     }
 
     #[test]

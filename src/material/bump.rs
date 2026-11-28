@@ -187,6 +187,7 @@ impl Medium for Bumped {
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { self.inner.fields() }
+    fn eruption(&self) -> Option<&std::sync::Arc<crate::terrain::eruption::Eruption>> { self.inner.eruption() }
 }
 
 /// A material with its own bump map, applied over whatever its object's medium does.

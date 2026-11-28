@@ -24,6 +24,7 @@ pub mod schema;
 #[cfg(feature = "cli")]
 pub mod server;
 pub mod preview;
+pub mod raycaster;
 pub mod ray;
 pub mod color;
 pub mod spectrum;
@@ -157,6 +158,7 @@ pub mod procedural {
     pub mod hill_cloud;
     pub mod cumulonimbus;
     pub mod fractus;
+    pub mod plume;
     pub mod arcus;
     pub mod lightning;
     pub mod valley_fog;

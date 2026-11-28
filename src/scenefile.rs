@@ -949,7 +949,24 @@ impl SceneFile {
             } else if obj["type"] == "grass" && (obj.get("where").is_some() || matches!(obj["heightmap"].as_str(), Some("landscape" | "surface"))) {
                 vec![Arc::new(SceneFile::parse_ruled_grass(&obj, materials, media, geometries, landscape.as_deref()))]
             } else if obj["type"] == "ecosystem" {
-                SceneFile::parse_ecosystem(&obj, materials, media, geometries, landscape.as_deref()).into_iter().collect()
+                // Its plants from the landscape's biomes (`terrain::flora`), before any it lists.
+                match landscape.as_deref().and_then(|l| crate::terrain::object::flora(&obj, l)) {
+                    Some((populations, _)) if populations.is_empty() && obj.get("populations").is_none() => {
+                        println!("Ecosystem: nothing grows about the camera");
+                        vec![]
+                    },
+                    Some((mut populations, extra)) => {
+                        populations.extend(obj["populations"].as_array().cloned().unwrap_or_default());
+                        let mut obj = obj.clone();
+                        obj["populations"] = Value::from(populations);
+                        if obj.get("clear").is_none() { obj["clear"] = Value::from(12.); }
+                        let mut with = materials.clone();
+                        with.extend(extra);
+                        // Placed on the ground diced coarsely (an eighth of a cell), keeping no tiles.
+                        crate::shapes::displaced::coarsely(3, || SceneFile::parse_ecosystem(&obj, &with, media, geometries, landscape.as_deref()))
+                    },
+                    None => SceneFile::parse_ecosystem(&obj, materials, media, geometries, landscape.as_deref()),
+                }.into_iter().collect()
             } else if obj["type"] == "scatter" {
                 SceneFile::parse_scatter(&obj, materials, media, geometries, landscape.as_deref()).into_iter().collect()
             } else if obj["type"] == "volume" && matches!(obj.get("density"), Some(Value::Object(_) | Value::String(_))) {
@@ -964,6 +981,10 @@ impl SceneFile {
                 let mut x: Vec<Arc<SceneObject>> = crate::terrain::object::create_landscape(&obj, materials).into_iter().map(Arc::new).collect();
                 if let Some(first) = x.first().cloned() {
                     landscape = Some(first.clone());
+                    // The gas plumes over its lava lakes, if it is erupting.
+                    if let Some(e) = first.medium.eruption() {
+                        x.extend(SceneFile::eruption_plumes(e, SceneFile::parse_seed(&obj).unwrap_or(0)));
+                    }
                     // And the boulders it strews about the camera, if it draws its own detail.
                     if let Some((scatter, material)) = crate::terrain::object::boulders(&obj, &first) {
                         let mut with = materials.clone();
@@ -987,14 +1008,14 @@ impl SceneFile {
             if reusable { kept.insert(key, built); }
             let t = start.elapsed().as_secs_f64();
             if t >= 0.1 {
-                println!("- Built {} in {:.2} s", name, t);
+                SceneFile::say(format!("- Built {} in {:.2} s", name, t));
             }
          }
          for (i, fog) in fogs {
             let start = web_time::Instant::now();
             let ground: Vec<Arc<SceneObject>> = objects.iter().map(|(_, o)| o.clone()).collect();
             objects.push((i, Arc::new(SceneFile::parse_valley_fog(&fog, &ground))));
-            println!("- Built valley_fog in {:.2} s", start.elapsed().as_secs_f64());
+            SceneFile::say(format!("- Built valley_fog in {:.2} s", start.elapsed().as_secs_f64()));
          }
          if reuse { *KEPT_OBJECTS.lock().unwrap() = Some(kept); }
          objects
@@ -1393,6 +1414,7 @@ impl SceneFile {
             max_slope: SceneFile::parse_number(&o["max_slope"], 35.),
             variants: SceneFile::parse_int(&o["variants"], 3).max(1),
             clustering: SceneFile::parse_number(&o["clustering"], 0.),
+            grid: o["placement"].as_str() == Some("grid"),
         };
         let entries = o["species"].as_array().filter(|e| !e.is_empty())
             .unwrap_or_else(|| panic!("a forest needs a list of \"species\""));
@@ -1614,6 +1636,7 @@ impl SceneFile {
     /// from under the camera on each side (300 for forests, 150 for scatters, 25 for grass),
     /// thinning out to nothing over its last `fade` (a fraction, 0.4 for grass, 0 else). Grass
     /// grows on the surface itself (`"heightmap": "surface"`), sampled every `cell` metres.
+    /// Nothing grows within `clear` metres of the camera (0; 12 with a `"flora"`).
     pub fn parse_ecosystem(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>,
                            geometries: &GeometryLibrary, landscape: Option<&SceneObject>) -> Vec<Arc<SceneObject>> {
         use crate::procedural::ecosystem::{Claim, Occupancy};
@@ -1622,7 +1645,16 @@ impl SceneFile {
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let camera = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::zeros());
         let mut occupancy = Occupancy::new(1.);
+        // Ground about the camera that nothing takes, so it doesn't stand in a tree.
+        let clear = SceneFile::parse_number(&o["clear"], 0.);
+        if clear > 0. {
+            occupancy.extend([Claim { x: camera.x, z: camera.z, base: clear, shade_radius: 0., shade: 0. }]);
+        }
         let mut objects: Vec<Arc<SceneObject>> = vec![];
+        // The trees' crowns, for the landscape to draw forest floor under (`terrain::canopy`), and
+        // how far out they were planted about the camera.
+        let mut crowns: Vec<crate::terrain::canopy::Crown> = vec![];
+        let mut planted: f64 = 0.;
         for (k, p) in populations.iter().enumerate() {
             let (kind, spec) = ["forest", "scatter", "grass"].iter().find_map(|kind| p.get(*kind).map(|s| (*kind, s)))
                 .unwrap_or_else(|| panic!("an ecosystem's population is a \"forest\", \"scatter\" or \"grass\": {}", p));
@@ -1631,6 +1663,7 @@ impl SceneFile {
                 if spec.get(key).is_none() && o.get(key).is_some() { spec[key] = o[key].clone(); }
             }
             if spec.get("seed").is_none() { spec["seed"] = Value::from(seed.wrapping_mul(31).wrapping_add(k as u64 + 1)); }
+            let began = web_time::Instant::now();
             let given = spec.clone();
             let num = |key: &str, def: f64| SceneFile::parse_number(&given[key], def);
             let reach = SceneFile::parse_number(&spec["reach"], match kind { "forest" => 300., "scatter" => 150., _ => 25. });
@@ -1652,6 +1685,10 @@ impl SceneFile {
                     spec["area"] = area;
                     let (made, placed) = SceneFile::forest_in(&spec, materials, media, geometries, landscape, Some(&room));
                     let (base, canopy, shade) = (num("base", 0.25), num("canopy", 1.3), num("shade", 0.6));
+                    if about { planted = planted.max(reach); }
+                    // Conifers drop needles; whether this forest's trees are conifers, by its first species.
+                    let needles = spec["species"][0]["species"].as_str().is_some_and(crate::terrain::flora::conifer);
+                    crowns.extend(placed.iter().map(|(p, r)| crate::terrain::canopy::Crown { x: p.x, z: p.z, radius: canopy * r, needles }));
                     (made, placed.iter().map(|(p, r)| Claim { x: p.x, z: p.z, base: base * r, shade_radius: canopy * r, shade }).collect())
                 },
                 "scatter" => {
@@ -1666,9 +1703,13 @@ impl SceneFile {
                     (vec![Arc::new(SceneFile::grass_in(&spec, materials, media, geometries, landscape, Some(&room)))], vec![])
                 },
             };
-            println!("Ecosystem: population {} ({}): {} placed", k, kind, claims.len());
+            println!("Ecosystem: population {} ({}): {} placed in {:.1} s", k, kind, claims.len(), began.elapsed().as_secs_f64());
             objects.extend(made);
             occupancy.extend(claims);
+        }
+        if o["surface"].as_str() == Some("landscape") && let Some(slot) = landscape.and_then(|l| l.medium.fields()).and_then(|f| f.canopy()) {
+            slot.add(&crowns);
+            if planted > 0. { slot.planted_about(camera.x, camera.z, planted); }
         }
         objects
     }
@@ -1763,6 +1804,7 @@ impl SceneFile {
             max_slope: SceneFile::parse_number(&o["max_slope"], 90.),
             variants: items.iter().map(|i| i.models.len()).max().unwrap_or(1),
             clustering: SceneFile::parse_number(&o["clustering"], 0.),
+            grid: o["placement"].as_str() == Some("grid"),
         };
         let ground = |x: f64, z: f64| footing.at(x, z);
         let density = Footing::parse_rule(o, "scatter").or_else(|| o.get("density")
@@ -2327,6 +2369,7 @@ impl SceneFile {
             emission: None,
             extinction: None,
             sun_probes: o["sun_probes"].as_bool().unwrap_or(crate::volume::SUN_PROBES),
+            equiangular: o["equiangular"].as_bool().unwrap_or(false),
         }
     }
 
@@ -2901,6 +2944,17 @@ impl SceneFile {
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(f));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// The plumes of an erupting landscape's lava lakes (`terrain::eruption`,
+    /// `procedural::plume`): steam and sulphate haze, white and scattering forward, lit by the
+    /// sun and the glowing lava beneath.
+    pub fn eruption_plumes(e: &crate::terrain::eruption::Eruption, seed: u64) -> Vec<Arc<SceneObject>> {
+        e.plumes(seed).into_iter().map(|p| {
+            let (lo, hi) = p.bounds();
+            let s = SceneFile::parse_scattering(&serde_json::json!({"albedo": [0.97, 0.97, 0.98]}), 0.7);
+            Arc::new(create_volume(BBox::new(lo, hi), Arc::new(p), s))
+        }).collect()
     }
 
     /// The clouds of a storm's gust front (see `procedural::arcus`): `"shelf_cloud"` (arcus), a
@@ -4559,7 +4613,10 @@ impl SceneFile {
             return;
         }
         let intensity = SceneFile::parse_number(&sun["intensity"], 1.);
-        for o in objects.iter_mut().filter(|o| o["type"].as_str() == Some("lightning") && o.get("sun_intensity").is_none()) {
+        // Lightning, and a landscape's erupting lava (`terrain::eruption`), are as bright as they
+        // are on the sun's scale.
+        let bright = |o: &Value| matches!(o["type"].as_str(), Some("lightning") | Some("landscape"));
+        for o in objects.iter_mut().filter(|o| bright(o) && o.get("sun_intensity").is_none()) {
             o["sun_intensity"] = serde_json::json!(intensity);
         }
     }
@@ -4568,6 +4625,16 @@ impl SceneFile {
     /// radiance is the air's per unit of sunlight times the sun's `intensity`
     /// (`skysphere::sky_brightness_for_sun`), on the same scale as the sunlight on everything
     /// under it. So the sky can't be given a `brightness` of its own.
+    /// A skysphere without a `"cache"` of its own keeps its tables (`skysphere::table_file`)
+    /// in its scene's landscape's, if that has one: a scene that is slow to build for its
+    /// landscape is as slow again for its sky, in a browser.
+    pub fn sky_cache(objects: &mut [Value]) {
+        let Some(dir) = objects.iter().filter(|o| o["type"].as_str() == Some("landscape")).find_map(|o| o["cache"].as_str()).map(str::to_string) else { return };
+        for o in objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere") && o.get("cache").is_none()) {
+            o["cache"] = serde_json::json!(dir);
+        }
+    }
+
     pub fn sky_follows_sun(sun: &Value, objects: &mut [Value]) {
         if sun.is_null() {
             return;
@@ -4711,6 +4778,7 @@ impl SceneFile {
         }
         s.camera = SceneFile::axonometric(std::mem::take(&mut s.camera));
         SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
+        SceneFile::sky_cache(&mut s.objects);
         SceneFile::lightning_follows_sun(&s.sun, &mut s.objects);
         let max_bounding = BBox::new( // TODO
             Vector3::new(-1000., -1000., -1000.),
@@ -4825,7 +4893,7 @@ impl SceneFile {
         let height =SceneFile::parse_int(&s.height, 480);
 
         let mut scene = Scene {
-            image: ImageOpts { width, height },
+            image: ImageOpts::whole(width, height),
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
                 background: SceneFile::parse_background(&s.background, pixel_angle,
@@ -4891,9 +4959,18 @@ impl SceneFile {
         };
         // Tabulating the sky evaluates it, which needs the scene.
         if scene.render.sample_sky {
+            let start = web_time::Instant::now();
             scene.environment = crate::environment::Environment::build(&scene);
+            let t = start.elapsed().as_secs_f64();
+            if t >= 0.1 { SceneFile::say(format!("- Built the sky's sampling table in {:.2} s", t)); }
         }
         scene
+    }
+
+    /// A line about the build, for a person: printed, or given to the host's reporter
+    /// (`world::set_reporter`; a browser shows it on its console, where it can't print).
+    fn say(message: String) {
+        crate::world::report(&crate::world::Progress::note("scene", message));
     }
 
     /// The light BVH over a scene's sampled lights (`Scene::light_bvh`): its area lights, if
@@ -5073,6 +5150,58 @@ impl SceneFile {
             return crate::tungsten::to_scene(&doc, dir).map_err(|e| format!("{}: {}", filename, e));
         }
         Ok(doc)
+    }
+
+    /// Where the worlds of the scene's full-scale landscapes are kept (their manifests,
+    /// `terrain::object::world_manifest`), whether built yet or not: for a host without a
+    /// filesystem to fetch and provide before building the scene. Each landscape sees the
+    /// scene's camera as `from_scenefile` gives it one.
+    /// The files of tables the scene keeps in a `cache` (its skies', `skysphere::table_file`),
+    /// whether made yet or not: as `world_manifests`, for a host without a filesystem to fetch
+    /// before building the scene.
+    pub fn cached_files(doc: Value) -> Vec<String> {
+        let Ok(doc) = SceneFile::substitute_variables(doc) else { return vec![] };
+        let mut objects: Vec<Value> = doc["objects"].as_array().cloned().unwrap_or_default();
+        SceneFile::sky_follows_sun(&doc["sun"], &mut objects);
+        SceneFile::sky_cache(&mut objects);
+        objects.iter()
+            .filter(|o| o["type"].as_str() == Some("skysphere") && o["lut"].as_bool() != Some(false))
+            .filter_map(|o| Some(crate::skysphere::table_file(o["cache"].as_str()?, o)))
+            .collect()
+    }
+
+    ///
+    /// A camera `"above_ground"` is put above the ground of a world built to find it first, as
+    /// `from_scenefile` puts it, and the landscape's own world is keyed by where it ends up. So
+    /// that world is named only once the first can be read without simulating it (its files
+    /// on disk, or provided, `world::readable`): until then only the first is. A host asks
+    /// again once it has provided what it was told of, until nothing new is named.
+    pub fn world_manifests(doc: Value) -> Vec<String> {
+        let Ok(doc) = SceneFile::substitute_variables(doc) else { return vec![] };
+        let landscapes: Vec<&Value> = doc["objects"].as_array().into_iter().flatten()
+            .filter(|o| o["type"].as_str() == Some("landscape")).collect();
+        let mut manifests = vec![];
+        let mut camera = doc["camera"].clone();
+        if camera["above_ground"].as_bool() == Some(true) && let Some(l) = landscapes.first() {
+            let mut l = (*l).clone();
+            l["camera"] = camera.clone();
+            let Some(first) = crate::terrain::object::world_manifest(&l, true) else { return manifests };
+            let readable = crate::world::readable(std::path::Path::new(&first));
+            manifests.push(first);
+            if !readable { return manifests; }
+            let at = |k: &str| SceneFile::parse_vec3_def(&camera, k, Vector3::zeros());
+            if let Some(p) = crate::terrain::object::above_ground(&l, &[at("location"), at("lookat")]) {
+                camera["location"] = serde_json::json!([p[0].x, p[0].y, p[0].z]);
+                camera["lookat"] = serde_json::json!([p[1].x, p[1].y, p[1].z]);
+            }
+        }
+        let camera = SceneFile::axonometric(camera);
+        manifests.extend(landscapes.into_iter().filter_map(|o| {
+            let mut o = o.clone();
+            if o.get("camera").is_none() { o["camera"] = camera.clone(); }
+            crate::terrain::object::world_manifest(&o, false)
+        }));
+        manifests
     }
 
     pub fn from_file(filename: &str, overrides: &Overrides) -> Scene {
@@ -5384,7 +5513,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transformed_emitters_are_area_lights_when_uniformly_scaled() {
+    fn test_transformed_emitters_are_area_lights() {
         let s = SceneFile::from_string(r#"{
             "camera": { "location": [0, 0, -10], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
             "materials": { "L": { "type": "diffuse-light", "color": [1, 1, 1] } },
@@ -5395,7 +5524,8 @@ mod tests {
                   "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 } }
             ]
         }"#.to_string());
-        assert_eq!(s.area_lights.len(), 1);
+        // Stretched ones too (`Transform::sample_from`).
+        assert_eq!(s.area_lights.len(), 2);
     }
 
     fn hit(g: &dyn Geometry, ro: [f64; 3], rd: [f64; 3]) -> Option<Vector3<f64>> {

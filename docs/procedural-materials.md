@@ -211,19 +211,325 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
    the patches alone barely see (left to them, the optimiser traded grey stones for sub-pixel
    confetti of saturated colours averaging grey). CMA-ES searches the parameters (the renderer
    isn't differentiable). About a second a candidate; 30 generations take 15 to 25 minutes.
+   (That was the first loss; the next section has what replaced it.)
 4. It writes `fitted.json` (the fitted preset as a library file, ready for a scene's
    `"library"`), `compare.png` and `log.csv`; with `--record`, it also writes the fit into the
    reference's `fit` in `library.json`: the losses, the settings, and the fitted values by
    parameter, with `"applied": false` until a person who has looked at the comparison copies
    them into the preset.
 
+### What the loss can see
+
+A fit finds whatever its loss can't see, so the loss is tested by itself:
+`scripts/loss-benchmark.py` compares crops of the scans whose right answer is known, without
+rendering. A quadrant of a scan is set against another quadrant rescaled (is the loss least at
+the right scale?), its phases randomised (the same sizes and colours, blobs for shapes),
+recoloured both ways by about a just noticeable difference (redder, yellower, lighter, more
+saturated, more contrast), its chroma moved to the wrong places (the same histograms), and
+every other scan coloured like it (does it know its own scan?). The first loss mostly saw mean
+colour:
+
+| at 128 pixels a quadrant | patch loss (first) | `ColourLoss` alone | `FitLoss` (colour and structure) |
+|---|---|---|---|
+| least at the right scale | 12% | | 59% |
+| shapes against blobs (log ratio) | 0.07 | | 0.11 (0.39 at 256 pixels) |
+| its own scan nearest | 35% | | 71% (82% at 256) |
+| contrast changed (log ratio) | 0.24 | 0.51 | |
+| colours in the wrong places | 0.06 | 0.45 | |
+| the five kinds of colour error alike (spread, smaller better) | 1.5 | 0.35 | |
+
+(A sum's log ratios are diluted by each part's floor, so colour is scored on the colour loss
+alone; colour parameters move only it, structure being compared on normalised lightness.)
+
+So fits now compare colour in Oklab (`ColourLoss`: the mean; the distribution about it with
+chroma counting as much as lightness; and each pixel's colour beside its neighbourhood's), and
+structure on normalised lightness (`StructureLoss`: an oriented log-Gabor bank's joint
+responses with the next scale's, after Portilla and Simoncelli, which tells shapes from blobs;
+and the radial power spectrum, which tells sizes), and see the scan twice: whole, and a
+quarter of it across at the same pixels against four of its tiles, as at 128 pixels across two
+metres a leaf is a pixel or two and no loss can see its shape. `--no-structure` and
+`--no-detail` go back to the first loss and the whole view alone.
+
+What the loss sees, a preset still has to be able to make: refitted with it, trail_dirt's scale
+ran to its smallest, the loss rightly missing the scan's fine grit everywhere and the preset
+having none to give it but by shrinking everything.
+
+### Solved colours, palettes and free graphs
+
+The latest round of fits (its settings now the defaults) changed what is searched, what is compared and how
+the result is judged:
+
+- **Colours are solved, not searched.** A rendered preset is linear in its colours, so the fit
+  renders the preset once with its fitted colours black and once per three colours with each
+  in one channel, and composes any choice of colours from those. The scan's pixels are matched
+  to the composed render's by iterated sliced optimal transport (in Oklab, in just noticeable
+  differences), and the colours come from a weighted least squares, pulled a little towards the
+  author's and kept in [0.003, 0.95] (`ColourSolve`). This reached granite_outcrop's dark rock,
+  which the bounded tints couldn't; the colours then cost nothing in the search's dimensions.
+- **A palette of the scan.** `PaletteLoss` clusters the scan's colours into six (k-means in
+  Oklab) and labels every pixel of both images by its nearest. It then compares each colour's
+  share, the sizes of its connected patches (as a distribution in octaves), which colours lie
+  beside which at 1, 3 and 9 pixels, the power spectra of lightness and the two chroma axes, and
+  each colour's own spectrum. A histogram can't tell sparse large stones from a confetti of
+  small ones; these parts can.
+- **Measured against the scan itself.** `FloorLoss` divides every part of the colour,
+  structure and palette losses by how much it differs between the scan's own four detail tiles
+  (plus a quarter of its typical value, so a part the scan is uniform in doesn't dominate), and
+  takes their root mean square. A loss of 1 is about as far from the scan as the scan is from
+  itself; the score averages the whole and the detail view (`--loss floor`, the default).
+- **Lit by a sun.** A uniform sky at one sample a pixel left about 11% noise in the albedo,
+  which the spectra read as grain and the search exploited. A sun straight down (on a wall,
+  straight in) with the relief stripped gives the albedo exactly at one sample.
+- **Every number free** (`--free`). The preset's graphs are searched as written:
+  - lengths (scales, cells, wavelengths, warps, sprite sizes) within ×/÷4;
+  - amplitudes, densities, multipliers and stretches within ×/÷2.5;
+  - roughness, jitter, spread, widths and coverage by ±0.25;
+  - offsets and smoothstep edges by ±0.3;
+  - each colour map's stops shifted and stretched;
+  - numeric variables within ×/÷3.
+
+  The same node with the same seed and value is tied into one parameter. A preset gains 11 to
+  50 dimensions, about 45 minutes a preset at 60 generations. A candidate the renderer refuses
+  is scored as far off, and bombing sizes are kept as the parser takes them.
+
+Each preset's loss as a multiple of its scan's own variation, measured on the detail view at 8
+samples (the fits' own scores, over both views, are lower):
+
+| Preset | As written | Fitted | | Preset | As written | Fitted |
+|---|---|---|---|---|---|---|
+| ochre_crust | 6.84 | 0.62 | | veined_basalt | 83.5 | 1.73 |
+| bedded_sandstone | 6.14 | 0.90 | | shingle | 49.9 | 2.10 |
+| lichened_ironstone | 25.3 | 0.91 | | weathered_grey_rock | 39.5 | 2.14 |
+| mossy_slab | 16.6 | 1.07 | | granite_outcrop | 116 | 2.21 |
+| caliche_ground | 14.4 | 1.20 | | stony_bank | 123 | 3.00 |
+| trail_dirt | 97.3 | 1.35 | | angular_rubble | 12.9 | 3.09 |
+| pebble_bed | 7.78 | 1.59 | | foliated_rock | 190 | 3.66 |
+| weathered_pink_granite | 26.8 | 1.62 | | laterite | 199 | 3.88 |
+| leaf_litter_gravel | 26.0 | 2.26 | | scree | 80.1 | 4.35 |
+
+All but two of the seventeen are applied. angular_rubble's fit is closer in tone but turns its angular stones
+into blobs close up. ochre_crust's fit swirls where the scan cracks. Both keep the presets as
+written.
+
+The fits furthest from their scans are broken stone and crusted ground. The fits move sizes,
+contrasts and colours freely, so what is left is structure the graphs can't make: angular,
+sharp-edged stones lying on one another, and cracks. Those needed new sprites rather than more search:
+`bombing`'s `stone` shape (below).
+
+### Roaming: fitting on fresh ground
+
+A fit sees one patch of the preset, and with fifty free numbers it can learn that patch: a stone
+just where the scan has one, a blotch that happens to balance the palette. Scored again on three
+patches it never saw (the camera moved by up to 25 of the preset's sizes), some applied fits
+lost much of their gain: weathered_grey_rock 1.90 → 4.55, granite_outcrop 1.00 → 1.95,
+bedded_sandstone 0.81 → 1.44, mossy_slab 0.80 → 1.32.
+
+So fits now roam (the default; `--fixed` keeps the camera still). Each generation of the search
+renders its candidates on a new patch, the same for all of them so they are compared fairly, and
+the search can only keep what holds everywhere. At the end the author's preset (colours solved),
+the best of three late generations and the search's mean are each judged on `--judges` (3) fresh
+patches, and the lowest is chosen if it beats the author's. The record keeps those scores under
+`judged`. The `stone` sprites (angular, faceted, rimmed) rebuilt angular_rubble and stony_bank.
+
+Scores on the three fresh patches, the presets applied before against the roaming fits:
+
+| Preset | Before | Roaming fit | Applied |
+|---|---|---|---|
+| angular_rubble | 10.61 | 1.22 | yes (rebuilt with `stone` sprites) |
+| stony_bank | 2.30 | 2.28 | yes (rebuilt with `stone` sprites) |
+| granite_outcrop | 1.95 | 0.73 | yes |
+| mossy_slab | 1.32 | 0.97 | yes |
+| bedded_sandstone | 1.44 | 1.10 | no: a large dark blotch close up |
+| weathered_grey_rock | 4.55 | 4.56 | no |
+
+A fit's score on its own patch is no longer the measure; one on fresh ground is.
+
+Three presets were then written with the new blocks and fitted the same way (judged on fresh
+patches, as written with colours solved → fitted): desert_pavement 2.84 → 1.08 (`stone` chips
+on a crust crazed by `cells` edges), dark_stony_soil 8.21 → 2.43 (grit and stones in patches) and
+cracked_riverbed 8.58 → 1.44 (plates with lighter lips and finer cracks within). Their fits are
+right in tone and from afar, less so close up: desert_pavement's larger stones went dark where
+the scan's are pale, dark_stony_soil's grit is too regular, and cracked_riverbed's plates came
+out smaller and lumpier than the scan's.
+
+### Reworks, `hold`, and the first fits of the landscape presets
+
+Those three were then reworked for their close-up faults (a separate layer of dark stones on
+the pavement, a finer grit layer in the soil, the riverbed's plate size held) and refitted on
+roaming patches. Judged on fresh patches against the fits applied before, desert_pavement went
+1.08 → 0.96 and was applied (its crust's cracks are now visible close up, if heavy). The other
+two scored better but looked worse and were left as they were: dark_stony_soil 2.43 → 2.20,
+greyer from afar and a mosaic of rimmed stones close up; cracked_riverbed 1.44 → 2.65, small
+plates crazed by too many fine cracks. A score on fresh patches is necessary, not sufficient:
+every fit is looked at, near and far, before it is applied.
+
+A reference may list numbers a `--free` search must leave as written, `"hold"`: entries of
+`{"node", "field", "seed"}`, any of them left out matching every value. The barks hold their
+`transform` nodes' `scale`, the stretch that makes plates and ridges run up the trunk: a free fit
+of pine_bark matched the scan's colours but squashed its plates round, gravel from afar.
+
+scree was rebuilt from three layers of `stone` sprites (grain, gravel and cobble sizes over
+fines, coloured by each stone's `id`) and fitted: 3.21 → 1.99 on fresh patches, applied. Its
+fine gravel is close to the scan's; its cobbles come out larger and more sharply rimmed than
+the scan's, pale spots from afar.
+
+Six natural presets had their first scans (Poly Haven), searching all their numbers but the
+held ones, and solving their colours:
+
+| Preset | Scan | Author's, colours solved | Fit | Applied |
+|---|---|---|---|---|
+| pine_bark | pine_bark | 5.11 | 0.67 | yes |
+| oak_bark | jolcham_oak_bark_01 | 2.38 | 0.94 | no: the scan's pale lichen and moss came out as dark streaks; the preset needs a lichen layer |
+| sandstone | sandstone_cracks | 40.9 | 4.55 | no: bedding meant for cliff faces is contour rings seen from above; needs a cliff scan, fitted as a `wall` |
+| dune_sand | dense_sand | 55.2 | 29.3 | no: the scan has no ripples |
+| beach_sand | damp_beach_sand | 2694 | 2608 | no: renders near white in the fitting scene |
+| mudflat | brown_mud_02 | 2847 | 2.36 | no: its wet sheen mirrors the white sky and sun |
+
+The last two are glossy where wet, and the fitting scene, lit to read albedo off matte ground,
+shows the gloss as white sheets and glints: wet materials need to be fitted without it. Nearly
+uniform scans also make large scores, since the loss is relative to how much the scan varies
+between its own tiles.
+
+So `strip_relief` now draws a `plastic` layer as `lambertian` in its own albedo, as it already
+takes bumps off: the scans are albedo maps, without gloss. Refitted that way, with better scans
+for two of them and a lichen layer for the oak:
+
+| Preset | Scan | Author's, colours solved | Fit | Applied |
+|---|---|---|---|---|
+| beach_sand | damp_beach_sand | 10.7 | 4.04 | yes: the scan's damp tan; its damp patches blotchier than the scan's |
+| dune_sand | ambientCG Ground098 (rippled) | 16.6 | 9.67 | yes: warm tan, ripples 0.18 m apart (in the bump, so unseen by the fit) |
+| mudflat | brown_mud | 42.0 | 1.53 | yes (brown_mud_02, dry crumbly soil, had pulled it towards dry ground) |
+| oak_bark | jolcham_oak_bark_01 | 2.71 | 0.99 | yes: with pale lichen crusts; blotchier than the scan close up, the lichen beige |
+
+A free fit's search leaves the bump out, as the fit doesn't render it; but a stone layer's relief
+is a copy of its albedo's `bombing` node (`height` beside `mask`), and kept its authored cells
+and sizes while the albedo's moved, so the fitted stones were raised on other stones' cells
+(scree's cobbles coloured on cells of 7.5 cm, raised on cells of 4; desert_pavement's relief a
+second set of cracks). A bump's node of the same kind, seed and authored value as an albedo's
+now moves with it, and the applied fits were repaired from the versions they started from.
+scree's cobbles were also set back to 2-5 cm and held, as its fit had grown them into pale spots
+the scan (fine gravel) doesn't have. Refitted so: 1.99 → 1.67 on fresh patches, applied; its fit made the
+stones' facets more contrasting than the scan's, polished-looking close up.
+
+### Choosing scans
+
+Five more first fits were all left unapplied, though each scored better: asphalt (4.62 against
+8.33 as written), plaster (12.3 against 67.0), concrete (1.10 against 6.15), limestone_cliff
+(1.13 against 15.1) and gneiss (1.05 against 7.59). The man-made presets are generic clean
+surfaces and their scans one dirty example each (green-stained grey plaster, board-marked
+concrete), which the fits imitated in streaks and blotches; asphalt's aggregate grew into a
+mosaic of chips where the preset was already close. The cliffs' scans were the wrong rocks, a
+brown iron-stained face and dark rock strewn with leaves, and the fits turned limestone brown and
+wiped out the gneiss's banding. A scan must be of the material the preset names: the same rock,
+or for a generic surface a clean, typical one. Two presets were written for scans instead and
+fitted: crazed_sandstone (Poly Haven's rock_boulder_cracked: tan sandstone crazed into plates,
+pitted along its cracks; 4.96 → 1.30) and mossy_mud (brown_mud_leaves_01: red-brown mud with
+patches of small leaves, by `bombing`; 14.4 → 1.06, its smallest leaves a dense litter close up
+where the scan has bare mud between sprigs).
+
+The polished stones were then fitted to ambientCG's slabs of the stones they name, sizes not
+recorded (taken as 1 m and searched): carrara_marble to Marble021 (11.3 → 1.29, applied: near
+white with faint veins and soft mottling, in place of regular grey stripes) and nero_marquina to
+Marble016 (11.1 → 1.43, applied: the slab's dense net of fine white veins in place of one bold
+one). travertine (to Travertine009, 13.0 → 2.77) mottled where the vein-cut slab is banded, and
+granite (to Granite003A, 15.0 → 5.52) went blue-grey, the slab not the pink it looked in a
+thumbnail; neither applied. grey_granite is a variant (a `library` reference to granite with its
+own palette), which the fit's renders don't follow, so nothing moved; it takes granite's
+structure as it is. A palette held in a variable (`"color_map": "$palette"`) is solved like any
+other colours once the reference names its stops.
+Refitted to Granite001A, a warm pinkish slab (its mean colour checked this time), granite
+went 4.13 → 2.40, applied: interlocking crystals of pink-beige, grey and black like the slab's.
+verde_marble, a variant of nero_marquina, could only move its colours and came out black with
+white speckle; calacatta_marble's scan (Marble014) is a beige marble, not calacatta's warm white
+with bold veins, and the fit made it beige and lacy. Neither applied.
+cork (to ambientCG's Cork003, agglomerated granules) went 6.29 → 3.90, applied: the scan's
+warm orange granules and dark gaps in place of pale beige. leather (to Leather037) went 38.3 →
+32.6, applied for its colour, the scan's rich brown: a leather's albedo is nearly uniform (its
+pebbling is in the bump, which the fit leaves alone), so the fit flattened the grain in the
+colour and its score stays large.
+
+Two more presets were written for ground scans and fitted: forest_sand (Poly Haven's
+forrest_sand_01: grey-beige sand darkened by humus, pine needles in clumps by `bombing` leaves
+drawn thin; 5.62 → 1.27, applied, its needles lying in denser mats than the scan's) and
+shore_gravel (low_tide_rocks: packed centimetre pebbles and shell fragments, by `stone`
+sprites; 11.3 → 1.24, applied, close to the scan from afar, its pebbles softer and less varied
+in colour close up). A `conductor` mirrors the fitting sun as wet layers did, so it is drawn
+matte in its `reflectance` too; rusted_iron, fitted so to ambientCG's Metal064 (orange-brown rust
+in patches over grey steel), went 4.93 → 0.74, applied: red-brown rust and grey steel like the
+scan's, in place of orange over pale grey.
+verdigris_copper (to Metal058C, a turquoise patina streaked down over copper, seen as a wall)
+went 5.40 → 1.64, applied: the scan's turquoise in place of a pale wash, though blotchier and
+less streaked than the scan from afar. 
+A variant (a preset whose material is another preset with some of its variables set, as
+grey_granite is granite with its own palette) kept its base's gloss in the fitting render, which
+strips only the materials it sees, so it mirrored the sun and nothing moved. The fit now inlines
+the base with the variant's fields as its variables first (`resolve_variant`), and a variant's
+palette is solved: grey_granite (to Granite002A) 19.0 → 5.40, softer and with less black like the
+slab, and verde_marble (to Marble009) 148 → 2.66, near-black green with faint veins like the slab
+in place of a bright teal; both applied, their structure their bases'. (Judged on the fitting
+patch: with only colours to move there was no search to roam.) The overlay variants
+(weathered_granite, aged_bronze, chipped_paint) need a material under them and aren't fitted.
+
+The woods run their grain up the scene's y and are seen on a wall, while wood scans are taken
+with the grain across; a reference's `"rotate"` turns the scan by quarter turns before it is
+compared. oak, fitted so to ambientCG's Wood049 (flat-sawn oak), went 38.4 → 2.80, applied: the
+scan's mid brown and wavering grain in place of pale, ruled lines.
+maple (to Poly Haven's white_maple_veneer, 11.0 → 6.11) lost its curl, the scan being plain
+maple, and pine (to coated_pine, 13.4 → 6.99) took the scan's amber coating, not the preset's
+pale matt pine; neither applied. The walnut veneers are grey, not oiled chocolate, and weren't
+tried.
+
+Three more presets were written for Poly Haven's ground scans, their needles, leaves and twigs
+`bombing` leaves of different widths, and fitted: burned_ground (burned_ground_01: charred soil,
+ash and brown earth, bleached needles and charred twigs; 4.08 → 1.06, applied, its ash in paler,
+softer patches than the scan's), mossy_leaf_litter (forest_leaves_02: olive moss, fallen leaves,
+needles and twigs; 2.18 → 0.77, applied) and wet_leaf_mat (winter_leaves: dark wet leaves matted
+over one another; 5.89 → 1.46, applied, close to the scan near and far).
+
+Seen on a block and a sphere (`scripts/material-gallery.py --objects`), the presets built of
+`bombing` sprites streaked down every vertical face: the sprites lay over the plane x-z, as on
+the ground, so a wall showed each one drawn out along y. A bombing node now scatters its sprites
+over the plane a surface faces most, projected along the axis nearest its normal and blended
+across the seams, each plane by its own seed; ground facing up sees exactly the sprites it did
+(by the node's own seed on x-z), so the fits stand, and `"plan": true` keeps the old projection.
+
+Three more ground presets: red_clay_ground (Poly Haven's red_mud_stones: rusty red-brown earth,
+fine cracks, a few pale stones; 2.14 → 0.78, applied, its dry patches speckled paler than the
+scan's), dry_leaf_litter (dry_decay_leaves: dry leaves lying thick; 2.92 → 0.93, applied) and
+root_mat (roots: ochre earth with dark roots). root_mat's roots, first drawn from cells' edges,
+came out of their fit as speckle; drawn instead as thin `bombing` leaves warped so they curve,
+it went 4.02 → 1.36, applied, its roots spindlier than the scan's close up.
+
+And three more: petal_strewn_dirt (flower_scattered_dirt: brown dirt strewn with lilac petals by
+`bombing` leaves; 4.40 → 2.01, applied, but for one petal colour the fit had browned, kept lilac
+by hand), dry_grass_mat (withered_grass: straw blades matted flat; 9.48 → 1.80) and tilled_soil
+(farm_soil: dark clods and crumbs; 3.32 → 1.01). The last two took only their fitted colours:
+the search scored better by blowing the blades and clods up to several times their size, which
+a close look rejects.
+
+Four more, all applied: trodden_snow (snow_02: grey-white snow with smudges of grime; 1.01 →
+0.68, its scuffs soft blotches where the scan's are thin bootprint edges), coastal_turf
+(coast_sand_rocks_02, 15 m: turf over earth with pale rock breaking through, the rock a mask
+of noise rather than sprites, which drew it as hexagons; 11.8 → 0.77), shell_grit
+(shell_floor_01: grey and buff grit; 10.5 → 2.08, its grains rounder close up than the scan's
+broken shell) and sparse_grass (sparse_grass: green shoots over brown soil, straw across them;
+3.82 → 0.84).
+
+And four more: patchy_snow (snow_03: snow melting off in lumps over dark ground; 9.89 → 0.76,
+blockier close up than the scan), rocky_trail (rocky_trail: tan dirt packed with grit and
+stones; 268 → 1.54, its stones more even in size than the scan's), slabby_path
+(forest_ground_04: flat grey slabs and flakes in brown earth; 963 → 0.88, the fit fading the
+slabs into the earth, which matches the scan at its scale but not close up; its colours alone
+left them dark or chalky) and moss_carpet (aerial_grass_rock, 15 m: yellow-green moss over
+rock, bare patches and grit; 35.5 → 0.92).
+
 ### Presets modelled on scans
 
-![Ten presets and their scans](material-fit-scans.png)
+![The first ten presets and their scans](material-fit-scans.png)
 
-*Each: the scan, the preset as written, and fitted. All ten fits applied.*
+*Each: the scan, the preset as written, and fitted (the first ten; the six after them aren't pictured). All sixteen fits of that round were applied (leaf_litter_gravel's after its leaves were remade by `bombing`); the round above has since refitted sixteen of them.*
 
-Ten presets were written to imitate particular Poly Haven scans, each scan recorded in the
+Sixteen presets were written to imitate particular Poly Haven scans, each scan recorded in the
 preset's `references`:
 
 | Preset | Scan | |
@@ -238,6 +544,15 @@ preset's `references`:
 | `laterite` | red_laterite_soil_stones | Rust-red earth with sparse pale nodules |
 | `foliated_rock` | quarry_wall (a wall) | Dark wavy foliation along a `dip`, from phasor noise |
 | `shingle` | coast_sand_03 | Grey-beige gravel and sand in lighter and darker drifts |
+| `veined_basalt` | dark_rock (a wall) | Near-black rock, a network of pale veins, horizontal fractures |
+| `weathered_grey_rock` | rock_01 | Smooth grey-brown rock, mottled, speckled, a few pits |
+| `weathered_pink_granite` | rock_04 | Coarse granite weathered rough, salmon feldspar among grey-brown |
+| `caliche_ground` | coral_gravel | Brown gravelly soil with ragged patches of pale lime crust |
+| `stony_bank` | river_small_rocks | Grey-beige silt with small flat stones bedded in it |
+| `leaf_litter_gravel` | leaf_scattered_gravel | Dark gravel with small brown leaves, pointed, ribbed and each its own shade (`bombing`), heaped between the stones and a few lying on them |
+| `desert_pavement` | dry_ground_rocks | An ochre crust crazed by fine cracks, with angular chips and stones scattered over it (`stone` sprites) |
+| `dark_stony_soil` | brown_mud_rocks_01 | Dark peaty earth thick with grit and small angular stones in patches |
+| `cracked_riverbed` | mud_cracked_dry_riverbed_002 | Silty mud split into plates with lighter curled lips and finer cracks within |
 
 Cliffs are fitted as walls (`"view": "wall"`), so their beds and streaks run along y as on a
 landscape's cliffs.
@@ -248,7 +563,7 @@ preset's own `scale`, multiplied into whatever a scene asks for. Re-rendering an
 preset gives the recorded loss. Fits correct colour and size; where a preset still differs
 from its scan it is in structure, which is the author's to improve: the sandstone's partings
 are thinner and more regular than the scan's chunky blocks, the ironstone has less lichen,
-the foliation's streaks are crisper, and the trail's stones fewer and smaller.
+the foliation's streaks are crisper, the trail's stones fewer and smaller, the caliche's lime patches fewer, and the stony bank's stones fainter.
 
 What the first attempts taught, now built into `fit-material.py`:
 
@@ -303,6 +618,7 @@ Beyond Perlin noise (`fractal`, with `ridged` and `billow` styles) and Worley's 
 | `cells` | Worley's noise, now with styles `f2` and `id` (a random value per cell: crystals, chips, granules), a `metric` (`euclidean`, `manhattan`: faceted, `chebyshev`: square) and `jitter` (0: a regular lattice, 1 the default). |
 | `gradient`, `rings`, `spherical` | POV-Ray's gradient (distance along `direction`), cylindrical rings (distance from the line through `center` along `axis`), and onion shells, each over `scale`. |
 | `wave` | Any input turned into repeating bands, `frequency` per unit of it, `phase`, as POV-Ray's wave types: `shape` `ramp`, `triangle`, `sine`, `scallop` (\|sin\|), `square`; `exponent` sharpens. |
+| `bombing` | Texture bombing (Glanville, GPU Gems 2004): sprites scattered over the ground plane (x, z) from a grid of `cell`s, `density` a cell on average, each at its own place, angle, length (`size` [smallest, largest]) and layer; where they overlap the topmost shows. `shape` `leaf` (a lens pointed at both ends, `width` 0.35 of its length, with a midrib) `disc` (an ellipse) or `stone` (an irregular convex polygon of 5 to 8 corners at random radii: broken, angular stones). `output`: `mask` (coverage, softened over the footprint), `id` (the topmost's own random value: a colour each), `vein` (its midrib), `height` (stacked and rounded at the edge, for a bump), `edge` (1 at the topmost's outline, fading a fifth of the way in: the dark rims where stones meet) or `facet` (a slope of shade across it, each its own way: broken faces catching more light or less). Unlike cells, which tile the plane, sprites overlap and leave gaps, each turned its own way: leaf litter, petals, flakes, rubble. |
 | `checker`, `brick` | POV-Ray's: alternate cubes `size` across; bricks `size` [x, y, z] (default a UK brick in metres) in running bond with `mortar` between, `style` `mortar` (1 in it) or `id` (a value per brick). |
 | `occlusion` | The share of `rays` (6) short rays, `radius` (0.05 m) long, that meet something: cast out from the surface, how enclosed it is (`style` `cavity`: crevices, corners, where objects meet, as dirt gathers there); cast in from under it, how near a convex edge it is (`style` `edges`: wear). Directions are hashed from the point, so they converge over a pixel. Costs rays: use it in masks, not in bumps. |
 | `transform` | Its `input` scaled, rotated (degrees about x, then y, then z) and moved (`translate`): stretch cells into pores, turn bands. |
@@ -363,6 +679,9 @@ scaled, so a library material keeps its size in metres on any object (`Geometry:
 - D. S. Ebert, F. K. Musgrave, D. Peachey, K. Perlin and S. Worley, "Texturing and Modeling: A Procedural Approach", 3rd ed., 2003.
 - A. A. Apodaca and L. Gritz, "Advanced RenderMan", 2000, chapter 11 (antialiasing procedural textures).
 - A. J. Liu, Z. Dong, M. Hašan and S. Marschner, "Simulating the structure and texture of solid wood", SIGGRAPH Asia 2016.
+- J. Portilla and E. P. Simoncelli, "A parametric texture model based on joint statistics of complex wavelet coefficients", IJCV 40(1), 2000.
+- B. Ottosson, "A perceptual color space for image processing" (Oklab), <https://bottosson.github.io/posts/oklab/>, 2020.
+- S. Glanville, "Texture bombing", GPU Gems, chapter 20, 2004.
 - J. F. Blinn, "Simulation of wrinkled surfaces", SIGGRAPH 1978.
 - I. Quilez, "Domain warping", <https://iquilezles.org/articles/warp/>.
 - POV-Ray 3.7 reference: "Pattern", "Color Map", "Normal"; and its include files `stones.inc`, `woods.inc`, `metals.inc`.

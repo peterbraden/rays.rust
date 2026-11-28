@@ -34,6 +34,16 @@
 //!   from the surface (`style` `"cavity"`: crevices and corners) or in from under it
 //!   (`"edges"`: convex edges); needs the scene (in textures and layers' masks), `default`
 //!   without one.
+//! - `bombing`: sprites scattered by texture bombing (`patterns::Bombing`) over the plane x-z,
+//!   and on surfaces facing another way over the plane they face most (`plan` for x-z alone):
+//!   `shape` `"leaf"` (a lens with a midrib), `"disc"` (an ellipse) or `"stone"` (an irregular
+//!   convex polygon of 5 to 8 corners: broken, angular stones), on a grid of `cell`
+//!   (metres, default 0.05), `density` a cell on average, each its own angle, length from
+//!   `size` [smallest, largest] (at most four cells) and `width` over length; overlapping, the
+//!   topmost kept. `output` `"mask"` (coverage), `"id"` (the topmost's random value), `"vein"`
+//!   (its midrib), `"height"` (stacked, rounded at the edge), `"edge"` (1 at its outline,
+//!   fading a fifth of the way in: the dark rim where stones meet) or `"facet"` (a slope of
+//!   shade across it, each its own way, 0.5 off the sprites), each in [0, 1]; `seed`.
 //! - `checker` (`size`, `plan`) and `brick` (`size` [x, y, z], `mortar`, `style` `"mortar"` or
 //!   `"id"`, `seed`): POV-Ray's, in [0, 1], box filtered.
 //! - `talus`: fallen blocks and scree, angular and fractured, many small to few large, sorted
@@ -173,7 +183,21 @@ pub enum Field {
     /// The bedrock (`terrain::geology::Rock`, by number as `rock`) at the point's height,
     /// beneath any sediment or lava over it: what the scree there broke from.
     Bedrock,
+    /// How much of the ground the crowns of the trees an ecosystem planted on the landscape
+    /// cover, 0 to 1 (`terrain::canopy`): for materials and placement rules after the
+    /// ecosystem. A displacement reading it must only scale towards zero (as the landscape's
+    /// own detail does), its bounds being found before any trees are planted.
+    Canopy,
+    /// How long ago lava last flowed over the ground, years (`terrain::volcano::erupt`):
+    /// `LAVA_NEVER` where none has in the landscape's time, or it has worn away.
+    LavaAge,
+    /// How much of that lava is ʻaʻā, rubble of clinker, rather than pāhoehoe, its smooth,
+    /// ropy skin unbroken, 0 to 1.
+    Aa,
 }
+
+/// The `lava_age` field where no lava has flowed, years.
+pub const LAVA_NEVER: f64 = 1e6;
 
 impl Field {
     pub fn parse(s: &str) -> Result<Field, String> {
@@ -202,7 +226,10 @@ impl Field {
             "till" => Field::Till,
             "sand" => Field::Sand,
             "bedrock" => Field::Bedrock,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, discharge, water_depth, flow_speed, froude, grain, river, channel, rock, bedrock, hardness, playa, till or sand", s)),
+            "canopy" => Field::Canopy,
+            "lava_age" => Field::LavaAge,
+            "aa" => Field::Aa,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, lava_age, aa, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, discharge, water_depth, flow_speed, froude, grain, river, channel, rock, bedrock, hardness, playa, till, sand or canopy", s)),
         })
     }
 }
@@ -218,6 +245,9 @@ pub trait Fields: Sync + Send {
 
     /// The climate's biome at `p` (`biome` nodes); None where there is no climate.
     fn biome(&self, _p: &Vector3<f64>) -> Option<crate::terrain::climate::Biome> { None }
+    /// The crowns of the trees planted on the surface, for ecosystems to add to (`canopy`
+    /// fields read them); None where the surface keeps none.
+    fn canopy(&self) -> Option<&crate::terrain::canopy::Slot> { None }
 }
 
 /// Where a graph is evaluated: the point on the surface (before any displacement), the
@@ -358,6 +388,8 @@ enum Op {
     Wave { input: Box<Node>, shape: crate::patterns::Wave, frequency: f64, phase: f64, exponent: f64 },
     Checker { size: f64, plan: bool },
     Brick { size: Vector3<f64>, mortar: f64, style: crate::patterns::BrickStyle, seed: u64 },
+    /// Sprites scattered over the plane x-z (`patterns::Bombing`), in [0, 1].
+    Bombing(Box<crate::patterns::Bombing>, bool),
     /// The share of short rays about the hit that meet something within `radius`: from outside,
     /// crevices and corners (`edges` false); from inside, convex edges (`edges` true).
     Occlusion { radius: f64, rays: u32, edges: bool, default: f64 },
@@ -501,6 +533,7 @@ impl Node {
                 Some(s) => occlusion(s, c, *radius, *rays, *edges),
                 None => *default,
             },
+            Op::Bombing(b, plan) => bombing(b, c, *plan),
             Op::Checker { size, plan } => crate::patterns::checker(c.p, *size, c.filter, *plan),
             Op::Brick { size, mortar, style, seed } => crate::patterns::brick(c.p, *size, *mortar, c.filter, *style, *seed),
             Op::Transform { input, inverse, normals, translate, shrink } => {
@@ -630,7 +663,7 @@ impl Op {
             Op::Gradient { .. } => (f64::NEG_INFINITY, f64::INFINITY),
             Op::Rings { .. } | Op::Spherical { .. } => (0., f64::INFINITY),
             Op::Wave { exponent, .. } => if *exponent >= 0. { (0., 1.) } else { (0., f64::INFINITY) },
-            Op::Checker { .. } | Op::Brick { .. } => (0., 1.),
+            Op::Checker { .. } | Op::Brick { .. } | Op::Bombing(..) => (0., 1.),
             Op::Occlusion { default, .. } => (default.min(0.), default.max(1.)),
             Op::Transform { input, .. } => input.range(),
             Op::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
@@ -700,6 +733,7 @@ impl Op {
             Op::Checker { size, .. } => return *size,
             Op::Occlusion { radius, .. } => return *radius,
             Op::Brick { mortar, .. } => return *mortar,
+            Op::Bombing(b, _) => return b.finest(),
             Op::Wave { input, frequency, .. } => {
                 // A cycle is 1 / frequency of the input; how far that is depends on the input.
                 return input.finest().min(1. / frequency.abs().max(1e-9));
@@ -832,6 +866,35 @@ pub(crate) fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, metric:
 /// rays soon leave the object again (worn and chipped edges). The directions are hashed from the
 /// point, so they are the same wherever the point is evaluated (a bump's finite differences
 /// agree) and differ from point to point, so averaging over a pixel converges.
+/// A bombing node's value at a point: its sprites scattered over the plane the surface faces
+/// most, projected along the axis nearest its normal and blended across the seams between
+/// (weights the normal's components to the eighth power), each plane scattered by its own seed
+/// so faces don't mirror each other. A surface facing up sees the plane x-z by the node's own
+/// seed alone, as when sprites lay only on the ground; `plan` keeps them there everywhere.
+fn bombing(b: &crate::patterns::Bombing, c: &Context, plan: bool) -> f64 {
+    let n = c.normal;
+    let a = Vector3::new(n.x.abs(), n.y.abs(), n.z.abs());
+    let w = Vector3::new(a.x.powi(8), a.y.powi(8), a.z.powi(8));
+    let total = w.x + w.y + w.z;
+    if plan || !(total > 1e-12) || w.y / total > 0.999 {
+        return b.eval(c.p.x, c.p.z, c.filter);
+    }
+    let mut sum = 0.;
+    for (k, weight) in [w.x, w.y, w.z].into_iter().enumerate() {
+        let weight = weight / total;
+        if weight < 1e-3 {
+            continue;
+        }
+        let v = match k {
+            0 => b.eval_seeded(c.p.z, c.p.y, c.filter, b.seed ^ 0x9e37_79b9_7f4a_7c15),
+            1 => b.eval(c.p.x, c.p.z, c.filter),
+            _ => b.eval_seeded(c.p.x, c.p.y, c.filter, b.seed ^ 0xc2b2_ae3d_27d4_eb4f),
+        };
+        sum += weight * v;
+    }
+    sum
+}
+
 fn occlusion(s: &crate::scene::Scene, c: &Context, radius: f64, rays: u32, edges: bool) -> f64 {
     let (p, n) = c.in_scene();
     let n = if edges { -n } else { n };
@@ -1112,6 +1175,31 @@ fn parse_node(v: &Value) -> Result<Node, String> {
                 default: num(o, "default", 0.)? }
         },
         "checker" => Op::Checker { size: positive(o, "size", 1.)?, plan },
+        "bombing" => {
+            use crate::patterns::{Bombing, BombingOutput, SpriteShape};
+            let shape = match o["shape"].as_str().unwrap_or("leaf") {
+                "leaf" => SpriteShape::Leaf,
+                "disc" => SpriteShape::Disc,
+                "stone" => SpriteShape::Stone,
+                s => return Err(format!("unknown bombing shape \"{}\": leaf, disc or stone", s)),
+            };
+            let output = match o["output"].as_str().unwrap_or("mask") {
+                "mask" => BombingOutput::Mask,
+                "id" => BombingOutput::Id,
+                "vein" => BombingOutput::Vein,
+                "height" => BombingOutput::Height,
+                "edge" => BombingOutput::Edge,
+                "facet" => BombingOutput::Facet,
+                s => return Err(format!("unknown bombing output \"{}\": mask, id, vein, height, edge or facet", s)),
+            };
+            let cell = positive(o, "cell", 0.05)?;
+            let size = pair(o, "size", (0.6 * cell, 1.5 * cell))?;
+            if !(size.0 > 0. && size.1 >= size.0 && size.1 <= 4. * cell) {
+                return Err("bombing's size must be [smallest, largest], positive and at most four cells".into());
+            }
+            let width = positive(o, "width", if shape == SpriteShape::Leaf { 0.35 } else { 1. })?;
+            Op::Bombing(Box::new(Bombing { shape, cell, size, width, density: num(o, "density", 1.)?.clamp(0., 8.), seed: seed()?, output }), plan)
+        },
         "brick" => {
             let size = vec3(o, "size", Vector3::new(0.215, 0.065, 0.1025))?;
             if size.iter().any(|s| *s <= 0.) {
@@ -1205,6 +1293,28 @@ mod tests {
 
     fn graph(v: Value) -> Graph {
         Graph::parse(&v).unwrap()
+    }
+
+    #[test]
+    fn test_bombing_projects_along_the_normal() {
+        let spec = json!({"node": "bombing", "shape": "stone", "cell": 0.05, "size": [0.03, 0.08], "seed": 7});
+        let g = graph(spec.clone());
+        let b = crate::patterns::Bombing { shape: crate::patterns::SpriteShape::Stone, cell: 0.05, size: (0.03, 0.08),
+            width: 1., density: 1., seed: 7, output: crate::patterns::BombingOutput::Mask };
+        let wall = |x: f64, y: f64| Context::new(Vector3::new(x, y, 0.3), Vector3::z(), 0.);
+        // On the ground, the sprites of the plane x-z by its own seed, as before.
+        for k in 0..50 {
+            let (x, z) = (0.013 * k as f64, 0.007 * k as f64);
+            assert_eq!(g.eval(&at(x, 0., z)), b.eval(x, z, 0.));
+        }
+        // On a wall facing z, sprites over its plane: they change up the wall, where sprites
+        // projected from above would stream straight down it.
+        let up: Vec<f64> = (0..200).map(|k| g.eval(&wall(0.1, 0.004 * k as f64))).collect();
+        assert!(up.iter().any(|&v| v > 0.5) && up.iter().any(|&v| v < 0.5));
+        // `plan` keeps them on x-z: down the wall, nothing changes.
+        let plan = graph(json!({"node": "bombing", "shape": "stone", "cell": 0.05, "size": [0.03, 0.08], "seed": 7, "plan": true}));
+        let down: Vec<f64> = (0..50).map(|k| plan.eval(&wall(0.1, 0.01 * k as f64))).collect();
+        assert!(down.iter().all(|&v| v == down[0]));
     }
 
     #[test]

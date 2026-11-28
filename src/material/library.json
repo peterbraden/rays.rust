@@ -40836,5 +40836,1961 @@
       }
     ],
     "scale": 1.2122
+  },
+  "berber_carpet": {
+    "doc": "Berber carpet: a dense cream loop pile, flecked here and there with short brown strands; modelled on ambientCG's Carpet016.",
+    "variables": {
+      "wool": [
+        0.68,
+        0.64,
+        0.52
+      ],
+      "wool2": [
+        0.56,
+        0.52,
+        0.42
+      ],
+      "fleck": [
+        0.4,
+        0.3,
+        0.2
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "smoothstep",
+          "from": 0.38,
+          "to": 0.48,
+          "input": {
+            "node": "transform",
+            "input": {
+              "node": "fractal",
+              "scale": 0.006,
+              "seed": 8021,
+              "smallest": 0.0008
+            },
+            "scale": [
+              4,
+              1,
+              1
+            ]
+          }
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.4,
+                      {
+                        "node": "add",
+                        "inputs": [
+                          {
+                            "node": "multiply",
+                            "inputs": [
+                              0.5,
+                              {
+                                "node": "wave",
+                                "shape": "sine",
+                                "frequency": 200.0,
+                                "input": {
+                                  "node": "gradient",
+                                  "direction": [
+                                    1,
+                                    0,
+                                    0
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "node": "multiply",
+                            "inputs": [
+                              0.5,
+                              {
+                                "node": "wave",
+                                "shape": "sine",
+                                "frequency": 166.66666666666666,
+                                "input": {
+                                  "node": "gradient",
+                                  "direction": [
+                                    0,
+                                    1,
+                                    1
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "node": "fractal",
+                    "scale": 0.02,
+                    "seed": 8011,
+                    "smallest": 0.001
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.3,
+                      {
+                        "node": "fractal",
+                        "scale": 0.2,
+                        "seed": 8012,
+                        "smallest": 0.01
+                      }
+                    ]
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  -0.2,
+                  "$wool2"
+                ],
+                [
+                  0.6,
+                  "$wool"
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            "$fleck"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0006,
+                {
+                  "node": "add",
+                  "inputs": [
+                    {
+                      "node": "multiply",
+                      "inputs": [
+                        0.5,
+                        {
+                          "node": "wave",
+                          "shape": "sine",
+                          "frequency": 200.0,
+                          "input": {
+                            "node": "gradient",
+                            "direction": [
+                              1,
+                              0,
+                              0
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "node": "multiply",
+                      "inputs": [
+                        0.5,
+                        {
+                          "node": "wave",
+                          "shape": "sine",
+                          "frequency": 166.66666666666666,
+                          "input": {
+                            "node": "gradient",
+                            "direction": [
+                              0,
+                              1,
+                              1
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.01,
+              "seed": 8031,
+              "smallest": 0.001,
+              "amplitude": 0.0004
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Carpet016",
+        "licence": "CC0",
+        "size": 1.7,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "wool"
+              ],
+              [
+                "variables",
+                "wool2"
+              ],
+              [
+                "variables",
+                "fleck"
+              ]
+            ],
+            "chroma": 0.04
+          }
+        ]
+      }
+    ]
+  },
+  "woven_rug": {
+    "doc": "A flat-woven rug: rust-red wool in fine ribs, picked out with short pale ticks in staggered rows; modelled on ambientCG's Carpet015.",
+    "variables": {
+      "rust": [
+        0.5,
+        0.2,
+        0.1
+      ],
+      "rust2": [
+        0.36,
+        0.13,
+        0.07
+      ],
+      "tick": [
+        0.8,
+        0.68,
+        0.55
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "multiply",
+          "inputs": [
+            {
+              "node": "smoothstep",
+              "from": 0.55,
+              "to": 0.6,
+              "input": {
+                "node": "transform",
+                "input": {
+                  "node": "brick",
+                  "size": [
+                    0.009,
+                    0.006,
+                    1.0
+                  ],
+                  "style": "id",
+                  "seed": 8111
+                },
+                "rotate": [
+                  90,
+                  0,
+                  0
+                ],
+                "translate": [
+                  0,
+                  0.25,
+                  0
+                ]
+              }
+            },
+            {
+              "node": "smoothstep",
+              "from": 0.5,
+              "to": 0.2,
+              "input": {
+                "node": "transform",
+                "input": {
+                  "node": "brick",
+                  "size": [
+                    0.009,
+                    0.006,
+                    1.0
+                  ],
+                  "style": "mortar",
+                  "seed": 8111,
+                  "mortar": 0.003
+                },
+                "rotate": [
+                  90,
+                  0,
+                  0
+                ],
+                "translate": [
+                  0,
+                  0.25,
+                  0
+                ]
+              }
+            }
+          ]
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.6,
+                      {
+                        "node": "wave",
+                        "shape": "sine",
+                        "frequency": 125.0,
+                        "input": {
+                          "node": "gradient",
+                          "direction": [
+                            0,
+                            1,
+                            1
+                          ]
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.4,
+                      {
+                        "node": "fractal",
+                        "scale": 0.003,
+                        "seed": 8121,
+                        "smallest": 0.0004
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.3,
+                      {
+                        "node": "fractal",
+                        "scale": 0.1,
+                        "seed": 8122,
+                        "smallest": 0.005
+                      }
+                    ]
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  0.0,
+                  "$rust2"
+                ],
+                [
+                  0.8,
+                  "$rust"
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            "$tick"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0005,
+                {
+                  "node": "wave",
+                  "shape": "sine",
+                  "frequency": 125.0,
+                  "input": {
+                    "node": "gradient",
+                    "direction": [
+                      0,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0003,
+                {
+                  "node": "multiply",
+                  "inputs": [
+                    {
+                      "node": "smoothstep",
+                      "from": 0.55,
+                      "to": 0.6,
+                      "input": {
+                        "node": "transform",
+                        "input": {
+                          "node": "brick",
+                          "size": [
+                            0.009,
+                            0.006,
+                            1.0
+                          ],
+                          "style": "id",
+                          "seed": 8111
+                        },
+                        "rotate": [
+                          90,
+                          0,
+                          0
+                        ],
+                        "translate": [
+                          0,
+                          0.25,
+                          0
+                        ]
+                      }
+                    },
+                    {
+                      "node": "smoothstep",
+                      "from": 0.5,
+                      "to": 0.2,
+                      "input": {
+                        "node": "transform",
+                        "input": {
+                          "node": "brick",
+                          "size": [
+                            0.009,
+                            0.006,
+                            1.0
+                          ],
+                          "style": "mortar",
+                          "seed": 8111,
+                          "mortar": 0.003
+                        },
+                        "rotate": [
+                          90,
+                          0,
+                          0
+                        ],
+                        "translate": [
+                          0,
+                          0.25,
+                          0
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Carpet015",
+        "licence": "CC0",
+        "size": 0.4,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "rust"
+              ],
+              [
+                "variables",
+                "rust2"
+              ],
+              [
+                "variables",
+                "tick"
+              ]
+            ],
+            "chroma": 0.05
+          }
+        ]
+      }
+    ]
+  },
+  "upholstery_weave": {
+    "doc": "Upholstery weave: a tight grey cloth whose light and dark threads cross in a fine two-tone check; modelled on ambientCG's Fabric061.",
+    "variables": {
+      "light": [
+        0.62,
+        0.62,
+        0.62
+      ],
+      "dark": [
+        0.32,
+        0.32,
+        0.33
+      ],
+      "mid": [
+        0.46,
+        0.46,
+        0.46
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "transform",
+              "input": {
+                "node": "checker",
+                "size": 0.004
+              },
+              "translate": [
+                0.0,
+                0.002,
+                0.002
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.4,
+                {
+                  "node": "fractal",
+                  "scale": 0.002,
+                  "seed": 8211,
+                  "smallest": 0.0003
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.2,
+                {
+                  "node": "fractal",
+                  "scale": 0.1,
+                  "seed": 8212,
+                  "smallest": 0.005
+                }
+              ]
+            }
+          ]
+        },
+        "color_map": [
+          [
+            0.0,
+            "$dark"
+          ],
+          [
+            0.5,
+            "$mid"
+          ],
+          [
+            1.0,
+            "$light"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0001,
+                {
+                  "node": "transform",
+                  "input": {
+                    "node": "checker",
+                    "size": 0.004
+                  },
+                  "translate": [
+                    0.0,
+                    0.002,
+                    0.002
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Fabric061",
+        "licence": "CC0",
+        "size": 0.4,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "light"
+              ],
+              [
+                "variables",
+                "dark"
+              ],
+              [
+                "variables",
+                "mid"
+              ]
+            ],
+            "chroma": 0.03
+          }
+        ]
+      }
+    ]
+  },
+  "quilted_cotton": {
+    "doc": "Quilted cotton: white cloth stitched in a grid of squares, each puffed into a soft pillow, shaded grey into the seams; modelled on ambientCG's Fabric048.",
+    "variables": {
+      "cotton": [
+        0.86,
+        0.86,
+        0.85
+      ],
+      "shade": [
+        0.7,
+        0.7,
+        0.7
+      ],
+      "seam": [
+        0.55,
+        0.55,
+        0.54
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "max",
+          "inputs": [
+            {
+              "node": "smoothstep",
+              "from": 0.04,
+              "to": 0.0,
+              "input": {
+                "node": "wave",
+                "shape": "sine",
+                "frequency": 20.0,
+                "input": {
+                  "node": "gradient",
+                  "direction": [
+                    1,
+                    0,
+                    0
+                  ]
+                }
+              }
+            },
+            {
+              "node": "smoothstep",
+              "from": 0.04,
+              "to": 0.0,
+              "input": {
+                "node": "wave",
+                "shape": "sine",
+                "frequency": 20.0,
+                "input": {
+                  "node": "gradient",
+                  "direction": [
+                    0,
+                    1,
+                    1
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      {
+                        "node": "wave",
+                        "shape": "sine",
+                        "frequency": 20.0,
+                        "input": {
+                          "node": "gradient",
+                          "direction": [
+                            1,
+                            0,
+                            0
+                          ]
+                        }
+                      },
+                      {
+                        "node": "wave",
+                        "shape": "sine",
+                        "frequency": 20.0,
+                        "input": {
+                          "node": "gradient",
+                          "direction": [
+                            0,
+                            1,
+                            1
+                          ]
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.1,
+                      {
+                        "node": "fractal",
+                        "scale": 0.02,
+                        "seed": 8311,
+                        "smallest": 0.001
+                      }
+                    ]
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  0.0,
+                  "$shade"
+                ],
+                [
+                  0.5,
+                  "$cotton"
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            "$seam"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.012,
+                {
+                  "node": "multiply",
+                  "inputs": [
+                    {
+                      "node": "wave",
+                      "shape": "sine",
+                      "frequency": 20.0,
+                      "input": {
+                        "node": "gradient",
+                        "direction": [
+                          1,
+                          0,
+                          0
+                        ]
+                      }
+                    },
+                    {
+                      "node": "wave",
+                      "shape": "sine",
+                      "frequency": 20.0,
+                      "input": {
+                        "node": "gradient",
+                        "direction": [
+                          0,
+                          1,
+                          1
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.01,
+              "seed": 8321,
+              "smallest": 0.001,
+              "amplitude": 0.0003
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Fabric048",
+        "licence": "CC0",
+        "size": 0.4,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "cotton"
+              ],
+              [
+                "variables",
+                "shade"
+              ],
+              [
+                "variables",
+                "seam"
+              ]
+            ],
+            "chroma": 0.02
+          }
+        ]
+      }
+    ]
+  },
+  "bamboo_blind": {
+    "doc": "A bamboo blind: thin golden slats of split bamboo laid side by side, each its own shade and streaked with fibre, tied by fine cords; modelled on ambientCG's Wicker013.",
+    "variables": {
+      "slat": [
+        0.62,
+        0.4,
+        0.16
+      ],
+      "slat2": [
+        0.45,
+        0.27,
+        0.09
+      ],
+      "light": [
+        0.75,
+        0.55,
+        0.28
+      ],
+      "gap": [
+        0.18,
+        0.1,
+        0.04
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "multiply",
+          "inputs": [
+            0.5,
+            {
+              "node": "smoothstep",
+              "from": 0.015,
+              "to": 0.0,
+              "input": {
+                "node": "wave",
+                "shape": "triangle",
+                "frequency": 8.333333333333334,
+                "input": {
+                  "node": "gradient",
+                  "direction": [
+                    1,
+                    0,
+                    0
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "transform",
+                "input": {
+                  "node": "brick",
+                  "size": [
+                    20,
+                    0.009,
+                    10
+                  ],
+                  "style": "mortar",
+                  "seed": 8411,
+                  "mortar": 0.0015
+                },
+                "translate": [
+                  0,
+                  0,
+                  2.5
+                ]
+              },
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "add",
+                      "inputs": [
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.6,
+                            {
+                              "node": "transform",
+                              "input": {
+                                "node": "brick",
+                                "size": [
+                                  20,
+                                  0.009,
+                                  10
+                                ],
+                                "style": "id",
+                                "seed": 8411
+                              },
+                              "translate": [
+                                0,
+                                0,
+                                2.5
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.6,
+                            {
+                              "node": "transform",
+                              "input": {
+                                "node": "fractal",
+                                "scale": 0.006,
+                                "seed": 8421,
+                                "smallest": 0.0004
+                              },
+                              "scale": [
+                                25,
+                                1,
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.3,
+                            {
+                              "node": "fractal",
+                              "scale": 0.2,
+                              "seed": 8422,
+                              "smallest": 0.01
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "color_map": [
+                      [
+                        0.0,
+                        "$slat2"
+                      ],
+                      [
+                        0.5,
+                        "$slat"
+                      ],
+                      [
+                        1.0,
+                        "$light"
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  "$gap"
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            "$gap"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.0008,
+                {
+                  "node": "transform",
+                  "input": {
+                    "node": "brick",
+                    "size": [
+                      20,
+                      0.009,
+                      10
+                    ],
+                    "style": "mortar",
+                    "seed": 8411,
+                    "mortar": 0.0015
+                  },
+                  "translate": [
+                    0,
+                    0,
+                    2.5
+                  ]
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0002,
+                {
+                  "node": "transform",
+                  "input": {
+                    "node": "fractal",
+                    "scale": 0.006,
+                    "seed": 8421,
+                    "smallest": 0.0004
+                  },
+                  "scale": [
+                    25,
+                    1,
+                    1
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Wicker013",
+        "licence": "CC0",
+        "size": 0.5,
+        "view": "wall",
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "slat"
+              ],
+              [
+                "variables",
+                "slat2"
+              ],
+              [
+                "variables",
+                "light"
+              ],
+              [
+                "variables",
+                "gap"
+              ]
+            ],
+            "chroma": 0.05
+          }
+        ]
+      }
+    ]
+  },
+  "basket_weave": {
+    "doc": "Basket weave: dark brown cane strips woven over and under pale ones, the pale squares showing in a staggered lattice; modelled on ambientCG's Wicker006.",
+    "variables": {
+      "strip": [
+        0.2,
+        0.11,
+        0.06
+      ],
+      "strip2": [
+        0.13,
+        0.07,
+        0.04
+      ],
+      "pale": [
+        0.5,
+        0.4,
+        0.32
+      ],
+      "gap": [
+        0.04,
+        0.03,
+        0.02
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "multiply",
+          "inputs": [
+            0.6,
+            {
+              "node": "multiply",
+              "inputs": [
+                {
+                  "node": "smoothstep",
+                  "from": 0.0,
+                  "to": 0.1,
+                  "input": {
+                    "node": "subtract",
+                    "a": 1,
+                    "b": {
+                      "node": "wave",
+                      "shape": "square",
+                      "frequency": 66.66666666666667,
+                      "input": {
+                        "node": "gradient",
+                        "direction": [
+                          0,
+                          1,
+                          1
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "node": "subtract",
+                  "a": 1,
+                  "b": {
+                    "node": "wave",
+                    "shape": "square",
+                    "frequency": 66.66666666666667,
+                    "input": {
+                      "node": "gradient",
+                      "direction": [
+                        1,
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "multiply",
+                "inputs": [
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      {
+                        "node": "wave",
+                        "shape": "square",
+                        "frequency": 66.66666666666667,
+                        "input": {
+                          "node": "gradient",
+                          "direction": [
+                            1,
+                            0,
+                            0
+                          ]
+                        }
+                      },
+                      {
+                        "node": "transform",
+                        "input": {
+                          "node": "checker",
+                          "size": 0.015
+                        },
+                        "translate": [
+                          0.003,
+                          0.0075,
+                          0.0075
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "node": "wave",
+                    "shape": "square",
+                    "frequency": 66.66666666666667,
+                    "input": {
+                      "node": "gradient",
+                      "direction": [
+                        0,
+                        1,
+                        1
+                      ]
+                    }
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "add",
+                      "inputs": [
+                        {
+                          "node": "transform",
+                          "input": {
+                            "node": "fractal",
+                            "scale": 0.004,
+                            "seed": 8511,
+                            "smallest": 0.0004
+                          },
+                          "scale": [
+                            8,
+                            1,
+                            1
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.4,
+                            {
+                              "node": "fractal",
+                              "scale": 0.05,
+                              "seed": 8512,
+                              "smallest": 0.003
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "color_map": [
+                      [
+                        -0.3,
+                        "$strip2"
+                      ],
+                      [
+                        0.3,
+                        "$strip"
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  "$pale"
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            "$gap"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0006,
+                {
+                  "node": "multiply",
+                  "inputs": [
+                    {
+                      "node": "multiply",
+                      "inputs": [
+                        {
+                          "node": "wave",
+                          "shape": "square",
+                          "frequency": 66.66666666666667,
+                          "input": {
+                            "node": "gradient",
+                            "direction": [
+                              1,
+                              0,
+                              0
+                            ]
+                          }
+                        },
+                        {
+                          "node": "transform",
+                          "input": {
+                            "node": "checker",
+                            "size": 0.015
+                          },
+                          "translate": [
+                            0.003,
+                            0.0075,
+                            0.0075
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "node": "wave",
+                      "shape": "square",
+                      "frequency": 66.66666666666667,
+                      "input": {
+                        "node": "gradient",
+                        "direction": [
+                          0,
+                          1,
+                          1
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.0006,
+                {
+                  "node": "multiply",
+                  "inputs": [
+                    {
+                      "node": "smoothstep",
+                      "from": 0.0,
+                      "to": 0.1,
+                      "input": {
+                        "node": "subtract",
+                        "a": 1,
+                        "b": {
+                          "node": "wave",
+                          "shape": "square",
+                          "frequency": 66.66666666666667,
+                          "input": {
+                            "node": "gradient",
+                            "direction": [
+                              0,
+                              1,
+                              1
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "node": "subtract",
+                      "a": 1,
+                      "b": {
+                        "node": "wave",
+                        "shape": "square",
+                        "frequency": 66.66666666666667,
+                        "input": {
+                          "node": "gradient",
+                          "direction": [
+                            1,
+                            0,
+                            0
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0002,
+                {
+                  "node": "transform",
+                  "input": {
+                    "node": "fractal",
+                    "scale": 0.004,
+                    "seed": 8511,
+                    "smallest": 0.0004
+                  },
+                  "scale": [
+                    8,
+                    1,
+                    1
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Wicker006",
+        "licence": "CC0",
+        "size": 0.4,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "strip"
+              ],
+              [
+                "variables",
+                "strip2"
+              ],
+              [
+                "variables",
+                "pale"
+              ],
+              [
+                "variables",
+                "gap"
+              ]
+            ],
+            "chroma": 0.04
+          }
+        ]
+      }
+    ]
+  },
+  "marble_checkerboard": {
+    "doc": "A marble checkerboard floor: square tiles of cream marble and black marble veined with white, laid in a checker with fine grout; modelled on ambientCG's Tiles074.",
+    "variables": {
+      "cream": [
+        0.62,
+        0.55,
+        0.48
+      ],
+      "cream2": [
+        0.5,
+        0.44,
+        0.38
+      ],
+      "black": [
+        0.06,
+        0.06,
+        0.06
+      ],
+      "vein": [
+        0.55,
+        0.52,
+        0.48
+      ],
+      "grout": [
+        0.3,
+        0.28,
+        0.26
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "max",
+          "inputs": [
+            {
+              "node": "smoothstep",
+              "from": 0.006,
+              "to": 0.0,
+              "input": {
+                "node": "wave",
+                "shape": "triangle",
+                "frequency": 2.380952380952381,
+                "input": {
+                  "node": "gradient",
+                  "direction": [
+                    1,
+                    0,
+                    0
+                  ]
+                }
+              }
+            },
+            {
+              "node": "smoothstep",
+              "from": 0.006,
+              "to": 0.0,
+              "input": {
+                "node": "wave",
+                "shape": "triangle",
+                "frequency": 2.380952380952381,
+                "input": {
+                  "node": "gradient",
+                  "direction": [
+                    0,
+                    1,
+                    1
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "transform",
+                "input": {
+                  "node": "checker",
+                  "size": 0.42
+                },
+                "translate": [
+                  0.01,
+                  0.21,
+                  0.21
+                ]
+              },
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "add",
+                      "inputs": [
+                        {
+                          "node": "fractal",
+                          "scale": 0.2,
+                          "seed": 8621,
+                          "smallest": 0.005
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.4,
+                            {
+                              "node": "fractal",
+                              "scale": 0.02,
+                              "seed": 8622,
+                              "smallest": 0.001
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "color_map": [
+                      [
+                        -0.4,
+                        "$cream2"
+                      ],
+                      [
+                        0.4,
+                        "$cream"
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  {
+                    "pattern": {
+                      "node": "smoothstep",
+                      "from": 0.8,
+                      "to": 0.92,
+                      "input": {
+                        "node": "warp",
+                        "amount": 0.05,
+                        "scale": 0.2,
+                        "seed": 8612,
+                        "octaves": 2,
+                        "input": {
+                          "node": "fractal",
+                          "scale": 0.15,
+                          "seed": 8611,
+                          "smallest": 0.005,
+                          "style": "ridged"
+                        }
+                      }
+                    },
+                    "color_map": [
+                      [
+                        0,
+                        "$black"
+                      ],
+                      [
+                        1,
+                        "$vein"
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            "$grout"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.0005,
+                {
+                  "node": "max",
+                  "inputs": [
+                    {
+                      "node": "smoothstep",
+                      "from": 0.006,
+                      "to": 0.0,
+                      "input": {
+                        "node": "wave",
+                        "shape": "triangle",
+                        "frequency": 2.380952380952381,
+                        "input": {
+                          "node": "gradient",
+                          "direction": [
+                            1,
+                            0,
+                            0
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "node": "smoothstep",
+                      "from": 0.006,
+                      "to": 0.0,
+                      "input": {
+                        "node": "wave",
+                        "shape": "triangle",
+                        "frequency": 2.380952380952381,
+                        "input": {
+                          "node": "gradient",
+                          "direction": [
+                            0,
+                            1,
+                            1
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Tiles074",
+        "licence": "CC0",
+        "size": 2.1,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "cream"
+              ],
+              [
+                "variables",
+                "cream2"
+              ]
+            ],
+            "chroma": 0.04
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "black"
+              ],
+              [
+                "variables",
+                "vein"
+              ],
+              [
+                "variables",
+                "grout"
+              ]
+            ],
+            "chroma": 0.03
+          }
+        ]
+      }
+    ]
+  },
+  "kraft_paper": {
+    "doc": "Kraft paper: brown unbleached paper with a fine fibrous texture and faint ribs, as on the face of corrugated card; modelled on ambientCG's Paper004.",
+    "variables": {
+      "kraft": [
+        0.62,
+        0.42,
+        0.22
+      ],
+      "kraft2": [
+        0.52,
+        0.34,
+        0.17
+      ],
+      "light": [
+        0.7,
+        0.5,
+        0.28
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.3,
+                {
+                  "node": "wave",
+                  "shape": "sine",
+                  "frequency": 250.0,
+                  "input": {
+                    "node": "gradient",
+                    "direction": [
+                      0,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.5,
+                {
+                  "node": "transform",
+                  "input": {
+                    "node": "fractal",
+                    "scale": 0.002,
+                    "seed": 8711,
+                    "smallest": 0.0002
+                  },
+                  "scale": [
+                    3,
+                    1,
+                    1
+                  ]
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.3,
+                {
+                  "node": "fractal",
+                  "scale": 0.1,
+                  "seed": 8712,
+                  "smallest": 0.005
+                }
+              ]
+            }
+          ]
+        },
+        "color_map": [
+          [
+            -0.3,
+            "$kraft2"
+          ],
+          [
+            0.2,
+            "$kraft"
+          ],
+          [
+            0.6,
+            "$light"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0002,
+                {
+                  "node": "wave",
+                  "shape": "sine",
+                  "frequency": 250.0,
+                  "input": {
+                    "node": "gradient",
+                    "direction": [
+                      0,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                5e-05,
+                {
+                  "node": "transform",
+                  "input": {
+                    "node": "fractal",
+                    "scale": 0.002,
+                    "seed": 8711,
+                    "smallest": 0.0002
+                  },
+                  "scale": [
+                    3,
+                    1,
+                    1
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "ambientcg:Paper004",
+        "licence": "CC0",
+        "size": 0.3,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "kraft"
+              ],
+              [
+                "variables",
+                "kraft2"
+              ],
+              [
+                "variables",
+                "light"
+              ]
+            ],
+            "chroma": 0.04
+          }
+        ]
+      }
+    ]
   }
 }

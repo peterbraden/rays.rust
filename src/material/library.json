@@ -35863,24 +35863,24 @@
     "doc": "Weathered red plaster: a terracotta-red render, mottled paler and darker, run with darker stains from above and pocked by small chips; modelled on Poly Haven's red_plaster_weathered.",
     "variables": {
       "plaster": [
-        0.5,
-        0.26,
-        0.18
+        0.3051,
+        0.1442,
+        0.0859
       ],
       "plaster2": [
-        0.4,
-        0.2,
-        0.14
+        0.2633,
+        0.0997,
+        0.0663
       ],
       "pale": [
-        0.58,
-        0.36,
-        0.27
+        0.4818,
+        0.2854,
+        0.1955
       ],
       "stain": [
-        0.3,
-        0.14,
-        0.09
+        0.2887,
+        0.1427,
+        0.0928
       ],
       "chip": [
         0.22,
@@ -36072,37 +36072,78 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 153.503486,
+            "fitted": 4.004873
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.70152,
+            "variables.plaster": [
+              0.3051,
+              0.1442,
+              0.0859
+            ],
+            "variables.plaster2": [
+              0.2633,
+              0.0997,
+              0.0663
+            ],
+            "variables.pale": [
+              0.4818,
+              0.2854,
+              0.1955
+            ],
+            "variables.stain": [
+              0.2887,
+              0.1427,
+              0.0928
+            ],
+            "variables.chip": [
+              0.22,
+              0.12,
+              0.08
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7015
   },
   "whitewashed_brick": {
     "doc": "Whitewashed brick: a wall of bricks in running bond under a worn coat of white, the bricks' red, brown and blue-grey showing through in patches, with pale mortar; modelled on Poly Haven's whitewashed_brick.",
     "variables": {
       "wash": [
-        0.72,
-        0.7,
-        0.66
+        0.509,
+        0.4549,
+        0.3634
       ],
       "wash2": [
-        0.58,
-        0.56,
-        0.53
+        0.403,
+        0.3338,
+        0.2918
       ],
       "brick": [
-        0.45,
-        0.3,
-        0.24
+        0.2523,
+        0.1713,
+        0.1326
       ],
       "blue": [
-        0.4,
-        0.42,
-        0.48
+        0.3249,
+        0.2826,
+        0.2477
       ],
       "mortar": [
-        0.7,
-        0.66,
-        0.58
+        0.4647,
+        0.4043,
+        0.3217
       ]
     },
     "material": {
@@ -36339,37 +36380,78 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 538.815215,
+            "fitted": 2.668234
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.2631,
+            "variables.wash": [
+              0.509,
+              0.4549,
+              0.3634
+            ],
+            "variables.wash2": [
+              0.403,
+              0.3338,
+              0.2918
+            ],
+            "variables.mortar": [
+              0.4647,
+              0.4043,
+              0.3217
+            ],
+            "variables.brick": [
+              0.2523,
+              0.1713,
+              0.1326
+            ],
+            "variables.blue": [
+              0.3249,
+              0.2826,
+              0.2477
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.2631
   },
   "mossy_brick": {
     "doc": "Mossy brick: an old wall of dark red-brown bricks, sooty in places, every joint filled with green moss spilling over the bricks' edges; modelled on Poly Haven's mossy_brick.",
     "variables": {
       "brick": [
-        0.2,
-        0.1,
-        0.07
+        0.0231,
+        0.0126,
+        0.0054
       ],
       "brick2": [
-        0.12,
-        0.07,
-        0.05
+        0.0141,
+        0.0071,
+        0.0039
       ],
       "soot": [
-        0.07,
-        0.06,
-        0.05
+        0.0078,
+        0.0061,
+        0.0037
       ],
       "moss": [
-        0.32,
-        0.38,
-        0.06
+        0.0749,
+        0.0778,
+        0.0064
       ],
       "moss2": [
-        0.16,
-        0.2,
-        0.04
+        0.025,
+        0.0291,
+        0.003
       ]
     },
     "material": {
@@ -36628,37 +36710,78 @@
             ],
             "chroma": 0.06
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 78.736181,
+            "fitted": 2.048723
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.0656,
+            "variables.brick": [
+              0.0231,
+              0.0126,
+              0.0054
+            ],
+            "variables.brick2": [
+              0.0141,
+              0.0071,
+              0.0039
+            ],
+            "variables.soot": [
+              0.0078,
+              0.0061,
+              0.0037
+            ],
+            "variables.moss": [
+              0.0749,
+              0.0778,
+              0.0064
+            ],
+            "variables.moss2": [
+              0.025,
+              0.0291,
+              0.003
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.0656
   },
   "green_painted_metal": {
     "doc": "Green-painted metal: a sheet of flat green paint, mottled and faded, broken by spots of rust with orange halos and a faint run of rust down from them; modelled on Poly Haven's green_metal_rust.",
     "variables": {
       "paint": [
-        0.22,
-        0.32,
-        0.2
+        0.048,
+        0.0729,
+        0.0338
       ],
       "paint2": [
-        0.16,
-        0.24,
-        0.15
+        0.0417,
+        0.0639,
+        0.0286
       ],
       "pale": [
-        0.3,
-        0.4,
-        0.28
+        0.0799,
+        0.1136,
+        0.0541
       ],
       "rust": [
-        0.45,
-        0.25,
-        0.08
+        0.2497,
+        0.2079,
+        0.0668
       ],
       "pit": [
-        0.12,
-        0.06,
-        0.03
+        0.1183,
+        0.0595,
+        0.0293
       ]
     },
     "material": {
@@ -36883,37 +37006,78 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 81.050207,
+            "fitted": 1.758036
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.71301,
+            "variables.paint": [
+              0.048,
+              0.0729,
+              0.0338
+            ],
+            "variables.paint2": [
+              0.0417,
+              0.0639,
+              0.0286
+            ],
+            "variables.pale": [
+              0.0799,
+              0.1136,
+              0.0541
+            ],
+            "variables.rust": [
+              0.2497,
+              0.2079,
+              0.0668
+            ],
+            "variables.pit": [
+              0.1183,
+              0.0595,
+              0.0293
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.713
   },
   "peeling_paint_wood": {
     "doc": "Peeling paint on wood: dark blue-grey paint flaking off weathered boards in long horizontal tears along the grain, pale grey-brown wood beneath; modelled on Poly Haven's wood_peeling_paint_weathered.",
     "variables": {
       "paint": [
-        0.12,
-        0.16,
-        0.2
+        0.1089,
+        0.0888,
+        0.0572
       ],
       "paint2": [
-        0.08,
-        0.1,
-        0.13
+        0.003,
+        0.0132,
+        0.0253
       ],
       "wood": [
-        0.5,
-        0.38,
-        0.26
+        0.3372,
+        0.2211,
+        0.1373
       ],
       "wood2": [
-        0.32,
-        0.24,
-        0.16
+        0.2347,
+        0.1462,
+        0.0772
       ],
       "edge": [
-        0.06,
-        0.06,
-        0.06
+        0.0299,
+        0.0261,
+        0.0204
       ]
     },
     "material": {
@@ -37270,27 +37434,68 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 850.991918,
+            "fitted": 5.584607
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.7,
+            "variables.paint": [
+              0.1089,
+              0.0888,
+              0.0572
+            ],
+            "variables.paint2": [
+              0.003,
+              0.0132,
+              0.0253
+            ],
+            "variables.edge": [
+              0.0299,
+              0.0261,
+              0.0204
+            ],
+            "variables.wood": [
+              0.3372,
+              0.2211,
+              0.1373
+            ],
+            "variables.wood2": [
+              0.2347,
+              0.1462,
+              0.0772
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7
   },
   "denim": {
     "doc": "Denim: indigo cotton twill, its fine diagonal ribs flecked with white weft, faded paler in streaks along the warp; modelled on Poly Haven's denim_fabric.",
     "variables": {
       "blue": [
-        0.18,
-        0.32,
-        0.52
+        0.0867,
+        0.1866,
+        0.2974
       ],
       "dark": [
-        0.08,
-        0.15,
-        0.3
+        0.0355,
+        0.1046,
+        0.2008
       ],
       "pale": [
-        0.45,
-        0.58,
-        0.72
+        0.3322,
+        0.4441,
+        0.5446
       ]
     },
     "material": {
@@ -37451,27 +37656,58 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 12.316284,
+            "fitted": 5.105568
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.79715,
+            "variables.blue": [
+              0.0867,
+              0.1866,
+              0.2974
+            ],
+            "variables.dark": [
+              0.0355,
+              0.1046,
+              0.2008
+            ],
+            "variables.pale": [
+              0.3322,
+              0.4441,
+              0.5446
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7972
   },
   "osb": {
     "doc": "Oriented strand board: long flat flakes of pale wood pressed together at every angle, tan, honey and darker brown; modelled on Poly Haven's oriented_strand_board.",
     "variables": {
       "light": [
-        0.75,
-        0.58,
-        0.38
+        0.645,
+        0.4547,
+        0.2595
       ],
       "mid": [
-        0.62,
-        0.45,
-        0.28
+        0.482,
+        0.2699,
+        0.1344
       ],
       "dark": [
-        0.45,
-        0.3,
-        0.17
+        0.2883,
+        0.1629,
+        0.0822
       ],
       "rim": [
         0.35,
@@ -37479,9 +37715,9 @@
         0.14
       ],
       "glue": [
-        0.55,
-        0.4,
-        0.25
+        0.5166,
+        0.3866,
+        0.2447
       ]
     },
     "material": {
@@ -37736,32 +37972,68 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 402.843822,
+            "fitted": 4.082422
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.73735,
+            "variables.light": [
+              0.645,
+              0.4547,
+              0.2595
+            ],
+            "variables.mid": [
+              0.482,
+              0.2699,
+              0.1344
+            ],
+            "variables.dark": [
+              0.2883,
+              0.1629,
+              0.0822
+            ],
+            "variables.glue": [
+              0.5166,
+              0.3866,
+              0.2447
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7373
   },
   "cracked_plaster": {
     "doc": "Cracked old plaster: a pale grey-green skin crazed into plates by a network of cracks, grime darkening towards every crack; modelled on Poly Haven's worn_cracked_plaster.",
     "variables": {
       "plaster": [
-        0.62,
-        0.6,
-        0.52
+        0.4213,
+        0.3488,
+        0.2341
       ],
       "plaster2": [
-        0.48,
-        0.46,
-        0.38
+        0.2333,
+        0.1689,
+        0.0801
       ],
       "grime": [
-        0.25,
-        0.23,
-        0.18
+        0.159,
+        0.1207,
+        0.0678
       ],
       "crack": [
-        0.1,
-        0.09,
-        0.07
+        0.0727,
+        0.0571,
+        0.0313
       ]
     },
     "material": {
@@ -37992,22 +38264,58 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 112.801282,
+            "fitted": 4.309446
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.80583,
+            "variables.plaster": [
+              0.4213,
+              0.3488,
+              0.2341
+            ],
+            "variables.plaster2": [
+              0.2333,
+              0.1689,
+              0.0801
+            ],
+            "variables.grime": [
+              0.159,
+              0.1207,
+              0.0678
+            ],
+            "variables.crack": [
+              0.0727,
+              0.0571,
+              0.0313
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.8058
   },
   "bamboo_screen": {
     "doc": "A bamboo screen: straw-coloured canes standing side by side, rounded and streaked, ringed by darker nodes at intervals, dark between the canes; modelled on Poly Haven's bamboo_wall.",
     "variables": {
       "cane": [
-        0.55,
-        0.45,
-        0.3
+        0.316,
+        0.2068,
+        0.1266
       ],
       "cane2": [
-        0.42,
-        0.33,
-        0.21
+        0.2084,
+        0.1207,
+        0.0643
       ],
       "node": [
         0.3,
@@ -38015,9 +38323,9 @@
         0.13
       ],
       "gap": [
-        0.1,
-        0.07,
-        0.04
+        0.1074,
+        0.0647,
+        0.0361
       ]
     },
     "material": {
@@ -38232,33 +38540,64 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 757.113552,
+            "fitted": 4.630703
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.4,
+            "variables.cane": [
+              0.316,
+              0.2068,
+              0.1266
+            ],
+            "variables.cane2": [
+              0.2084,
+              0.1207,
+              0.0643
+            ],
+            "variables.gap": [
+              0.1074,
+              0.0647,
+              0.0361
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.4
   },
   "cedar_bark": {
     "show": "bark",
-    "doc": "Cedar bark: reddish-brown bark in long fibrous strips running up the trunk, furrowed between them, greyed by the weather in patches; modelled on Poly Haven's chinese_cedar_bark.",
+    "doc": "Cedar bark: reddish-brown bark in long fibrous strips running up the trunk, dark furrows between them, greyed by the weather in places; modelled on Poly Haven's chinese_cedar_bark.",
     "variables": {
       "bark": [
-        0.34,
-        0.2,
-        0.12
+        0.1269,
+        0.0865,
+        0.0552
       ],
       "bark2": [
-        0.22,
-        0.13,
-        0.08
+        0.0801,
+        0.0367,
+        0.0162
       ],
       "grey": [
-        0.38,
-        0.34,
-        0.3
+        0.2882,
+        0.2197,
+        0.1632
       ],
       "dark": [
-        0.1,
-        0.06,
-        0.04
+        0.0477,
+        0.0275,
+        0.0152
       ]
     },
     "material": {
@@ -38266,13 +38605,28 @@
       "albedo": {
         "pattern": {
           "node": "smoothstep",
-          "from": 0.3,
-          "to": 0.5,
+          "from": 0.15,
+          "to": 0.0,
           "input": {
-            "node": "fractal",
-            "scale": 0.3,
-            "seed": 6921,
-            "smallest": 0.01
+            "node": "warp",
+            "amount": 0.006,
+            "scale": 0.05,
+            "seed": 6914,
+            "octaves": 2,
+            "input": {
+              "node": "transform",
+              "input": {
+                "node": "cells",
+                "style": "edges",
+                "scale": 0.025,
+                "seed": 6911
+              },
+              "scale": [
+                1,
+                10,
+                1
+              ]
+            }
           }
         },
         "color_map": [
@@ -38280,139 +38634,138 @@
             0,
             {
               "pattern": {
-                "node": "add",
-                "inputs": [
-                  {
-                    "node": "transform",
-                    "input": {
+                "node": "smoothstep",
+                "from": 0.5,
+                "to": 0.7,
+                "input": {
+                  "node": "add",
+                  "inputs": [
+                    {
                       "node": "fractal",
-                      "scale": 0.008,
-                      "seed": 6911,
-                      "smallest": 0.0006,
-                      "style": "ridged"
+                      "scale": 0.3,
+                      "seed": 6921,
+                      "smallest": 0.01
                     },
-                    "scale": [
-                      1,
-                      6,
-                      1
-                    ]
-                  },
-                  {
-                    "node": "multiply",
-                    "inputs": [
-                      0.7,
-                      {
-                        "node": "transform",
-                        "input": {
-                          "node": "fractal",
-                          "scale": 0.004,
-                          "seed": 6912,
-                          "smallest": 0.0003
-                        },
-                        "scale": [
-                          1,
-                          25,
-                          1
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "node": "multiply",
-                    "inputs": [
-                      0.4,
-                      {
-                        "node": "fractal",
-                        "scale": 0.1,
-                        "seed": 6913,
-                        "smallest": 0.01
-                      }
-                    ]
-                  }
-                ]
+                    {
+                      "node": "multiply",
+                      "inputs": [
+                        0.3,
+                        {
+                          "node": "warp",
+                          "amount": 0.006,
+                          "scale": 0.05,
+                          "seed": 6914,
+                          "octaves": 2,
+                          "input": {
+                            "node": "transform",
+                            "input": {
+                              "node": "cells",
+                              "style": "id",
+                              "scale": 0.025,
+                              "seed": 6911
+                            },
+                            "scale": [
+                              1,
+                              10,
+                              1
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
               },
               "color_map": [
                 [
-                  -0.1,
-                  "$dark"
+                  0,
+                  {
+                    "pattern": {
+                      "node": "add",
+                      "inputs": [
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.6,
+                            {
+                              "node": "warp",
+                              "amount": 0.006,
+                              "scale": 0.05,
+                              "seed": 6914,
+                              "octaves": 2,
+                              "input": {
+                                "node": "transform",
+                                "input": {
+                                  "node": "cells",
+                                  "style": "id",
+                                  "scale": 0.025,
+                                  "seed": 6911
+                                },
+                                "scale": [
+                                  1,
+                                  10,
+                                  1
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.5,
+                            {
+                              "node": "transform",
+                              "input": {
+                                "node": "fractal",
+                                "scale": 0.004,
+                                "seed": 6912,
+                                "smallest": 0.0003
+                              },
+                              "scale": [
+                                1,
+                                25,
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "node": "multiply",
+                          "inputs": [
+                            0.3,
+                            {
+                              "node": "fractal",
+                              "scale": 0.1,
+                              "seed": 6913,
+                              "smallest": 0.01
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "color_map": [
+                      [
+                        0.0,
+                        "$bark2"
+                      ],
+                      [
+                        0.6,
+                        "$bark"
+                      ]
+                    ]
+                  }
                 ],
                 [
-                  0.1,
-                  "$bark2"
-                ],
-                [
-                  0.35,
-                  "$bark"
+                  1,
+                  "$grey"
                 ]
               ]
             }
           ],
           [
             1,
-            {
-              "pattern": {
-                "node": "add",
-                "inputs": [
-                  {
-                    "node": "transform",
-                    "input": {
-                      "node": "fractal",
-                      "scale": 0.008,
-                      "seed": 6911,
-                      "smallest": 0.0006,
-                      "style": "ridged"
-                    },
-                    "scale": [
-                      1,
-                      6,
-                      1
-                    ]
-                  },
-                  {
-                    "node": "multiply",
-                    "inputs": [
-                      0.7,
-                      {
-                        "node": "transform",
-                        "input": {
-                          "node": "fractal",
-                          "scale": 0.004,
-                          "seed": 6912,
-                          "smallest": 0.0003
-                        },
-                        "scale": [
-                          1,
-                          25,
-                          1
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "node": "multiply",
-                    "inputs": [
-                      0.4,
-                      {
-                        "node": "fractal",
-                        "scale": 0.1,
-                        "seed": 6913,
-                        "smallest": 0.01
-                      }
-                    ]
-                  }
-                ]
-              },
-              "color_map": [
-                [
-                  0,
-                  "$bark2"
-                ],
-                [
-                  0.8,
-                  "$grey"
-                ]
-              ]
-            }
+            "$dark"
           ]
         ]
       },
@@ -38423,21 +38776,59 @@
             {
               "node": "multiply",
               "inputs": [
-                0.006,
+                -0.006,
                 {
-                  "node": "transform",
+                  "node": "smoothstep",
+                  "from": 0.15,
+                  "to": 0.0,
                   "input": {
-                    "node": "fractal",
-                    "scale": 0.008,
-                    "seed": 6911,
-                    "smallest": 0.0006,
-                    "style": "ridged"
-                  },
-                  "scale": [
-                    1,
-                    6,
-                    1
-                  ]
+                    "node": "warp",
+                    "amount": 0.006,
+                    "scale": 0.05,
+                    "seed": 6914,
+                    "octaves": 2,
+                    "input": {
+                      "node": "transform",
+                      "input": {
+                        "node": "cells",
+                        "style": "edges",
+                        "scale": 0.025,
+                        "seed": 6911
+                      },
+                      "scale": [
+                        1,
+                        10,
+                        1
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.002,
+                {
+                  "node": "warp",
+                  "amount": 0.006,
+                  "scale": 0.05,
+                  "seed": 6914,
+                  "octaves": 2,
+                  "input": {
+                    "node": "transform",
+                    "input": {
+                      "node": "cells",
+                      "style": "id",
+                      "scale": 0.025,
+                      "seed": 6911
+                    },
+                    "scale": [
+                      1,
+                      10,
+                      1
+                    ]
+                  }
                 }
               ]
             },
@@ -38508,8 +38899,44 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 22.242878,
+            "fitted": 4.338325
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.70228,
+            "variables.bark": [
+              0.1269,
+              0.0865,
+              0.0552
+            ],
+            "variables.bark2": [
+              0.0801,
+              0.0367,
+              0.0162
+            ],
+            "variables.dark": [
+              0.0477,
+              0.0275,
+              0.0152
+            ],
+            "variables.grey": [
+              0.2882,
+              0.2197,
+              0.1632
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7023
   }
 }

@@ -585,6 +585,18 @@ slate_roof (roof_slates_03: grey slates in overlapping courses, lichen, shadowed
 32.6 → 18.2, its snow more speckled than the scan's) and parquet (rectangular_parquet: rows of
 short oak strips, a `brick` turned to lie flat across the rows; 96.4 → 7.28).
 
+And eight from ambientCG's scans, whose sizes it gives in centimetres: berber_carpet
+(Carpet016: a cream loop pile flecked brown; 838 → 21.4), woven_rug (Carpet015: rust ribs with
+pale ticks, a flat `brick`'s ids picking which; 478 → 6.56), upholstery_weave (Fabric061: a fine
+two-tone `checker`; 1199 → 104), quilted_cotton (Fabric048: white pillows, the product of two
+`wave`s, grey into the seams; 386 → 202), bamboo_blind (Wicker013: slats as `brick` courses
+along the wall, fine cords; 114 → 3.65), basket_weave (Wicker006: dark strips over pale where a
+`checker` brings the pale ones over; 942 → 32.1), marble_checkerboard (Tiles074: cream and
+white-veined black marble in a `checker`; 103 → 1.50) and kraft_paper (Paper004: fibrous brown
+paper with faint ribs; 779 → 29.0). A `checker` is moved half a cell off the ground's and a
+wall's planes, so neither lies on a boundary. The regular weaves score high only because the
+loss can't line a strict lattice up with the photograph's; they look as their scans do.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

@@ -3089,3 +3089,27 @@ deferred against 401.6 G without, 29% fewer; terrain-alpine 288.1 G against 338.
 (11.6 million rays from 6.3 million vertices). Nearly all of pebble-beach's shadow rays are
 deferred: a vertex keeps none mostly where it faces away from the light (half of every pebble),
 and a path that ends at its vertex (1%) traces its own.
+
+## 22. The GPU and the host at once: two halves of a block in flight
+
+Known: a block with host materials alternates, the device running its rounds while the host
+waits, then the host shading the waiting paths while the device idles (`block_with_host_rays`,
+`serve_host`); pebble-beach at 24 samples: 16.6 s, of which the host's shading 9.2 s and the
+device 6.7 s. Overlapping them could save up to the smaller of the two.
+
+Design:
+1. A block's pixels in two halves by row (even, odd: alike in their work), each with its own
+   queues, dispatch, parameters and host buffers (`Half`); the paths, sky queries, camera rays
+   and image shared, as their slots are disjoint. `start_paths` starts only its half's slots
+   (`FLAG_ROWS_EVEN`, `FLAG_ROWS_ODD`; neither: all); `add_paths` runs once, after both, so the
+   sums are as before.
+2. The submissions ordered so that each half's readback of its host queue follows its own
+   rounds but precedes the other half's: half 0's rounds and gather, half 1's rounds and
+   gather; then while the device runs half 1's rounds the host shades half 0's paths, queues
+   half 0's next rounds and gather, and shades half 1's while the device runs those.
+3. A read waits for its own submission (`PollType::Wait` with its index), not for all.
+4. Only where the scene has host materials (natively); `RAYS_GPU_HALVES=1` keeps one, to compare.
+
+Assumed, to measure: the halves' rounds each cost about half (dispatches per round double, but
+each is half the paths); the picture is the same pixel for pixel, the halves' paths being the
+same paths in other queues.

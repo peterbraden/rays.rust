@@ -678,7 +678,10 @@ impl crate::volume::DensityField for Whitewater {
             let width = 0.3 * h + 0.6 * h * tall;
             let n = |s: f64, o: f64| self.noise.noise(p.x / s + o, p.y / s, p.z / s);
             let billows = 0.5 + 0.45 * n(0.45, 31.3) + 0.3 * n(0.15, 2.9) + 0.15 * n(0.05, 6.1);
-            when * (-((dz - lean) / width).powi(2)).exp() * (1. - tall).powf(1.3) * (2.2 * billows - 0.7)
+            // (From a little above the tip: at its foot it stood as a grey wall in front of the
+            // face, in the wave's shadow; the churned mass and splash are the foot.)
+            let above = crate::math::smoothstep(0.03, 0.15, tall);
+            when * above * (-((dz - lean) / width).powi(2)).exp() * (1. - tall).powf(1.3) * (2.2 * billows - 0.7)
         } else { 0. };
         (landed * ((mass * thinning).max(splash) * (1.6 * lumps - 0.3)).max(plume)).clamp(0., 1.)
     }

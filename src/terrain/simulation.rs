@@ -223,6 +223,14 @@ pub struct Terrain {
     pub settled: Vec<f64>,
     /// Thickness of volcanic rock beneath the sediment, metres.
     pub lava: Vec<f64>,
+    /// How much of it the landscape started with, metres: the hotspots' shields
+    /// (`hotspot`), old basalt weathered and grown over like any rock; the rest erupted in its
+    /// time (`fresh_lava`).
+    pub shield: Vec<f64>,
+    /// When lava last flowed over each cell, years of the landscape's time (`NO_LAVA` if
+    /// never), and how much of it was ʻaʻā rather than pāhoehoe, 0 to 1 (`volcano::erupt`).
+    pub lava_time: Vec<f64>,
+    pub lava_aa: Vec<f64>,
     /// Sediment flux leaving each cell in rivers at the last step, m³/yr.
     pub sediment_flux: Vec<f64>,
     /// Ice thickness, metres.
@@ -325,6 +333,10 @@ impl Terrain {
         let latitude = domain.dirs.iter().map(|d| d.y.clamp(-1., 1.).asin()).collect();
         let n = domain.len();
         let sea = bed.iter().map(|&b| b < 0.).collect();
+        // The hotspots' shields are basalt (`hotspot`).
+        let lava: Vec<f64> = domain.dirs.par_iter().map(|d| planet.shield_thickness(d, finest)).collect();
+        let shield = lava.clone();
+        let (lava_time, lava_aa) = (vec![NO_LAVA; domain.len()], vec![0.; domain.len()]);
         let vents = match &params.volcano { Some(v) => vents(&planet, &domain, v), None => vec![] };
         let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
         let ela = climate.as_ref().map(|climate| domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect());
@@ -340,7 +352,7 @@ impl Terrain {
         let mut t = Terrain {
             precipitation: base_precipitation.clone(), base_precipitation, wind, temperature,
             domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], channel: vec![], latitude, sea, vents, rivers: Rivers::default(),
-            sediment: vec![0.; n], till: vec![0.; n], sand: vec![0.; n], settled: vec![], lava: vec![0.; n], sediment_flux: vec![0.; n],
+            sediment: vec![0.; n], till: vec![0.; n], sand: vec![0.; n], settled: vec![], lava, shield, lava_time, lava_aa, sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         // The noise topography may stand steeper than its rock can: it is cut down to what the
@@ -408,6 +420,18 @@ impl Terrain {
             }
         }
         outlet
+    }
+
+    /// The lava at cell `i` erupted in the landscape's time, metres, beyond what it started
+    /// with (the hotspots' old shields): fresh, bare rock where no sediment covers it.
+    pub fn fresh_lava(&self, i: usize) -> f64 {
+        (self.lava[i] - self.shield[i]).max(0.)
+    }
+
+    /// How long ago lava last flowed over cell `i`, years (`f64::INFINITY` if never, or none
+    /// of it is left).
+    pub fn lava_age(&self, i: usize) -> f64 {
+        if self.fresh_lava(i) <= 0. || self.lava_time[i] <= NO_LAVA { f64::INFINITY } else { (self.time - self.lava_time[i]).max(0.) }
     }
 
     /// Elevation of the top of the bedrock, beneath sediment and lava, metres.
@@ -616,7 +640,7 @@ impl Terrain {
     /// water reaching it that flows on: none below a closed basin.
     fn balance(&self, flow: &mut Flow) -> Basins {
         let n = self.domain.len();
-        let mut basins = Basins { closed: vec![false; n], water: vec![0.; n], count: 0 };
+        let mut basins = Basins { closed: vec![false; n], water: vec![0.; n], floor: vec![false; n], count: 0 };
         if self.temperature.is_none() || self.params.evaporation <= 0. { return basins; }
         let surface = self.surface();
         let evaporation = self.evaporation();
@@ -667,9 +691,19 @@ impl Terrain {
                         loss -= net[c];
                         level = sorted.get(k + 1).map_or(flow.filled[c], |&d| surface[d]);
                     }
+                    // Its floor: as far as a wet year's water spreads, `WET_YEAR` times as
+                    // much as the mean (and at least its lowest cell).
+                    let (mut wet, mut spread) = (0., 1);
+                    while spread < sorted.len() && wet < WET_YEAR * inflow {
+                        wet -= net[sorted[spread - 1]];
+                        if wet < WET_YEAR * inflow { spread += 1; }
+                    }
                     for &c in cells {
                         basins.closed[c] = true;
                         basins.water[c] = (level - surface[c]).max(0.);
+                    }
+                    for &c in &sorted[..spread] {
+                        basins.floor[c] = true;
                     }
                 } else {
                     water[i] += w;
@@ -760,7 +794,7 @@ impl Terrain {
         self.rain();
 
         if let Some(v) = &self.params.volcano {
-            erupt(&self.domain, &self.vents, v, self.time, dt, &mut self.bed, &mut self.lava, &fixed);
+            erupt(&self.domain, &self.vents, v, self.time, dt, &mut self.bed, &mut self.lava, &fixed, Some((&mut self.lava_time, &mut self.lava_aa)));
         }
 
         // Sediment glaciers erode is carried off by their meltwater, into the rivers.
@@ -943,7 +977,7 @@ impl Terrain {
             if fixed[k] { return k; }
             ((j - dy).clamp(0, n - 1) * n + (i - dx).clamp(0, n - 1)) as usize
         }).collect();
-        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.sand, &mut self.settled, &mut self.lava, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
+        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.sand, &mut self.settled, &mut self.lava, &mut self.shield, &mut self.lava_time, &mut self.lava_aa, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
             if f.len() != source.len() { continue; }
             let old = f.clone();
             for (k, &s) in source.iter().enumerate() { f[k] = old[s]; }
@@ -1075,8 +1109,12 @@ pub struct Basins {
     /// Cells in the depression of a closed basin, whose lake never spills.
     pub closed: Vec<bool>,
     /// Depth of the water standing in closed basins, metres: their terminal lakes. The rest
-    /// of a closed depression is dry: a playa where it is flat.
+    /// of a closed depression is dry.
     pub water: Vec<f64>,
+    /// Cells of a closed basin's floor: as far as its lake spreads in a wet year (`WET_YEAR`),
+    /// dried to a crust of salt and clay between them. The rest of the depression, which the
+    /// water never reaches, is not.
+    pub floor: Vec<bool>,
     /// How many closed basins there are.
     pub count: usize,
 }
@@ -1084,15 +1122,23 @@ pub struct Basins {
 /// Terminal lakes shallower than this, metres, count as dry playa.
 pub const SALT_LAKE_DEPTH: f64 = 0.5;
 
+/// How much more water than the mean a wet year brings a closed basin: its lake spreads that
+/// much further over the floor, which is a playa where it then dries (`Basins::floor`). (Desert
+/// rivers' yearly flows vary severalfold.)
+pub const WET_YEAR: f64 = 3.;
+
 impl Basins {
     /// Whether cell `i` is under a closed basin's terminal lake.
     pub fn salt_lake(&self, i: usize) -> bool { self.closed[i] && self.water[i] > SALT_LAKE_DEPTH }
 
     /// Whether cell `i` of `t` is a playa: a closed basin's dry floor of lake beds.
     pub fn playa(&self, t: &Terrain, i: usize) -> bool {
-        self.closed[i] && self.water[i] <= SALT_LAKE_DEPTH && t.sediment[i] > crate::terrain::map::ALLUVIUM && t.ice[i] < ICE_FREE
+        self.closed[i] && self.floor[i] && self.water[i] <= SALT_LAKE_DEPTH && t.sediment[i] > crate::terrain::map::ALLUVIUM && t.ice[i] < ICE_FREE
     }
 }
+
+/// `Terrain::lava_time` where no lava has flowed.
+pub const NO_LAVA: f64 = -1e30;
 
 /// The evolving state of a `Terrain`, to save and restore: everything that changes with time
 /// (the domain, planet and vents are rebuilt from the parameters).
@@ -1126,6 +1172,10 @@ pub struct Snapshot {
     #[serde(default)]
     till: Vec<f64>,
     #[serde(default)]
+    lava_time: Vec<f64>,
+    #[serde(default)]
+    lava_aa: Vec<f64>,
+    #[serde(default)]
     sand: Vec<f64>,
     #[serde(default)]
     settled: Vec<f64>,
@@ -1152,7 +1202,7 @@ impl Terrain {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
             drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(), rebound: self.rebound.clone(),
-            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(), till: self.till.clone(), sand: self.sand.clone(), settled: self.settled.clone(),
+            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(), till: self.till.clone(), lava_time: self.lava_time.clone(), lava_aa: self.lava_aa.clone(), sand: self.sand.clone(), settled: self.settled.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -1179,6 +1229,8 @@ impl Terrain {
         self.channel = s.channel;
         self.till = if s.till.len() == self.domain.len() { s.till } else { vec![0.; self.domain.len()] };
         self.sand = if s.sand.len() == self.domain.len() { s.sand } else { vec![0.; self.domain.len()] };
+        self.lava_time = if s.lava_time.len() == self.domain.len() { s.lava_time } else { vec![NO_LAVA; self.domain.len()] };
+        self.lava_aa = if s.lava_aa.len() == self.domain.len() { s.lava_aa } else { vec![0.; self.domain.len()] };
         self.settled = s.settled;
         self.displacement = s.displacement;
         if s.shifted != self.shifted {
@@ -1477,8 +1529,13 @@ mod tests {
         // rain's factor.
         let bowl = 40e6 * 600. / t.params.orographic.as_ref().map_or(600., |o| o.reference);
         assert!(dry < wet - bowl, "{} vs {}", dry, wet);
-        // With nothing flowing in but its own rain, its floor is dry: a playa.
+        // With nothing flowing in but its own rain, its floor is dry: a playa, where a wet
+        // year's water spreads, its lowest ground; not the slopes of the whole bowl.
         assert!(closed.water.iter().all(|&w| w == 0.));
+        let (floor, bowl_cells) = ((0..len).filter(|&i| closed.floor[i]).count(), (0..len).filter(|&i| closed.closed[i]).count());
+        assert!(closed.floor[12 * n + 12] || closed.floor[11 * n + 11], "the bottom is its floor");
+        assert!(floor < bowl_cells / 2, "{} of {} cells floor", floor, bowl_cells);
+        assert!((0..len).all(|i| !closed.floor[i] || closed.closed[i]));
         // Without evaporation, every lake spills.
         t.params.evaporation = 0.;
         assert_eq!(t.basins().count, 0);

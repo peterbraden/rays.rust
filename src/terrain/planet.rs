@@ -70,7 +70,13 @@ pub struct PlanetParams {
     /// Plate tectonics, to place the continents, ocean basins, mountain belts and volcanoes;
     /// None for noise fields alone.
     pub tectonics: Option<TectonicsParams>,
+    /// Whether the hotspots build their chains of shield volcanoes (`hotspot`): the
+    /// tectonics' hotspots, or without tectonics `SEEDED_HOTSPOTS` drawn from the seed.
+    pub hotspot_volcanoes: bool,
 }
+
+/// Hotspots on a planet without plate tectonics.
+pub const SEEDED_HOTSPOTS: usize = 8;
 
 impl Default for PlanetParams {
     fn default() -> PlanetParams {
@@ -88,6 +94,7 @@ impl Default for PlanetParams {
             rift_relief: 1200.,
             rift_spacing: 25e3,
             tectonics: None,
+            hotspot_volcanoes: true,
         }
     }
 }
@@ -168,6 +175,8 @@ pub struct Planet {
     pub column: Column,
     /// Which way the mountain belts are shortened, found when first asked.
     trend: OnceLock<Trend>,
+    /// The hotspots' shield volcanoes, found when first asked.
+    shields: OnceLock<Arc<crate::terrain::hotspot::Shields>>,
 }
 
 /// Lattice units per planet radius of the continent field.
@@ -197,8 +206,32 @@ impl Planet {
             plutons: Octaves::new(seed, 7), plunges: Octaves::new(seed, 8), plateaus: Octaves::new(seed, 9),
             rifts: Octaves::new(seed, 10),
             column,
-            crust, trend: OnceLock::new(),
+            crust, trend: OnceLock::new(), shields: OnceLock::new(),
         }
+    }
+
+    /// The hotspots: the tectonics' (with the angular velocity of the plate over each), or
+    /// without them some drawn from the seed; none if `hotspot_volcanoes` is off.
+    pub fn hotspots(&self) -> Vec<crate::terrain::hotspot::Hotspot> {
+        use crate::terrain::hotspot;
+        if !self.params.hotspot_volcanoes { return vec![]; }
+        match &self.crust {
+            Some(c) => hotspot::of_plates(&c.hotspots, self.params.seed),
+            None => hotspot::seeded(SEEDED_HOTSPOTS, self.params.seed, self.params.radius),
+        }
+    }
+
+    /// The hotspots' shield volcanoes (`hotspot`).
+    pub fn shields(&self) -> &crate::terrain::hotspot::Shields {
+        self.shields.get_or_init(|| {
+            let radius = self.params.radius;
+            let continental = |d: &Vector3<f64>| match &self.crust {
+                Some(c) => c.margin(d),
+                None => smoothstep(-0.02, 0.05, self.continent(d)),
+            };
+            let list = crate::terrain::hotspot::shields(&self.hotspots(), radius, self.params.seed, &continental);
+            Arc::new(crate::terrain::hotspot::Shields::new(list, radius, &|d| self.ground(d, 1e4)))
+        })
     }
 
     /// Octaves needed, starting at `frequency` lattice units per radius, to reach detail of
@@ -413,6 +446,24 @@ impl Planet {
 
     /// As `most_plateau`, but for a stretched province of fault blocks in the subtropics,
     /// where its basins are dry: basin and range.
+    /// The (latitude, longitude) in degrees of the hotspots' young shield volcano standing
+    /// highest above the sea (built, and not yet carried far from its hotspot), in the tropics
+    /// if any is; None without any.
+    pub fn young_shield(&self) -> Option<(f64, f64)> {
+        // Preferring the tropics, where the chain behind it ends in atolls.
+        let tropical = |d: &Vector3<f64>| if d.y.abs() < 25f64.to_radians().sin() { 3000. } else { 0. };
+        self.shields().list.iter().filter(|s| (0.3..2.).contains(&s.age))
+            .map(|s| (self.elevation(&s.dir, 1e4) + tropical(&s.dir), s.dir))
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, d)| (d.y.clamp(-1., 1.).asin().to_degrees(), (-d.z).atan2(d.x).to_degrees()))
+    }
+
+    /// The (latitude, longitude) in degrees of the hotspots' youngest atoll; None without any.
+    pub fn atoll(&self) -> Option<(f64, f64)> {
+        self.shields().atolls().min_by(|a, b| a.age.total_cmp(&b.age))
+            .map(|s| (s.dir.y.clamp(-1., 1.).asin().to_degrees(), (-s.dir.z).atan2(s.dir.x).to_degrees()))
+    }
+
     pub fn most_rifted(&self, samples: usize) -> (f64, f64) {
         self.best_site_in(samples, 15. ..40., |d| {
             let e = self.extension(d);
@@ -423,6 +474,19 @@ impl Planet {
 
     /// Elevation above sea level at time zero, metres, with detail down to wavelength `finest`.
     pub fn elevation(&self, d: &Vector3<f64>, finest: f64) -> f64 {
+        let ground = self.ground(d, finest);
+        self.shields().elevation(d, ground).0
+    }
+
+    /// How thick the hotspots' shield volcanoes stand at `d`, metres: their basalt.
+    pub fn shield_thickness(&self, d: &Vector3<f64>, finest: f64) -> f64 {
+        let ground = self.ground(d, finest);
+        let (e, body) = self.shields().elevation(d, ground);
+        if body > 0. { (e - ground).max(0.) } else { 0. }
+    }
+
+    /// The elevation without the hotspots' volcanoes.
+    fn ground(&self, d: &Vector3<f64>, finest: f64) -> f64 {
         if let Some(crust) = &self.crust {
             let base = self.crust_elevation(crust, d);
             let land = smoothstep(-100., 200., base);

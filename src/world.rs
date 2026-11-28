@@ -114,7 +114,7 @@ use web_time::Instant;
 
 /// In every key: raise it when a stage's computation changes, so that what was built before
 /// isn't taken for what would be built now.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 14;
 /// A running stage saves where it has got to this often, seconds.
 pub const CHECKPOINT: f64 = 30.;
 /// `print` says how far a stage has got when nothing has been printed for this long, seconds.
@@ -371,8 +371,12 @@ pub enum Site {
     Coast,
     /// ... a plateau of flat strata in the subtropics (mesa country), ...
     Plateau,
-    /// ... or a stretched province of fault blocks in the subtropics (basin and range).
+    /// ... a stretched province of fault blocks in the subtropics (basin and range), ...
     Rift,
+    /// ... a hotspot's young shield volcano, the one standing highest above the sea, ...
+    Hotspot,
+    /// ... or the youngest atoll of a hotspot's chain.
+    Atoll,
 }
 
 /// Samples of the planet a site is chosen from.
@@ -388,6 +392,8 @@ impl Site {
             Site::Coast => planet.most_coastal(SITE_SAMPLES),
             Site::Plateau => planet.most_plateau(SITE_SAMPLES),
             Site::Rift => planet.most_rifted(SITE_SAMPLES),
+            Site::Hotspot => planet.young_shield().unwrap_or_else(|| planet.most_volcanic(SITE_SAMPLES)),
+            Site::Atoll => planet.atoll().or_else(|| planet.young_shield()).unwrap_or_else(|| planet.most_volcanic(SITE_SAMPLES)),
         }
     }
 }
@@ -486,6 +492,8 @@ pub struct World {
     pub globe: Option<Terrain>,
     /// The patches, finest first.
     pub patches: Vec<Terrain>,
+    /// Whether the finest patch is a close level (`close_level`).
+    pub close: bool,
     pub manifest: Manifest,
     /// Where the manifest is, if there is a directory.
     pub manifest_path: Option<PathBuf>,
@@ -616,7 +624,7 @@ impl Builder<'_> {
         let mut outcome = None;
         let crust = crate::terrain::tectonics::crust_from(tp, params.seed, params.radius, || {
             if let Some(saved) = self.store.read::<CrustState>(&file, &key)
-                && let Some(c) = Crust::from_state(saved.state, tp.cells, params.radius) {
+                && let Some(c) = Crust::from_state(saved.state, tp.cells, tp.hotspots, params.radius) {
                 outcome = Some((true, saved.seconds, Some(format!("Tectonics: the crust of {} cells read from {}", c.plate.len(), file))));
                 return c;
             }
@@ -835,7 +843,9 @@ fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&
         // only run on the finest, where they are drawn.
         b.patch(d, &d.patch_name(k), l, (k == 0, k == 0), &centre, &frame, &mut outer, &mut built)?;
     }
+    let mut close = false;
     if let (Some(l), Some(camera)) = (close_level(d, &frame, built.last()), &d.close) {
+        close = true;
         let centre = camera.centre(&frame, 0.25 * l.cells as f64 * l.spacing);
         // Its glaciers are the finest level's: ice moving over cells this fine needs steps
         // too short to run (25 times as many as there for the same cells), and the ice's
@@ -843,13 +853,14 @@ fn build_with(d: &Description, dir: Option<&Path>, on_progress: &mut dyn FnMut(&
         b.patch(d, &format!("patch {} m", l.spacing), &l, (false, true), &centre, &frame, &mut outer, &mut built)?;
         let n = built.len();
         let (around, close) = built.split_at_mut(n - 1);
+        take_shape(&mut close[0], &around[n - 2], CLOSE_FINER);
         take_glaciers(&mut close[0], &around[n - 2]);
     }
     let mut patches = built;
     let globe = d.planet_cells.map(|_| patches.remove(0));
     patches.reverse();
     let manifest_path = b.manifest_file.as_deref().and_then(|f| b.store.path(f));
-    Ok(World { site, frame, planet, climate, globe, patches, manifest: b.manifest, manifest_path })
+    Ok(World { site, frame, planet, climate, globe, patches, close, manifest: b.manifest, manifest_path })
 }
 
 /// The close level `d` adds (`Description::close_level`), if its focus is a camera within
@@ -862,6 +873,62 @@ fn close_level(d: &Description, frame: &Frame, finest: Option<&Terrain>) -> Opti
         h - scenery::sample(&t.domain, &scenery::corner_heights(t), &foot)
     };
     (height < CLOSE_HEIGHT).then_some(Level { cells: l.cells, spacing: l.spacing / CLOSE_FINER })
+}
+
+/// Give the close level the shape of the patch around it at that patch's scale, keeping its
+/// own finer relief: its surface raised or lowered by the difference between the two,
+/// smoothed over `finer` of its cells (one cell of the patch around it). Run five times finer,
+/// its rivers cut their valleys tens of metres deeper than the coarser patch's, which would
+/// leave its edges standing as walls against the ground around it. At its edges it is that
+/// patch's ground exactly, its own relief growing in over the next two of that patch's cells:
+/// its simulation holds its edges at their first heights while the ground inside wears down,
+/// leaving a rim with gullies along it.
+///
+/// And where that patch has a closed basin's floor (`Basins::floor`), the close level's is its
+/// level floor: the close level's edges are outlets, so its rivers drained the basin and cut
+/// gullies across the floor where the water stands and dries.
+fn take_shape(close: &mut Terrain, around: &Terrain, finer: f64) {
+    let crate::terrain::domain::Layout::Patch { n, .. } = close.domain.layout else { return };
+    let surface = scenery::corner_values(around, &around.surface());
+    let outer: Vec<f64> = close.domain.dirs.iter().map(|d| scenery::sample(&around.domain, &surface, d)).collect();
+    let raw: Vec<f64> = (0..close.domain.len()).map(|i| outer[i] - close.bed[i] - close.ice[i]).collect();
+    // Two box filters a cell of the patch around wide: a tent, smooth enough not to show.
+    let r = (finer / 2.).round().max(1.) as isize;
+    let mut diff = raw.clone();
+    for _ in 0..2 {
+        diff = box_filter(&diff, n, r);
+    }
+    let basins = around.basins();
+    let floors: Vec<f64> = (0..around.domain.len()).map(|i| if basins.closed[i] && basins.floor[i] { 1. } else { 0. }).collect();
+    let floors = scenery::corner_values(around, &floors);
+    let fade = 2. * finer;
+    for (i, b) in close.bed.iter_mut().enumerate() {
+        let (x, z) = (i % n, i / n);
+        let edge = x.min(z).min(n - 1 - x).min(n - 1 - z) as f64;
+        let own = crate::procedural::nubis_clouds::smoothstep(0., fade, edge);
+        // (Out to a cell beyond, where the ground cover's ragged shores of salt reach:
+        // `scenery::Ground::cover`.)
+        let floor = crate::procedural::nubis_clouds::smoothstep(0.02, 0.25, scenery::sample(&around.domain, &floors, &close.domain.dirs[i]));
+        *b += raw[i] + own * (1. - floor) * (diff[i] - raw[i]);
+    }
+}
+
+/// A box filter of radius `r` cells over an `n` x `n` grid (cell (i, j) at j * n + i), along
+/// each axis in turn, clamped at the edges.
+fn box_filter(v: &[f64], n: usize, r: isize) -> Vec<f64> {
+    let pass = |v: &[f64], at: &dyn Fn(usize, usize) -> usize| {
+        let mut out = vec![0.; v.len()];
+        for line in 0..n {
+            for k in 0..n {
+                let (lo, hi) = ((k as isize - r).max(0) as usize, ((k as isize + r) as usize).min(n - 1));
+                let sum: f64 = (lo..=hi).map(|m| v[at(line, m)]).sum();
+                out[at(line, k)] = sum / (hi - lo + 1) as f64;
+            }
+        }
+        out
+    };
+    let rows = pass(v, &|j, i| j * n + i);
+    pass(&rows, &|i, j| j * n + i)
 }
 
 /// Give `close`, a close level evolved without glaciers, those of `around`, the patch around it:
@@ -882,7 +949,13 @@ fn take_glaciers(close: &mut Terrain, around: &Terrain) {
             close.sediment[i] += w * (at(&sediment).max(0.) - close.sediment[i]);
             close.ice[i] = h;
         }
-        close.till[i] = close.till[i].max(at(&till).min(close.sediment[i]));
+        // (Till is sediment: where the ice left more than the close level's own rivers did,
+        // the ground there is till to that depth.)
+        let t = at(&till).max(0.);
+        if t > close.till[i] {
+            close.till[i] = t;
+            close.sediment[i] = close.sediment[i].max(t);
+        }
     }
 }
 
@@ -971,10 +1044,34 @@ mod tests {
     }
 
     #[test]
+    fn test_a_close_level_takes_the_shape_of_the_patch_around_it() {
+        // The finest level, and a close level five times finer about the camera.
+        let mut d = tiny(5);
+        d.close = Some(Focus::Camera { location: Vector3::new(0., 300., 0.), lookat: Vector3::new(0., 0., -1000.), above_ground: true });
+        let w = quietly(&d, None);
+        let (close, around) = (&w.patches[0], &w.patches[1]);
+        assert_eq!(w.patches.len(), 3);
+        assert_eq!(close.domain.area[0].sqrt().round(), 200.);
+        let corners = scenery::corner_values(around, &around.surface());
+        // At the scale of the patch around it, the close level is that patch's ground: no
+        // higher or lower on the whole, nor along its edges, where it meets that patch.
+        let surface = close.surface();
+        let outer: Vec<f64> = close.domain.dirs.iter().map(|d| scenery::sample(&around.domain, &corners, d)).collect();
+        let offset = |keep: &dyn Fn(usize) -> bool| {
+            let cells: Vec<usize> = (0..surface.len()).filter(|&i| keep(i)).collect();
+            cells.iter().map(|&i| surface[i] - outer[i]).sum::<f64>() / cells.len() as f64
+        };
+        let (whole, edges) = (offset(&|_| true), offset(&|i| close.domain.boundary[i]));
+        assert!(whole.abs() < 3. && edges.abs() < 0.01, "{} {}", whole, edges);
+        // A constant is its own average.
+        assert!(box_filter(&vec![2.; 25], 5, 2).iter().all(|&v| (v - 2.).abs() < 1e-12));
+    }
+
+    #[test]
     fn test_keys_are_fnv_and_keep_their_parts_apart() {
-        // FNV-1a of "1" (the format), a zero byte and "a", worked by hand from the definition.
+        // FNV-1a of the format, a zero byte and "a", worked by hand from the definition.
         let mut h: u64 = 0xcbf29ce484222325;
-        for b in [b'1', 0, b'a'] { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
+        for b in FORMAT.to_string().bytes().chain([0, b'a']) { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
         assert_eq!(key(&["a"]), format!("{:016x}", h));
         assert_ne!(key(&["ab", "c"]), key(&["a", "bc"]));
         assert_ne!(key(&["a", ""]), key(&["a"]));
@@ -1054,7 +1151,7 @@ mod tests {
         let radius = d.params.planet.radius;
         let stage = w.manifest.stage("plates").unwrap();
         let saved = store.read::<CrustState>(stage.file.as_ref().unwrap(), stage.key.as_ref().unwrap()).unwrap();
-        let crust = Crust::from_state(saved.state, 12, radius).unwrap();
+        let crust = Crust::from_state(saved.state, 12, d.params.planet.tectonics.as_ref().unwrap().hotspots, radius).unwrap();
         let ours = w.planet.crust.as_ref().unwrap();
         assert_eq!(serde_json::to_string(&crust.state()).unwrap(), serde_json::to_string(&ours.state()).unwrap());
         let stage = w.manifest.stage("climate").unwrap();
@@ -1071,7 +1168,7 @@ mod tests {
         // A file of another key, or of another grid, isn't taken for this one.
         assert!(store.read::<CrustState>(w.manifest.stage("plates").unwrap().file.as_ref().unwrap(), "0000000000000000").is_none());
         let saved = store.read::<CrustState>(w.manifest.stage("plates").unwrap().file.as_ref().unwrap(), w.manifest.stage("plates").unwrap().key.as_ref().unwrap()).unwrap();
-        assert!(Crust::from_state(saved.state, 16, radius).is_none());
+        assert!(Crust::from_state(saved.state, 16, d.params.planet.tectonics.as_ref().unwrap().hotspots, radius).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

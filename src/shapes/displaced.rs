@@ -510,7 +510,10 @@ impl DisplacedTerrain {
         if self.lift.is_some() || self.sideways.graphs().next().is_some() { return self; }
         let g = self.grid.clone();
         let (nx, nz) = (g.nx, g.nz);
-        let toward_zero = |r: (f64, f64)| if self.falloff > 0. { (r.0.min(0.), r.1.max(0.)) } else { r };
+        // Every bound includes zero: where the terrain fades out at its edges, and where what
+        // its graph reads changes after it is built, scaling its detail towards zero (forest
+        // floor under trees planted afterwards, `terrain::detail`).
+        let toward_zero = |r: (f64, f64)| (r.0.min(0.), r.1.max(0.));
         let aside = [(0., 0.); 3];
         let tightened: Vec<BBox> = (0 .. nx * nz).into_par_iter().map(|k| {
             let (ix, iz) = (k % nx, k / nx);

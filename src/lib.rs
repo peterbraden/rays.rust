@@ -157,6 +157,7 @@ pub mod procedural {
     pub mod hill_cloud;
     pub mod cumulonimbus;
     pub mod fractus;
+    pub mod plume;
     pub mod arcus;
     pub mod lightning;
     pub mod valley_fog;

@@ -161,7 +161,21 @@ pub enum Field {
     /// The bedrock (`terrain::geology::Rock`, by number as `rock`) at the point's height,
     /// beneath any sediment or lava over it: what the scree there broke from.
     Bedrock,
+    /// How much of the ground the crowns of the trees an ecosystem planted on the landscape
+    /// cover, 0 to 1 (`terrain::canopy`): for materials and placement rules after the
+    /// ecosystem. A displacement reading it must only scale towards zero (as the landscape's
+    /// own detail does), its bounds being found before any trees are planted.
+    Canopy,
+    /// How long ago lava last flowed over the ground, years (`terrain::volcano::erupt`):
+    /// `LAVA_NEVER` where none has in the landscape's time, or it has worn away.
+    LavaAge,
+    /// How much of that lava is ʻaʻā, rubble of clinker, rather than pāhoehoe, its smooth,
+    /// ropy skin unbroken, 0 to 1.
+    Aa,
 }
+
+/// The `lava_age` field where no lava has flowed, years.
+pub const LAVA_NEVER: f64 = 1e6;
 
 impl Field {
     pub fn parse(s: &str) -> Result<Field, String> {
@@ -183,7 +197,10 @@ impl Field {
             "till" => Field::Till,
             "sand" => Field::Sand,
             "bedrock" => Field::Bedrock,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, bedrock, hardness, playa, till or sand", s)),
+            "canopy" => Field::Canopy,
+            "lava_age" => Field::LavaAge,
+            "aa" => Field::Aa,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, lava_age, aa, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, bedrock, hardness, playa, till, sand or canopy", s)),
         })
     }
 }
@@ -199,6 +216,9 @@ pub trait Fields: Sync + Send {
 
     /// The climate's biome at `p` (`biome` nodes); None where there is no climate.
     fn biome(&self, _p: &Vector3<f64>) -> Option<crate::terrain::climate::Biome> { None }
+    /// The crowns of the trees planted on the surface, for ecosystems to add to (`canopy`
+    /// fields read them); None where the surface keeps none.
+    fn canopy(&self) -> Option<&crate::terrain::canopy::Slot> { None }
 }
 
 /// Where a graph is evaluated: the point on the surface (before any displacement), the

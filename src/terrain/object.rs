@@ -21,7 +21,9 @@
 //!   `lat`/`lon` is placed on this seed's most mountainous spot (or, with `"near":
 //!   "volcanoes"`, its most volcanic mountains, with `"near": "plateau"`, a plateau of flat
 //!   strata in the subtropics (mesa country), with `"near": "rift"`, fault blocks in the
-//!   subtropics (basin and range), or with `"near": "coast"`, a coast with
+//!   subtropics (basin and range), with `"near": "hotspot"`, the young shield volcano of a
+//!   hotspot standing highest above the sea, with `"near": "atoll"`, the youngest atoll of a
+//!   hotspot's chain, or with `"near": "coast"`, a coast with
 //!   mountains behind it); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
 //! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes (coloured by the bedrock
@@ -35,7 +37,7 @@
 //!   the origin, ignoring the planet's curvature. A planet is drawn centred on `centre`
 //!   (default the origin), its sea level a sphere of radius `radius / scale`.
 //! - Processes: `radius` (m), `step` (years), `land_bias`, `mountain_height` (m),
-//!   `uplift_rate` (m/yr), `belt_frequency`, `plateau_uplift` (m/yr), `plateau_height` (m), `rift_rate` (m/yr), `rift_relief` (m), `rift_spacing` (m); `fluvial`: `{k, m, n, diffusivity, deposition, lateral, avulsion}`;
+//!   `uplift_rate` (m/yr), `belt_frequency`, `plateau_uplift` (m/yr), `plateau_height` (m), `rift_rate` (m/yr), `rift_relief` (m), `rift_spacing` (m), `hotspot_volcanoes` (true: chains of shield volcanoes, `hotspot`); `fluvial`: `{k, m, n, diffusivity, deposition, lateral, avulsion}`;
 //!   `glacier` and `volcanoes`: `false` to disable, or overrides of `GlacierParams` and
 //!   `VolcanoParams` by field name. Geology (`geology`, docs/geology.md): `"geology"`,
 //!   overrides of `GeologyParams` by field name (`strata_thickness`, `contrast`,
@@ -225,7 +227,7 @@ impl TerrainMedium {
             else if is_river(&t, i) && !lines { RIVER }
             else if slope2[i] > ROCK_SLOPE * ROCK_SLOPE { ROCK }
             else if t.sediment[i] > map::ALLUVIUM { ALLUVIUM }
-            else if t.lava[i] > 1. { LAVA }
+            else if t.fresh_lava(i) > 1. { LAVA }
             else { BAND0 + ((t.bed[i] / BAND_HEIGHT) as usize).min(BANDS - 1) as u8 }
         }).collect();
         let lambertian = |c: [f64; 3]| -> Box<dyn MaterialModel + Sync + Send> {
@@ -357,6 +359,7 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.planet.rift_rate = number(o, "rift_rate", p.planet.rift_rate);
     p.planet.rift_relief = number(o, "rift_relief", p.planet.rift_relief);
     p.planet.rift_spacing = number(o, "rift_spacing", p.planet.rift_spacing).max(1000.);
+    p.planet.hotspot_volcanoes = o["hotspot_volcanoes"].as_bool().unwrap_or(p.planet.hotspot_volcanoes);
     p.step = number(o, "step", p.step);
     let f = &o["fluvial"];
     p.fluvial.k = number(f, "k", p.fluvial.k);
@@ -520,6 +523,8 @@ pub fn site_of(d: &Value) -> Site {
         (_, _, Some("coast")) => Site::Coast,
         (_, _, Some("plateau")) => Site::Plateau,
         (_, _, Some("rift")) => Site::Rift,
+        (_, _, Some("hotspot")) => Site::Hotspot,
+        (_, _, Some("atoll")) => Site::Atoll,
         (_, _, None | Some("mountains")) => Site::Mountains,
         (_, _, Some(x)) => panic!("Unknown terrain domain \"near\": {}", x),
     }
@@ -714,9 +719,9 @@ pub fn above_ground(o: &Value, points: &[Vector3<f64>]) -> Option<Vec<Vector3<f6
     let description = world_description(o, &params, true);
     let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
     let frame = world.frame.clone();
-    let World { planet, globe, patches, .. } = world;
+    let World { planet, globe, patches, close: close_level, .. } = world;
     let finest = finest_spacing(o, &patches);
-    let layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width)).collect();
+    let layers = Layer::of_world(patches, globe, close_level, p.min_river_width);
     let relief = Relief::new(Arc::new(layers), &planet, radius, p.roughness, finest);
     Some(points.iter().map(|q| {
         let (d, _) = frame.on_planet(&Vector3::new(q.x, 0., q.z));
@@ -797,8 +802,8 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
                 cells as f64 * spacing * spacing / 1e6, t.ice[i], at.x, at.y, at.z));
         }
     }
-    let World { planet, climate, globe, patches, .. } = world;
-    let built: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width)).collect();
+    let World { planet, climate, globe, patches, close: close_level, .. } = world;
+    let built = Layer::of_world(patches, globe, close_level, p.min_river_width);
 
     let start = web_time::Instant::now();
     if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
@@ -827,7 +832,53 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         None => Box::new(mesh),
     };
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
-    SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }
+    let mut medium = LandscapeMedium::with_ground(ground, material);
+    if o["eruption"].as_bool().unwrap_or(false) {
+        let e = eruption(&planet, &relief, &frame, &params.climate.clone().unwrap_or_default());
+        let at: Vec<String> = e.lakes.iter().map(|(c, _)| format!("[{:.0}, {:.0}, {:.0}]", c.x, c.y, c.z)).collect();
+        say(format!("Landscape: erupting, {} lava lakes (at {}) and {} channels", e.lakes.len(), at.join(", "), e.channels.len()));
+        medium = medium.with_eruption(Arc::new(e), params.planet.seed, o["sun_intensity"].as_f64().unwrap_or(1.));
+    }
+    SceneObject { geometry, medium: Box::new(medium) }
+}
+
+/// The eruption in progress about the scene (`terrain::eruption`): each young shield still
+/// building within 200 km (`hotspot::activity` over a fifth), a lava lake in its summit crater
+/// and channels from there and from a rift zone.
+fn eruption(planet: &crate::terrain::planet::Planet, relief: &Relief, frame: &crate::terrain::scenery::Frame, climate: &crate::terrain::climate::ClimateParams) -> crate::terrain::eruption::Eruption {
+    use crate::terrain::{eruption, hotspot};
+    let radius = planet.params.radius;
+    // (Heights above the sea: the channels and lakes are read in plan, and stop at the sea.)
+    let ground = |x: f64, z: f64| {
+        let d = frame.dir(x, z);
+        relief.height(&d, &relief.slope(&d), 10.)
+    };
+    let (mut lakes, mut channels) = (vec![], vec![]);
+    let shields = &planet.shields().list;
+    let origin = frame.dir(0., 0.);
+    for (i, s) in shields.iter().enumerate() {
+        if hotspot::activity(s.age) < 0.2 || radius * s.dir.angle(&origin) > 200e3 { continue; }
+        let summit = frame.to_scene(&s.dir, 0.);
+        // The lake: in the summit's caldera, where the shield's own summit is (a place of the
+        // planet's, the same from wherever the scene is seen: the ground about the camera is
+        // finer than elsewhere).
+        let low = (ground(summit.x, summit.z), summit.x, summit.z);
+        // (A shield still beneath the sea erupts there, unseen.)
+        if low.0 <= 0. { continue; }
+        let crater = Vector3::new(low.1, low.0, low.2);
+        lakes.push((crater, 150.));
+        channels.push(eruption::channel(crater, &ground, 6000., 25., i as u64));
+        if let Some(rift) = s.rift_points(radius).get(2) {
+            let r = frame.to_scene(rift, 0.);
+            channels.push(eruption::channel(Vector3::new(r.x, 0., r.z), &ground, 8000., 35., i as u64 + 7));
+        }
+    }
+    // Its plumes carried by the climate's surface wind at the scene's latitude (the scene's x
+    // is east, its z south): the trades at 6 to 8 m/s, light airs in the calms.
+    let lat = origin.y.clamp(-1., 1.).asin();
+    let (east, north) = crate::terrain::climate::wind(climate, lat);
+    let strength = east.hypot(north);
+    eruption::Eruption::new(lakes, channels).with_wind(crate::na::Vector2::new(east, -north), 1. + 6. * strength)
 }
 
 /// Cameras higher than this above the ground, metres, see no detail worth displacing: from
@@ -951,6 +1002,56 @@ pub fn boulders(o: &Value, landscape: &SceneObject) -> Option<(Value, Value)> {
     let material = json!({"type": "rock", "preset": style, "seed": seed});
     say(format!("Landscape: its own boulders of {} within {:.0} m of the camera", style, reach));
     Some((scatter, material))
+}
+
+/// The populations and materials of an ecosystem's `"flora"` on the landscape `landscape`
+/// (`terrain::flora`): `true`, or `{"strata": ["trees", "shrubs", "ground"], "reach": 300,
+/// "far": 3000, "samples": 24}`. The communities found at `samples` x `samples` points as far
+/// as `far` metres about the camera (`o`'s `"camera"`) choose the plants: each community's
+/// trees by dart throwing out to `reach` and on a grid out to `far`, its shrubs out to half the
+/// reach, its ground plants about the camera (`flora::populations`). None without a flora, or
+/// where the landscape has no climate (no biomes); no populations where nothing grows.
+pub fn flora(o: &Value, landscape: &SceneObject) -> Option<(Vec<Value>, serde_json::Map<String, Value>)> {
+    let spec = match o.get("flora") {
+        None | Some(Value::Bool(false)) => return None,
+        Some(Value::Bool(true)) => serde_json::json!({}),
+        Some(v) => v.clone(),
+    };
+    let strata: Vec<String> = spec["strata"].as_array().map_or(vec!["trees".into(), "shrubs".into(), "ground".into()],
+        |a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect());
+    let strata: Vec<&str> = strata.iter().map(|s| s.as_str()).collect();
+    let reach = number(&spec, "reach", 300.);
+    let far = number(&spec, "far", 3000.);
+    // Surveyed as far as trees are planted, so the communities out there grow theirs.
+    let survey = reach.max(far);
+    let n = SceneFile::parse_int(&spec["samples"], 24).max(2);
+    let camera = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.));
+    let fields = landscape.medium.fields()?;
+    // Each community's weight at each point (`flora::weight`), for the biome there.
+    let graphs: Vec<(&'static crate::terrain::flora::Community, crate::graph::Graph)> = crate::terrain::flora::COMMUNITIES.iter()
+        .map(|c| (c, crate::graph::Graph::parse(&crate::terrain::flora::weight(c)).expect("a community's weight"))).collect();
+    let mut samples = vec![];
+    for j in 0..n {
+        for i in 0..n {
+            let (x, z) = (camera.x + (i as f64 / (n - 1) as f64 - 0.5) * 2. * survey, camera.z + (j as f64 / (n - 1) as f64 - 0.5) * 2. * survey);
+            let down = Ray { ro: Vector3::new(x, camera.y + 1e4, z), rd: -Vector3::y() };
+            if let Some(hit) = landscape.geometry.intersects(&down) && let Some(b) = fields.biome(&hit.point) {
+                let c = crate::graph::Context::new(hit.point, hit.normal, 0.).with_fields(Some(fields));
+                samples.push(graphs.iter().filter(|(x, _)| x.biome == b).map(|(x, g)| (*x, g.eval(&c))).collect::<Vec<_>>());
+            }
+        }
+    }
+    if samples.is_empty() { return None; }
+    let present = crate::terrain::flora::shares(&samples);
+    if present.is_empty() { return Some((vec![], serde_json::Map::new())); }
+    let communities: Vec<&'static crate::terrain::flora::Community> = present.iter().map(|(c, _)| *c).collect();
+    let (populations, materials) = crate::terrain::flora::populations(&communities, &strata, SceneFile::parse_int(&o["seed"], 0) as u64, reach, far, (camera.x, camera.z));
+    say(format!("Flora: {} about the camera; {} populations: {}",
+        present.iter().map(|(c, s)| format!("{} ({}) {:.0}%", c.name, c.biome.name(), 100. * s)).collect::<Vec<_>>().join(", "),
+        populations.len(),
+        populations.iter().map(|p| p["forest"]["species"][0]["species"].as_str().map(String::from)
+            .unwrap_or_else(|| format!("{} ground", p["grass"]["species"].as_array().map_or(0, |a| a.len())))).collect::<Vec<_>>().join(", ")));
+    Some((populations, materials))
 }
 
 /// Write the ground cover's albedo (`Ground::albedo`), seen from straight above, over `half`

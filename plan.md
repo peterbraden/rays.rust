@@ -3082,3 +3082,10 @@ Design:
 
 Assumed, to measure: the device's extra traversal costs less than the host's; the picture
 changes only by the packing (0.1% of a ray's brightest channel) and the kernels' f32.
+
+Measured (instructions retired, the difference between 24 and 8 samples, so the render alone;
+wall times too disturbed by other load on the machine): pebble-beach 283.5 G with the rays
+deferred against 401.6 G without, 29% fewer; terrain-alpine 288.1 G against 338.4 G, 15% fewer
+(11.6 million rays from 6.3 million vertices). Nearly all of pebble-beach's shadow rays are
+deferred: a vertex keeps none mostly where it faces away from the light (half of every pebble),
+and a path that ends at its vertex (1%) traces its own.

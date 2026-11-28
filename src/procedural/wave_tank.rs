@@ -244,6 +244,84 @@ impl Tank {
         }
     }
 
+    /// Redistributes the surface's markers along it (keeping their number and the two on the
+    /// walls), closer where it curves sharply: a Lagrangian surface's markers crowd at a
+    /// breaker's jet and thin out elsewhere, until the steps they allow grow too short to go on.
+    /// Their spacing goes as 1 / (1 + `refine` κ ℓ), κ the curvature and ℓ the markers' mean
+    /// spacing times a hundred, smoothed and limited so neighbouring spacings differ by no more
+    /// than a fifth; positions and potentials are carried over by cubic interpolation in arc
+    /// length (Catmull-Rom), which keeps the surface's curvature where straight lines would cut
+    /// it.
+    pub fn regrid(&mut self, refine: f64) {
+        let m = self.surface.len();
+        let mut s = vec![0.; m];
+        for k in 1..m { s[k] = s[k - 1] + (self.surface[k] - self.surface[k - 1]).norm(); }
+        let total = s[m - 1];
+        let ell = 100. * total / (m - 1) as f64;
+        // Curvature at each marker, from the turning of the two segments beside it.
+        let mut w = vec![1.; m];
+        for k in 1..m - 1 {
+            let (a, b) = (self.surface[k] - self.surface[k - 1], self.surface[k + 1] - self.surface[k]);
+            let turn = a.perp(&b).atan2(a.dot(&b)).abs();
+            let kappa = turn / (0.5 * (a.norm() + b.norm())).max(1e-12);
+            // At most six times as close as on average, so the steps they allow stay long enough.
+            w[k] = (1. + refine * kappa * ell / 100.).min(6.);
+        }
+        // Smoothed, so the spacing changes gradually.
+        for _ in 0..4 {
+            let v = w.clone();
+            for k in 1..m - 1 { w[k] = 0.25 * v[k - 1] + 0.5 * v[k] + 0.25 * v[k + 1]; }
+            w[0] = w[1];
+            w[m - 1] = w[m - 2];
+        }
+        // The cumulative weight, placed at equal steps.
+        let mut cum = vec![0.; m];
+        for k in 1..m { cum[k] = cum[k - 1] + 0.5 * (w[k - 1] + w[k]) * (s[k] - s[k - 1]); }
+        let targets: Vec<f64> = (0..m).map(|i| {
+            let c = cum[m - 1] * i as f64 / (m - 1) as f64;
+            let j = cum.partition_point(|&v| v < c).clamp(1, m - 1);
+            let t = (c - cum[j - 1]) / (cum[j] - cum[j - 1]).max(1e-300);
+            s[j - 1] + (s[j] - s[j - 1]) * t
+        }).collect();
+        // Catmull-Rom on arc length.
+        let at = |f: &dyn Fn(usize) -> f64, x: f64| -> f64 {
+            let j = s.partition_point(|&v| v <= x).clamp(1, m - 1) - 1;
+            let (s0, s1) = (s[j], s[j + 1]);
+            let h = (s1 - s0).max(1e-300);
+            let t = ((x - s0) / h).clamp(0., 1.);
+            let slope = |k: usize| {
+                let (a, b) = (k.saturating_sub(1), (k + 1).min(m - 1));
+                (f(b) - f(a)) / (s[b] - s[a]).max(1e-300)
+            };
+            let (m0, m1) = (slope(j) * h, slope(j + 1) * h);
+            let (t2, t3) = (t * t, t * t * t);
+            (2. * t3 - 3. * t2 + 1.) * f(j) + (t3 - 2. * t2 + t) * m0 + (-2. * t3 + 3. * t2) * f(j + 1) + (t3 - t2) * m1
+        };
+        let (old, phi) = (self.surface.clone(), self.phi.clone());
+        let mut surface = vec![Vector2::zeros(); m];
+        let mut potential = vec![0.; m];
+        for (i, &x) in targets.iter().enumerate() {
+            surface[i] = Vector2::new(at(&|k| old[k].x, x), at(&|k| old[k].y, x));
+            potential[i] = at(&|k| phi[k], x);
+        }
+        surface[0] = old[0];
+        surface[m - 1] = old[m - 1];
+        potential[0] = phi[0];
+        potential[m - 1] = phi[m - 1];
+        self.surface = surface;
+        self.phi = potential;
+    }
+
+    /// Whether the surface has come back on itself: two markers within `gap` of each other
+    /// that aren't near each other along it (a plunging jet touching down on the water before
+    /// it).
+    pub fn touched_down(&self, gap: f64) -> bool {
+        let m = self.surface.len();
+        let mut s = vec![0.; m];
+        for k in 1..m { s[k] = s[k - 1] + (self.surface[k] - self.surface[k - 1]).norm(); }
+        (0..m).any(|i| (i + 1..m).any(|j| s[j] - s[i] > 10. * gap && (self.surface[j] - self.surface[i]).norm() < gap))
+    }
+
     /// The water's energy: kinetic, ½ ∫ φ q ds over the surface (the bed and walls, where q is
     /// zero, adding none), and potential about the still water, ½ g ∫ y² dx.
     pub fn energy(&self) -> (f64, f64) {
@@ -410,17 +488,20 @@ mod breaking {
         // short (the jet's markers crowding) or the jet's tip comes down to the water before it.
         let mut broke: Option<(f64, Vector2<f64>, f64)> = None;
         let mut after = 0;
-        while steps < 4000 && after < 400 {
+        while steps < 20000 && after < 10000 {
             let dt = tank.time_step(0.3);
             tank.step(dt);
             steps += 1;
             if steps % 5 == 0 { tank.smooth(); }
+            // Markers redistributed to follow the jet, closer where it curves.
+            if steps % 10 == 0 { tank.regrid(3.); }
+            if tank.touched_down(0.01) { println!("touched down"); break; }
             if broke.is_none() && tank.overturned() {
                 let c = tank.crest();
                 broke = Some((tank.time, c, tank.depth(c.x)));
             }
             if broke.is_some() { after += 1; }
-            if dt < 2e-4 { break; }
+            if dt < 5e-5 { println!("steps too short"); break; }
             if steps % 25 == 0 || (broke.is_some() && after % 20 == 0) {
                 let c = tank.crest();
                 println!("t {:.3} dt {:.5} crest [{:.3}, {:.3}] depth {:.3}", tank.time, dt, c.x, c.y, tank.depth(c.x));

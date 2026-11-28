@@ -52,9 +52,13 @@ use pathtrace::{PathState, PATH_ACTIVE, PATH_DIRECTIONAL, PATH_HOST, PATH_LIGHTS
 /// (`kernels::origin`), after its vertex: with its next
 /// ray and queued to go on, or ended. `from` is the vertex its ray left, if the host shaded
 /// that one too (`leaving`): finding the hit again must see the scene's shapes as the kernels'
-/// round did.
+/// round did. With `defer`, the vertex's sun's and sky's shadow rays are left to the next
+/// round to trace, where its material allows (`pathtrace::PATH_DEFERRED`): for the device,
+/// whose rounds cost the host nothing. (Not where the host intersects shapes: their rays are
+/// the host's anyway, and `hit` carries the vertex then.)
+#[allow(clippy::too_many_arguments)]
 pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, pixel: u32, sample: u32,
-             from: Option<crate::shapes::leaving::Leaving>) -> PathState {
+             from: Option<crate::shapes::leaving::Leaving>, defer: bool) -> PathState {
     let mut next = *p;
     let flags = p.state.y & !(PATH_HOST | PATH_ACTIVE);
     next.state.y = flags;
@@ -81,6 +85,8 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
         scattered: p.state.y & PATH_SCATTERED != 0,
         volume: volume_state(flat, p.state.y),
         done: false,
+        defer: defer && !host_shapes(flat),
+        deferred: Vec::new(),
     };
     let stream = crate::sobol::hash(s.render.seed ^ 0x686f_7374, ((pixel as u64) << 16) | depth as u64);
     // Its shadow rays, traced here by the scene's own code, leave this vertex
@@ -94,6 +100,23 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
     };
     crate::shapes::leaving::with(Some(vertex), || host_vertex(s, flat, &mut v, &hit, crate::sobol::SampleState::new(stream, sample)));
     let f32s = |v: &Vector3<f64>| Vec3::new(v.x as f32, v.y as f32, v.z as f32);
+    // The kept rays as the next round reads them; one whose light can't be packed traced here.
+    let mut kept = [(0u32, 0u32); crate::material::functions::DEFERRED_MOST];
+    for (k, d) in v.deferred.iter().enumerate() {
+        let light = f32s(&d.light.rgb);
+        match pathtrace::pack_light(light) {
+            Some(bits) => {
+                // The path carries the light as packed, so what is taken back cancels it.
+                let packed = pathtrace::unpack_light(bits);
+                next.l += (packed - light).extend(0.);
+                kept[k] = (pathtrace::pack_direction(f32s(&d.ray.rd)), bits | if d.sun { pathtrace::DEFERRED_SUN } else { 0 });
+            }
+            None => {
+                let through = s.objects.transmittance(&d.ray, d.distance, f64::MIN_POSITIVE);
+                v.l = v.l - d.light * (Color::white() - through);
+            }
+        }
+    }
     next.l += f32s(&v.l.rgb).extend(0.);
     if v.done {
         return next;
@@ -113,12 +136,26 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
     if host_shapes(flat) {
         next.hit = f32s(&(hit.point - origin)).extend(HOST_VERTEX);
     }
+    if kept.iter().any(|&(_, light)| light != 0) {
+        let f = pathtrace::bits_as_float;
+        next.hit = Vec4::new(f(kept[0].0), f(kept[0].1), f(kept[1].0), f(kept[1].1));
+        let reach = |k: usize| v.deferred.get(k).map_or(pathtrace::DISTANCE_UNBOUNDED, |d| pathtrace::pack_distance(d.distance as f32));
+        next.state.z = reach(0) | (reach(1) << 16);
+    }
     next.d = f32s(&v.ray.rd).extend(v.prev_pdf as f32);
     next.beta = f32s(&v.beta.rgb).extend(v.depth as f32);
     let flag = |on: bool, bit: u32| if on { bit } else { 0 };
     // (A surface leaves what the path has done in media as it was.)
-    next.state.y = (p.state.y & (pathtrace::PATH_MEDIA | pathtrace::PATH_PROVEN)) | PATH_ACTIVE | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
+    next.state.y = (p.state.y & (pathtrace::PATH_MEDIA | pathtrace::PATH_PROVEN)) | PATH_ACTIVE | flag(kept.iter().any(|&(_, light)| light != 0), pathtrace::PATH_DEFERRED) | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
     next
+}
+
+/// How many shadow rays a path `shade` returned leaves to its next round (`PATH_DEFERRED`).
+pub fn deferred_rays(p: &PathState) -> u64 {
+    if p.state.y & pathtrace::PATH_DEFERRED == 0 {
+        return 0;
+    }
+    [p.hit.y, p.hit.w].iter().filter(|&&light| pathtrace::float_as_bits(light) & !pathtrace::DEFERRED_SUN != 0).count() as u64
 }
 
 /// The object the host answers for at a hit on primitive `prim`, as a key for its work
@@ -191,4 +228,67 @@ fn volume_state(flat: &FlatScene, flags: u32) -> (u32, f64) {
         _ => medium.scale,
     };
     (scatterings.max(1), scale)
+}
+
+#[cfg(test)]
+mod deferred_tests {
+    use pathtrace::glam::Vec3;
+
+    #[test]
+    fn test_any_thirty_bits_are_a_normal_float_and_back() {
+        let mut rng = crate::geometry::Pcg32::new(7, 1);
+        let mut patterns: Vec<u32> = (0..100_000).map(|_| rng.next_u32() & 0x3fff_ffff).collect();
+        patterns.extend([0, 1, 0x3fff_ffff, 1 << 29, (1 << 29) - 1, 0x1fff_ffff]);
+        for bits in patterns {
+            let f = pathtrace::bits_as_float(bits);
+            assert!(f.is_normal(), "{:#x} is {:e}", bits, f);
+            assert_eq!(pathtrace::float_as_bits(f), bits);
+        }
+    }
+
+    #[test]
+    fn test_light_packs_to_a_part_in_256_of_its_brightest_channel() {
+        let mut rng = crate::geometry::Pcg32::new(9, 1);
+        for _ in 0..100_000 {
+            let scale = 2f32.powf(rng.next_f64() as f32 * 31. - 20.);
+            let c = Vec3::new(rng.next_f64() as f32, rng.next_f64() as f32, rng.next_f64() as f32) * scale;
+            let most = c.max_element();
+            if !(pathtrace::LIGHT_LEAST..pathtrace::LIGHT_MOST).contains(&most) {
+                continue;
+            }
+            let bits = pathtrace::pack_light(c).expect("within bounds");
+            assert!(bits < 1 << 29, "{:#x} leaves no room for the sun's bit", bits);
+            let back = pathtrace::unpack_light(bits | pathtrace::DEFERRED_SUN);
+            assert!((back - c).abs().max_element() <= most / 256., "{:?} back as {:?}", c, back);
+        }
+        assert_eq!(pathtrace::pack_light(Vec3::ZERO), Some(0));
+        assert_eq!(pathtrace::pack_light(Vec3::splat(pathtrace::LIGHT_MOST)), None);
+        assert_eq!(pathtrace::pack_light(Vec3::new(0., pathtrace::LIGHT_LEAST / 2., 0.)), None);
+    }
+
+    #[test]
+    fn test_a_direction_packs_to_within_two_ten_thousandths_of_a_radian() {
+        let mut rng = crate::geometry::Pcg32::new(11, 1);
+        for _ in 0..100_000 {
+            let v = Vec3::new(rng.next_f64() as f32 - 0.5, rng.next_f64() as f32 - 0.5, rng.next_f64() as f32 - 0.5);
+            if v.length() < 1e-3 {
+                continue;
+            }
+            let v = v.normalize();
+            let back = pathtrace::unpack_direction(pathtrace::pack_direction(v));
+            assert!(back.cross(v).length() < 2e-4 && back.dot(v) > 0., "{:?} back as {:?}", v, back);
+        }
+    }
+
+    #[test]
+    fn test_a_distance_packs_short_by_at_most_a_part_in_1024() {
+        let mut rng = crate::geometry::Pcg32::new(13, 1);
+        for _ in 0..100_000 {
+            let d = 2f32.powf(rng.next_f64() as f32 * 62. - 31.);
+            let back = pathtrace::unpack_distance(pathtrace::pack_distance(d));
+            assert!(back <= d && back >= d * (1. - 1. / 1024.), "{} back as {}", d, back);
+        }
+        assert_eq!(pathtrace::pack_distance(1e30), pathtrace::DISTANCE_UNBOUNDED);
+        assert!(pathtrace::unpack_distance(pathtrace::DISTANCE_UNBOUNDED) > 1e38);
+    }
 }

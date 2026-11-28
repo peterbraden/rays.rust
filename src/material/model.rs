@@ -153,6 +153,13 @@ pub trait MaterialModel: Sync{
     /// material that isn't a plastic, a Lambertian surface or a blend of them.
     fn bake(&self, _i: &Intersection, _s: &Scene) -> Option<Baked> { None }
 
+    /// Whether `scatter`'s `emit` is always the light returned by `functions`' direct lighting
+    /// (`direct_lighting`, `scatter_bsdf`), or nothing, unscaled: then the sun's and the sky's
+    /// shadow rays can be kept and traced later, the light they bring taken back if blocked
+    /// (`functions::defer`). Not for a material that scales or builds its emit from such light
+    /// (noise, layered, leaf, subsurface), which would take back the wrong amount.
+    fn direct_emit(&self) -> bool { false }
+
     /// The normal to shade with at a hit (whose normal is the surface's, already bumped by
     /// its medium, if that is), if the material tilts it: a material's own bump map
     /// (`bump::BumpedMaterial`), so its relief stays aligned with its pattern wherever it's

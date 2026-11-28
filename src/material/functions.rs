@@ -120,6 +120,60 @@ pub fn scatter_dielectric(
 }
 
 
+/// A shadow ray to the sun or the sky kept rather than traced (`defer`): the ray, whether it is
+/// along the sun's direction exactly, and the light it would bring unshadowed.
+#[derive(Clone, Copy, Debug)]
+pub struct Deferred {
+    pub ray: Ray,
+    pub distance: f64,
+    pub sun: bool,
+    pub light: Color,
+}
+
+/// The most shadow rays a vertex keeps (`defer`): what a path's next round traces for it
+/// (`pathtrace::find_all`'s second and third jobs).
+pub const DEFERRED_MOST: usize = 2;
+
+thread_local! {
+    static DEFERRED: std::cell::RefCell<Option<Vec<Deferred>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Keep the shadow rays of the sun, the sky and point lights from here on, rather than trace them, up to
+/// `DEFERRED_MOST` (more are traced): for a vertex whose shadow rays the device traces
+/// (`kernels::host::shade`). Only for a material whose `emit` is the light these functions
+/// return, unscaled (`MaterialModel::direct_emit`): what a kept ray returns is its light
+/// unshadowed, to be taken back if the ray is blocked.
+pub fn defer() {
+    DEFERRED.with(|d| *d.borrow_mut() = Some(Vec::with_capacity(DEFERRED_MOST)));
+}
+
+/// The shadow rays kept since `defer`, which stops keeping them.
+pub fn take_deferred() -> Vec<Deferred> {
+    DEFERRED.with(|d| d.borrow_mut().take()).unwrap_or_default()
+}
+
+/// The light from a light along `ray` (a unit direction), up to `distance`: `light` of what
+/// gets through. Kept rather than traced (`defer`) if keeping, as `light` unshadowed.
+fn through_to(ray: &Ray, distance: f64, sun: bool, s: &Scene, light: impl Fn(Color) -> Color) -> Color {
+    {
+        let kept = DEFERRED.with(|d| match d.borrow_mut().as_mut() {
+            Some(v) if v.len() < DEFERRED_MOST => {
+                let unshadowed = light(Color::white());
+                if unshadowed.rgb.max() > 0. {
+                    v.push(Deferred { ray: *ray, distance, sun, light: unshadowed });
+                }
+                Some(unshadowed)
+            }
+            _ => None,
+        });
+        if let Some(unshadowed) = kept {
+            return unshadowed;
+        }
+    }
+    let transmitted = s.objects.transmittance(ray, distance, f64::MIN_POSITIVE);
+    if transmitted.rgb.max() > 0. { light(transmitted) } else { Color::black() }
+}
+
 /// Diffuse light arriving directly from the scene's lights (next-event estimation): every point
 /// light that isn't in shadow, and one sample of the area lights. Point lights can't be hit by
 /// scattered rays at all, and small area lights rarely are, so diffuse materials sample them
@@ -133,16 +187,14 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
     for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
-        let transmitted = s.objects.transmittance(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE);
-        if transmitted.rgb.max() > 0. {
-            direct = direct + diffuse(albedo, intersection, &light_vec, light) * transmitted;
-        }
+        direct = direct + through_to(&shadow_ray, light_vec.norm(), false, s, |transmitted| diffuse(albedo, intersection, &light_vec, light) * transmitted);
     }
     for sun in s.directional_lights() {
         let cos = sun.direction.dot(&intersection.normal);
         if cos > 0. {
-            let transmitted = sun.transmittance_from(&intersection.point, s);
-            direct = direct + albedo * sun.irradiance_at(&intersection.point) * transmitted * (cos / std::f64::consts::PI);
+            let ray = Ray { ro: intersection.point, rd: sun.direction };
+            direct = direct + through_to(&ray, sun.shadow_distance, true, s,
+                |transmitted| albedo * sun.irradiance_at(&intersection.point) * transmitted * (cos / std::f64::consts::PI));
         }
     }
     direct + sample_area_light(albedo, intersection, s)
@@ -309,10 +361,7 @@ pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f
             continue;
         }
         let shadow_ray = Ray { ro: *point, rd: wi };
-        let transmitted = s.objects.transmittance(&shadow_ray, d2.sqrt(), f64::MIN_POSITIVE);
-        if transmitted.rgb.max() > 0. {
-            direct = direct + f * light.radiant_intensity(&-wi) * (transmitted / d2);
-        }
+        direct = direct + through_to(&shadow_ray, d2.sqrt(), false, s, |transmitted| f * light.radiant_intensity(&-wi) * (transmitted / d2));
     }
     for sun in s.directional_lights() {
         direct = direct + sun_light_mis(sun, bsdf, point, wo, s);
@@ -339,11 +388,8 @@ fn sky_light_mis(env: &crate::environment::Environment, bsdf: &dyn BSDF, point: 
         return f;
     }
     let ray = Ray { ro: *point, rd: wi };
-    let transmitted = s.objects.transmittance(&ray, crate::light::SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE);
-    if transmitted.rgb.max() <= 0. {
-        return Color::black();
-    }
-    f * env.radiance(&ray, s) * transmitted * (power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)
+    through_to(&ray, crate::light::SUN_SHADOW_DISTANCE, false, s,
+        |transmitted| f * env.radiance(&ray, s) * transmitted * (power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf))
 }
 
 /// Below this, the BSDF's density towards the sun times the disc's solid angle, the BSDF can't
@@ -369,19 +415,16 @@ fn sun_light_mis(sun: &crate::light::Sun, bsdf: &dyn BSDF, point: &Vector3<f64>,
         if f == Color::black() {
             return f;
         }
-        let transmitted = sun.transmittance_from(point, s);
-        return if transmitted.rgb.max() > 0. { f * sun.irradiance_at(point) * transmitted } else { Color::black() };
+        let ray = Ray { ro: *point, rd: sun.direction };
+        return through_to(&ray, sun.shadow_distance, true, s, |transmitted| f * sun.irradiance_at(point) * transmitted);
     }
     let (wi, radiance, pdf) = sun.sample_disc_at(point, [rand(), rand()]);
     let f = bsdf.eval(wo, &wi);
     if f == Color::black() {
         return f;
     }
-    let transmitted = sun.transmittance_along(point, &wi, s);
-    if transmitted.rgb.max() <= 0. {
-        return Color::black();
-    }
-    f * radiance * (transmitted * power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)
+    let ray = Ray { ro: *point, rd: wi };
+    through_to(&ray, sun.shadow_distance, false, s, |transmitted| f * radiance * (transmitted * power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf))
 }
 
 /// Scatter by `bsdf`: light from the lights sampled directly (`direct_lighting_mis`) as

@@ -26,6 +26,8 @@ impl Mix {
 }
 
 impl MaterialModel for Mix {
+    fn direct_emit(&self) -> bool { self.materials.iter().all(|m| m.direct_emit()) }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let which = (crate::geometry::rand() < self.amount_at(intersection, s)) as usize;
         // The chosen material's own bump, if it has one (rust raised over pitted steel).

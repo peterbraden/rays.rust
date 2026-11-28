@@ -672,20 +672,23 @@ impl GpuRenderer {
         host.guess.store((count + count / 4 + 64) as usize, Ordering::Relaxed);
         let began = web_time::Instant::now();
         let origin = self.origin;
+        // (`RAYS_HOST_SHADOWS=1` traces the host's vertices' shadow rays on the host, to compare.)
+        let defer = std::env::var_os("RAYS_HOST_SHADOWS").is_none();
         let shaded: Vec<(PathState, Option<usize>, f64)> = paths.par_iter().map(|p| {
             // Its slot (`gather_host`) is its pixel's path in a lane, so that sample of the
             // pixel's.
             let (pixel, lane) = (p.state.w as usize % image, p.state.w as usize / image);
             let (began, key) = (web_time::Instant::now(), host::object_key(flat, p.state.z));
-            let next = host::shade(s, flat, &origin, p, pixel as u32, (first[pixel] + lane) as u32, None);
+            let next = host::shade(s, flat, &origin, p, pixel as u32, (first[pixel] + lane) as u32, None, defer);
             (next, key, began.elapsed().as_secs_f64())
         }).collect();
         // Each object's vertices, for the report.
         let mut objects = crate::scheduler::Stats::default();
-        for &(_, key, seconds) in &shaded {
+        for (next, key, seconds) in shaded.iter().map(|(p, k, t)| (p, *k, *t)) {
             if let Some(key) = key {
                 objects.object(key).vertices += 1;
                 objects.object(key).shade_seconds += seconds;
+                objects.object(key).deferred += host::deferred_rays(next);
             }
         }
         let shaded: Vec<PathState> = shaded.into_iter().map(|(p, _, _)| p).collect();

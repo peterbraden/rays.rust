@@ -311,6 +311,8 @@ impl Soil {
 }
 
 impl MaterialModel for Soil {
+    fn direct_emit(&self) -> bool { true }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let geometric = intersection.facing_normal(r);
         let normal = self.bumped_normal(intersection.point, geometric);

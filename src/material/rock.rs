@@ -518,6 +518,8 @@ impl Rock {
 }
 
 impl MaterialModel for Rock {
+    fn direct_emit(&self) -> bool { true }
+
     /// Lambertian of its albedo where the hit's point came from, for shading at vertices; its
     /// bump, which at a vertex's spacing is the surface's own normal, goes. Not a wet rock,
     /// whose film is a mirror.

@@ -1347,6 +1347,9 @@ pub struct Land {
 }
 
 impl MaterialModel for Land {
+    /// Snow, ice and bare ground by `scatter_bsdf`, or bare ground by its library materials.
+    fn direct_emit(&self) -> bool { self.ground.materials.iter().flatten().all(|m| m.direct_emit()) }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let i = &intersection.facing(r);
         let g = &self.ground;

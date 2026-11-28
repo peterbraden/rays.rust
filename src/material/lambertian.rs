@@ -11,6 +11,8 @@ pub struct Lambertian {
     pub albedo: crate::textures::ColorTexture,
 }
 impl MaterialModel for Lambertian {
+    fn direct_emit(&self) -> bool { true }
+
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
         match self.albedo {
             crate::textures::ColorTexture::Constant(albedo) => Some(crate::wavefront::flat::FlatMaterial::Diffuse { albedo }),

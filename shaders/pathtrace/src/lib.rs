@@ -2589,6 +2589,107 @@ pub const PATH_MEDIA: u32 = 0xffff << PATH_MEDIUM_SHIFT;
 /// A walk of the path's found a density over its majorant grid's bound: its walks take the
 /// media's proven bounds from here on (`shared::media::delta_track_weighted`).
 pub const PATH_PROVEN: u32 = 1 << 24;
+/// Its last vertex, shaded on the host, left the shadow rays of its light from the sun and the
+/// sky for its next round to trace (the renderer's `functions::defer`): in `hit`, two of them,
+/// each a direction (`pack_direction`) and the light to take from the path if it is blocked
+/// (`pack_light`; none if 0, and `DEFERRED_SUN` for a ray along the sun's direction exactly,
+/// `Params::sun_dir`, its direction then unread), traced from the path's origin as a
+/// crepuscular sample's are (`find_all`). The host added that light to the path unshadowed.
+/// Each is 30 bits held as a float (`bits_as_float`). How far each looks, in `state.z`
+/// (`pack_distance`, 16 bits each: the first ray's below): what lies beyond doesn't block it.
+pub const PATH_DEFERRED: u32 = 1 << 25;
+
+/// `pack_distance`'s code for no bound.
+pub const DISTANCE_UNBOUNDED: u32 = 0xffff;
+
+/// A distance as 16 bits: its float's exponent, from 2^-32 to 2^31 (6 bits), and the top 10 of
+/// its mantissa, so rounded down, by at most a part in 1024: a shadow ray to a light never
+/// reaches the light. Beyond 2^31 (or infinite), `DISTANCE_UNBOUNDED`; below 2^-32, 0.
+pub fn pack_distance(d: f32) -> u32 {
+    let bits = d.max(0.0).to_bits();
+    let e = ((bits >> 23) & 0xff) as i32 - 127 + 32;
+    if e < 0 {
+        return 0;
+    }
+    if e >= 63 {
+        return DISTANCE_UNBOUNDED;
+    }
+    ((e as u32) << 10) | ((bits >> 13) & 0x3ff)
+}
+
+pub fn unpack_distance(code: u32) -> f32 {
+    if code == DISTANCE_UNBOUNDED {
+        return INF;
+    }
+    f32::from_bits(((((code >> 10) as i32 - 32 + 127) as u32) << 23) | ((code & 0x3ff) << 13))
+}
+pub const DEFERRED_SUN: u32 = 1 << 29;
+
+/// 30 bits (below 2^30) as a float, a normal one whatever they are, so no device's copy of it
+/// can change it (as one might a NaN's or a denormal's): bit 30, which with the exponent's
+/// others all set would make a NaN, is clear and bit 29 set; the bits' 29th is the sign.
+pub fn bits_as_float(bits: u32) -> f32 {
+    f32::from_bits((bits & 0x1fff_ffff) | ((bits >> 29) << 31) | (1 << 29))
+}
+
+pub fn float_as_bits(f: f32) -> u32 {
+    let b = f.to_bits();
+    (b & 0x1fff_ffff) | ((b >> 31) << 29)
+}
+
+/// A unit vector folded (`fold`) to 15 bits a coordinate: within 2e-4 radians.
+pub fn pack_direction(v: Vec3) -> u32 {
+    let e = fold(v);
+    let q = |x: f32| ((x * 0.5 + 0.5).clamp(0.0, 1.0) * 32767.0 + 0.5) as u32;
+    (q(e.x) << 15) | q(e.y)
+}
+
+pub fn unpack_direction(bits: u32) -> Vec3 {
+    let q = |b: u32| (b as f32 / 32767.0) * 2.0 - 1.0;
+    unfold(Vec2::new(q(bits >> 15), q(bits & 0x7fff)))
+}
+
+/// The light `pack_light` holds, by its brightest channel: at least 2^-20, below 2^12.
+pub const LIGHT_LEAST: f32 = 1.0 / 1048576.0;
+pub const LIGHT_MOST: f32 = 4080.0;
+
+/// A colour whose brightest channel is between `LIGHT_LEAST` and `LIGHT_MOST`, as three 8-bit
+/// mantissas of a shared 5-bit exponent (as OpenGL's `EXT_texture_shared_exponent`, narrower):
+/// to a part in 256 of its brightest channel, the others rounded to steps of that. 29 bits; 0
+/// for black. Outside those bounds, None.
+pub fn pack_light(c: Vec3) -> Option<u32> {
+    let c = c.max(Vec3::ZERO);
+    let most = c.x.max(c.y).max(c.z);
+    if most == 0.0 {
+        return Some(0);
+    }
+    if most < LIGHT_LEAST || most >= LIGHT_MOST {
+        return None;
+    }
+    // floor(log2(most)) from its bits, biased by 20; the mantissas' step 2^(that - 7).
+    let mut e = (((most.to_bits() >> 23) & 0xff) as i32 - 127 + 20) as u32;
+    if (most / light_step(e) + 0.5) as u32 >= 256 {
+        e += 1;
+    }
+    if e > 31 {
+        return None;
+    }
+    let step = light_step(e);
+    let m = |x: f32| ((x / step + 0.5) as u32).min(255);
+    Some(m(c.x) | (m(c.y) << 8) | (m(c.z) << 16) | (e << 24))
+}
+
+fn light_step(e: u32) -> f32 {
+    f32::from_bits(((e as i32 - 20 - 7 + 127) as u32) << 23)
+}
+
+pub fn unpack_light(bits: u32) -> Vec3 {
+    let bits = bits & !DEFERRED_SUN;
+    if bits == 0 {
+        return Vec3::ZERO;
+    }
+    Vec3::new((bits & 255) as f32, ((bits >> 8) & 255) as f32, ((bits >> 16) & 255) as f32) * light_step(bits >> 24)
+}
 /// `PathState::state.z` of a path whose ray collides in a medium before it hits anything: this
 /// plus the medium's number (and `hit.x` how far along).
 pub const MEDIUM_HIT: u32 = 0xffff_ff00;
@@ -2864,9 +2965,15 @@ pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
 /// and likewise its glitter probe (`send_glitter_probe`), and from the sea it meets.
 pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
     let (probe, glitter) = if F::MEDIA && p.state.y & PATH_SUN_SHARED != 0 { unpack_probes(p.hit, p.state.z) } else { (Vec4::ZERO, Vec4::ZERO) };
+    let deferred = p.state.y & PATH_DEFERRED != 0;
+    let kept = p.hit;
+    let reach = (unpack_distance(p.state.z & 0xffff), unpack_distance(p.state.z >> 16));
     let mut own = *p;
     own.hit = Vec4::ZERO;
     own.state.z = 0;
+    own.state.y &= !PATH_DEFERRED;
+    // The second and third jobs' directions: the sun's, but for deferred rays.
+    let (mut d0, mut d1) = (s.params.sun_dir.xyz(), s.params.sun_dir.xyz());
     let mut found = own;
     let mut ray = own;
     let (mut a0, mut c0, mut a1, mut c1) = (Vec4::ZERO, Vec3::ZERO, Vec4::ZERO, Vec3::ZERO);
@@ -2882,6 +2989,7 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
                 continue;
             }
             ray = shadow_ray(s, &found, from);
+            ray.d = (if job == 1 { d0 } else { d1 }).extend(0.0);
         }
         if F::MEDIA && (job == 3 || job == 5) {
             let sent = if job == 3 { probe } else { glitter };
@@ -2909,12 +3017,23 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
             // (The weight of the walk to what it meets, on all the path gathers from here.)
             found.beta = (found.beta.xyz() * weight).extend(found.beta.w);
             let mut rng = found.state.x;
-            let samples = crepuscular_samples(s, &found, &mut rng);
+            if deferred {
+                // (A host's vertex's path's ray is never a camera's, which alone has crepuscular samples.)
+                let sun = s.params.sun_dir.xyz();
+                let from = |bits: u32| own.o.xyz().extend(if bits & !DEFERRED_SUN == 0 { 0.0 } else { 1.0 });
+                let (l0, l1) = (float_as_bits(kept.y), float_as_bits(kept.w));
+                let direction = |bits: u32, light: u32| if light & DEFERRED_SUN != 0 { sun } else { unpack_direction(bits) };
+                (d0, d1) = (direction(float_as_bits(kept.x), l0), direction(float_as_bits(kept.z), l1));
+                (a0, a1) = (from(l0), from(l1));
+                (c0, c1) = (unpack_light(l0), unpack_light(l1));
+            } else {
+                let samples = crepuscular_samples(s, &found, &mut rng);
+                a0 = samples.0;
+                c0 = samples.1;
+                a1 = samples.2;
+                c1 = samples.3;
+            }
             found.state.x = rng;
-            a0 = samples.0;
-            c0 = samples.1;
-            a1 = samples.2;
-            c1 = samples.3;
         } else if F::MEDIA && job == 3 {
             found.state.x = hit.state.x;
             found.l.w += 1.0;
@@ -2940,7 +3059,12 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
                 found.l += (probed * weight).extend(0.0);
             }
         } else {
-            found = shadowed(&found, &hit, if job == 1 { c0 } else { c1 }, weight);
+            // (A deferred ray is blocked only by what is nearer than its light.)
+            let mut met = hit;
+            if deferred && met.state.z != NONE && met.hit.x >= if job == 1 { reach.0 } else { reach.1 } {
+                met.state.z = NONE;
+            }
+            found = shadowed(&found, &met, if job == 1 { c0 } else { c1 }, weight);
         }
         job += 1;
     }

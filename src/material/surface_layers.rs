@@ -75,6 +75,8 @@ impl SurfaceLayers {
 }
 
 impl MaterialModel for SurfaceLayers {
+    fn direct_emit(&self) -> bool { self.layers.iter().all(|l| l.material.direct_emit()) }
+
     /// The layers blended by what each covers of the point, the top one over the rest, as
     /// `layer_at` chooses among them hit by hit.
     fn bake(&self, i: &Intersection, s: &Scene) -> Option<crate::material::model::Baked> {

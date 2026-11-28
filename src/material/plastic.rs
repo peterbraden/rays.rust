@@ -69,6 +69,8 @@ impl BSDF for PlasticBSDF {
 }
 
 impl MaterialModel for Plastic {
+    fn direct_emit(&self) -> bool { true }
+
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
         match self.albedo {
             crate::textures::ColorTexture::Constant(albedo) if self.roughness_map.is_none() => Some(crate::wavefront::flat::FlatMaterial::Plastic { albedo, refractive_index: self.refractive_index, roughness: self.roughness }),

@@ -196,6 +196,8 @@ pub struct BumpedMaterial {
 }
 
 impl MaterialModel for BumpedMaterial {
+    fn direct_emit(&self) -> bool { self.inner.direct_emit() }
+
     /// The material under the bump: at a vertex's scale its normal is the surface's.
     fn bake(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Option<crate::material::model::Baked> {
         self.inner.bake(i, s)

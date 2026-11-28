@@ -242,6 +242,8 @@ pub struct ObjectStats {
     pub intersect_seconds: f64,
     pub shadow_rays: u64,
     pub shadow_seconds: f64,
+    /// Its vertices' shadow rays left to the kernels to trace (`pathtrace::PATH_DEFERRED`).
+    pub deferred: u64,
 }
 
 impl ObjectStats {
@@ -253,6 +255,7 @@ impl ObjectStats {
         self.intersect_seconds += o.intersect_seconds;
         self.shadow_rays += o.shadow_rays;
         self.shadow_seconds += o.shadow_seconds;
+        self.deferred += o.deferred;
     }
 }
 

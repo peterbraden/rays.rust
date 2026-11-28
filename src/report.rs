@@ -149,6 +149,9 @@ impl Run {
                 if o.vertices > 0 {
                     parts.push(format!("{} vertices shaded in {:.2} s", count(o.vertices), o.shade_seconds));
                 }
+                if o.deferred > 0 {
+                    parts.push(format!("{} of their shadow rays traced by the kernels", count(o.deferred)));
+                }
                 if o.rays > 0 {
                     parts.push(format!("{} rays ({} hits) in {:.2} s, {:.2} us each", count(o.rays), count(o.hits), o.intersect_seconds, 1e6 * o.intersect_seconds / o.rays as f64));
                 }
@@ -331,6 +334,8 @@ pub struct ObjectRecord {
     pub intersect_seconds: f64,
     pub shadow_rays: u64,
     pub shadow_seconds: f64,
+    /// Its vertices' shadow rays left to the kernels to trace.
+    pub deferred: u64,
 }
 
 impl ObjectRecord {
@@ -341,6 +346,7 @@ impl ObjectRecord {
             ObjectRecord {
                 name, role: role.into(), vertices: o.vertices, shade_seconds: o.shade_seconds, rays: o.rays, hits: o.hits,
                 intersect_seconds: o.intersect_seconds, shadow_rays: o.shadow_rays, shadow_seconds: o.shadow_seconds,
+                deferred: o.deferred,
             }
         }).collect()
     }

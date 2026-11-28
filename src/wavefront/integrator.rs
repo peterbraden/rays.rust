@@ -116,6 +116,10 @@ pub struct Kernels<'a> {
     s: &'a Scene,
     flat: &'a FlatScene,
     pub buffers: Buffers,
+    /// Whether the host's vertices leave their shadow rays to the kernels' next round
+    /// (`kernels::host::shade`), as the GPU's do: here no faster, the kernels being on the
+    /// same processor, but the same picture, which tests compare.
+    pub defer_shadows: bool,
 }
 
 /// A kernel's ray (in the frame about `origin`), as the scene's own code takes one.
@@ -192,7 +196,7 @@ impl<'a> Kernels<'a> {
 
     /// As `new`, with the scene's buffers already laid out (`Buffers::build`).
     pub fn with(s: &'a Scene, flat: &'a FlatScene, buffers: Buffers) -> Kernels<'a> {
-        Kernels { s, flat, buffers }
+        Kernels { s, flat, buffers, defer_shadows: false }
     }
 
     /// Render sample `k` of every pixel: each pixel's radiance (times its weight), the number
@@ -308,11 +312,12 @@ impl<'a> Kernels<'a> {
             let mut waiting = 0;
             for (((_, pixel, k), p), vertex) in paths.iter_mut().zip(&vertices).filter(|((_, p), _)| p.state.y & PATH_HOST != 0) {
                 let (began, key) = (web_time::Instant::now(), crate::kernels::host::object_key(flat, p.state.z));
-                *p = crate::kernels::host::shade(s, flat, &self.buffers.origin, p, *pixel, *k, *vertex);
+                *p = crate::kernels::host::shade(s, flat, &self.buffers.origin, p, *pixel, *k, *vertex, self.defer_shadows);
                 if let Some(key) = key {
                     let seconds = began.elapsed().as_secs_f64();
                     stats.object(key).vertices += 1;
                     stats.object(key).shade_seconds += seconds;
+                    stats.object(key).deferred += crate::kernels::host::deferred_rays(p);
                 }
                 waiting += 1;
             }
@@ -365,6 +370,14 @@ pub fn sky_radiance(r: &Ray, s: &Scene, flat: &FlatScene) -> Color {
 /// shading stage and are counted apart (`Stage::Host`): what they cost is what porting their
 /// material would save.
 fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::SceneObject>, h: &Hit, covered: Option<&crate::material::model::Covered>) {
+    host_bounce_deferring(p, s, o, h, covered, false);
+}
+
+/// `host_bounce`, keeping the vertex's sun's and sky's shadow rays if `defer` and its material
+/// allows (`MaterialModel::direct_emit`; not from covers, whose water doesn't): returns them,
+/// their light times the throughput.
+fn host_bounce_deferring(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::SceneObject>, h: &Hit,
+                         covered: Option<&crate::material::model::Covered>, defer: bool) -> Vec<crate::material::functions::Deferred> {
     let found = Intersection { dist: h.dist, point: h.point, normal: h.shading, face: h.face, object: o, part: h.part };
     // Off the surface, on the side the ray arrived from (`trace::trace_intersection`).
     let bias = s.render.shadow_bias.max(found.spawn_offset());
@@ -380,7 +393,7 @@ fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::S
         };
         if w == 0. {
             p.done = true;
-            return;
+            return Vec::new();
         }
         p.beta = p.beta * w;
     }
@@ -391,10 +404,23 @@ fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::S
     crate::volume::at_vertex();
     crate::geometry::begin_sampler(crate::sampler::SampleState::Sobol(p.sampler.clone()));
     // Shaded from its vertices' covers if it has them (a landscape's ground), else by its material.
-    let interaction = match covered.and_then(|c| o.medium.scatter_covered(&p.ray, &shaded, c, s)) {
+    let mut deferred = Vec::new();
+    let from_covers = covered.and_then(|c| o.medium.scatter_covered(&p.ray, &shaded, c, s));
+    let interaction = match from_covers {
         Some(x) => x,
-        None => o.medium.material_at(hit.point).scatter(&p.ray, &shaded, s),
+        None => {
+            let material = o.medium.material_at(hit.point);
+            if defer && material.direct_emit() {
+                crate::material::functions::defer();
+            }
+            let x = material.scatter(&p.ray, &shaded, s);
+            deferred = crate::material::functions::take_deferred();
+            x
+        }
     };
+    for d in &mut deferred {
+        d.light = p.beta * d.light;
+    }
     if let Some(crate::sampler::SampleState::Sobol(sampler)) = crate::geometry::take_sampler() {
         p.sampler = sampler;
     }
@@ -404,11 +430,11 @@ fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::S
         // No ray: the weight is the vertex's own colour.
         p.l = p.l + p.beta * interaction.attenuate;
         p.done = true;
-        return;
+        return deferred;
     };
     if p.depth >= s.render.max_depth as u32 || !continue_with(p, s, &interaction.attenuate) {
         p.done = true;
-        return;
+        return deferred;
     }
     p.beta = p.beta * interaction.attenuate;
     // What the next vertex counts of a light it finds (`trace::light_weight`).
@@ -420,6 +446,7 @@ fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::S
     p.directional = interaction.light_sampling == LightSampling::Directional;
     p.ray = Ray { ro: ray.ro, rd: ray.rd.normalize() };
     p.depth += 1;
+    deferred
 }
 
 /// A vertex of a path kept elsewhere (the GPU's: `gpu::host`), for `host_vertex`: the ray that
@@ -439,6 +466,12 @@ pub struct HostVertex {
     /// densities for its segments (`volume::resume_path`); (0, 1) before any.
     pub volume: (u32, f64),
     pub done: bool,
+    /// Whether to keep its sun's and sky's shadow rays for the device to trace, where its
+    /// material allows (`functions::defer`); and after it, those kept, their light times the
+    /// throughput, already in `l` unshadowed. None if the path ended here: those it kept are
+    /// traced here.
+    pub defer: bool,
+    pub deferred: Vec<crate::material::functions::Deferred>,
 }
 
 /// `host_bounce` for a path kept elsewhere, at `hit`, drawing its numbers from `sampler`.
@@ -459,10 +492,17 @@ pub fn host_vertex(s: &Scene, flat: &FlatScene, v: &mut HostVertex, hit: &Hit, s
         scattered: v.scattered, lights_counted: v.lights_counted, directional: v.directional, hit: Some(*hit), done: false, volume: v.volume,
     };
     let covered = (hit.prim as usize) < listed && !flat.prim_cover.is_empty();
-    host_bounce(&mut p, s, o, hit, covered.then(|| flat.covered_at(hit.prim, &hit.point)).flatten().as_ref());
+    let mut deferred = host_bounce_deferring(&mut p, s, o, hit, covered.then(|| flat.covered_at(hit.prim, &hit.point)).flatten().as_ref(), v.defer);
+    if p.done {
+        // No next round to trace them: here, taking back what is blocked.
+        for d in deferred.drain(..) {
+            let through = s.objects.transmittance(&d.ray, d.distance, f64::MIN_POSITIVE);
+            p.l = p.l - d.light * (Color::white() - through);
+        }
+    }
     *v = HostVertex {
         ray: p.ray, beta: p.beta, l: p.l, depth: p.depth, specular: p.specular, lights_counted: p.lights_counted, directional: p.directional, prev_pdf: p.prev_pdf,
-        scattered: p.scattered, done: p.done, volume: p.volume,
+        scattered: p.scattered, done: p.done, volume: p.volume, defer: v.defer, deferred,
     };
 }
 
@@ -894,6 +934,58 @@ pub mod tests {
         let names = crate::kernels::host::object_names(&s, &flat);
         assert_eq!(names.iter().map(|n| n.1).collect::<Vec<_>>(), vec!["material", "shape", "shape"]);
         assert!(names[1].0.starts_with("objects[1] ") && names[2].0.starts_with("objects[2] "), "{:?}", names);
+    }
+
+    /// A host's vertices' shadow rays left to the kernels' next round (as the GPU's are) give
+    /// the picture traced on the host does, but for the light's packing: on a floor of rock
+    /// (a material the host shades, whose light may be deferred) shadowed from a sun and a
+    /// point light by a sphere and a box the kernels shade, and a rock ball of its own. Were
+    /// the kernels to ignore the kept rays, the shadows would be lit; were they to trace the
+    /// point light's past the light, the box behind it would shadow the floor.
+    #[test]
+    fn test_shadow_rays_traced_by_the_kernels_are_the_hosts() {
+        let s = SceneFile::from_string(r#"{
+            "width": 32, "height": 24, "background": [0.2, 0.25, 0.3], "max_depth": 4,
+            "sun": { "direction": [-1, 2, -1], "intensity": 2 },
+            "lights": [ { "location": [1, 1.5, 0.5], "intensity": 3 } ],
+            "camera": { "location": [0, 2.5, -5], "lookat": [0, 0.3, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": {
+                "R": { "type": "rock", "preset": "granite", "scale": 0.2, "seed": 3 },
+                "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }
+            },
+            "objects": [
+                { "type": "plane", "y": 0, "material": "R" },
+                { "type": "sphere", "location": [0.3, 0.5, -0.3], "radius": 0.4, "material": "F" },
+                { "type": "sphere", "location": [-1.2, 0.35, 0.2], "radius": 0.35, "material": "R" },
+                { "type": "box", "min": [1.8, 2.2, 1.1], "max": [2.6, 2.6, 1.7], "material": "F" }
+            ]
+        }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        let render = |defer: bool| {
+            let mut kernels = Kernels::new(&s, &flat).unwrap();
+            kernels.defer_shadows = defer;
+            let mut sum = vec![Color::black(); s.image.width * s.image.height];
+            let mut deferred = 0;
+            for k in 0..64 {
+                let (img, _, stats) = kernels.pass(k);
+                deferred += stats.objects.iter().map(|o| o.deferred).sum::<u64>();
+                for (a, b) in sum.iter_mut().zip(img) {
+                    *a = *a + b;
+                }
+            }
+            (sum, deferred)
+        };
+        let (traced, none) = render(false);
+        let (kept, deferred) = render(true);
+        assert_eq!(none, 0);
+        let vertices = s.image.width * s.image.height * 64;
+        assert!(deferred as usize > vertices / 2, "{} rays deferred", deferred);
+        // The same paths, so pixel by pixel: to the packing (a part in 256 of a ray's light).
+        let mean: f64 = traced.iter().map(|c| c.rgb.sum()).sum::<f64>() / traced.len() as f64;
+        for (k, (a, b)) in traced.iter().zip(&kept).enumerate() {
+            let d = (a.rgb - b.rgb).abs().max();
+            assert!(d <= 0.01 * mean + 0.005 * a.rgb.max(), "pixel {}: {:?} against {:?}", k, b, a);
+        }
     }
 
     /// A torus and a cone, which the host intersects, on a floor the kernels shade, under a sun

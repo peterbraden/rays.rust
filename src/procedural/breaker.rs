@@ -63,15 +63,15 @@ pub struct Breaker {
 const ASPECT: f64 = 1.732_050_807_568_877_2;
 const TILT: f64 = 0.44;
 /// The cavity's half-height as a fraction of the wave's height.
-const CAVITY: f64 = 0.33;
+const CAVITY: f64 = 0.28;
 /// The trough's level below still water and the crest's above, as fractions of the height.
 const TROUGH: f64 = 0.3;
 /// The lip's thickness at its tip and over the cavity's roof, as fractions of the height.
 const TIP: f64 = 0.10;
-const ROOF: f64 = 0.30;
+const ROOF: f64 = 0.40;
 /// How far the lip throws, at its fullest: the angle round the cavity its tip reaches beyond
 /// the roof (radians).
-const THROW: f64 = 2.1;
+const THROW: f64 = 1.9;
 
 impl Breaker {
     /// From a scene object: `{"type": "breaker", "center": [x, y, z], "height": 2, "depth": 2,
@@ -191,7 +191,9 @@ impl Breaker {
         let tip_thickness = TIP + (ROOF - TIP) * (1. - hollow);
         let thickness = |phi: f64| {
             let u = if tip > top { ((tip - phi) / (tip - top)).clamp(0., 1.) } else { 1. };
-            lip * (tip_thickness + (ROOF - tip_thickness) * u.powf(0.7))
+            // (An S-curve, level where it meets the roof: rising into it, it met the back of
+            // the wave at an angle, a line along the top of the barrel.)
+            lip * (tip_thickness + (ROOF - tip_thickness) * u * u * (3. - 2. * u))
         };
         // How far the lip has unfolded from the crest: later than the face hollows, so that a
         // shoulder keeps a smooth crest (unfolding with the face, a third-hollow face carried a
@@ -922,7 +924,7 @@ mod tests {
             for i in 0..n {
                 for j in i + 2..n {
                     if (j + 1) % n == i { continue; }
-                    assert!(!crosses(s[i], s[(i + 1) % n], s[j], s[(j + 1) % n]), "stage {}: edges {} and {} cross", stage, i, j);
+                    assert!(!crosses(s[i], s[(i + 1) % n], s[j], s[(j + 1) % n]), "stage {} lip {} throw {} finger {}: edges {} and {} cross at {:?} {:?}", stage, lip, throw, finger, i, j, s[i], s[j]);
                 }
             }
             // Its ends are covered by triangles of the same area.

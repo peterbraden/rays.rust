@@ -27892,39 +27892,39 @@
     "doc": "Coral rubble: a pale cream crust of cemented sand, broken by hollows full of rounded grains and lumps of broken coral, cream, buff and brown; modelled on Poly Haven's coral_mud_01.",
     "variables": {
       "crust": [
-        0.72,
-        0.62,
-        0.46
+        0.7717,
+        0.5985,
+        0.3907
       ],
       "crust2": [
-        0.58,
-        0.48,
-        0.34
+        0.2924,
+        0.154,
+        0.0561
       ],
       "hollow": [
-        0.18,
-        0.11,
-        0.06
+        0.0858,
+        0.0515,
+        0.0224
       ],
       "light": [
-        0.75,
-        0.66,
-        0.52
+        0.6182,
+        0.5077,
+        0.3775
       ],
       "mid": [
-        0.45,
-        0.33,
-        0.22
+        0.1729,
+        0.0672,
+        0.0048
       ],
       "dark": [
-        0.28,
-        0.19,
-        0.11
+        0.2208,
+        0.1439,
+        0.081
       ],
       "rim": [
-        0.16,
-        0.11,
-        0.07
+        0.1563,
+        0.1072,
+        0.0682
       ]
     },
     "material": {
@@ -27932,26 +27932,26 @@
       "albedo": {
         "pattern": {
           "node": "smoothstep",
-          "from": 0.05,
-          "to": 0.12,
+          "from": -0.034951,
+          "to": 0.13723,
           "input": {
             "node": "add",
             "inputs": [
               {
                 "node": "fractal",
-                "scale": 0.25,
+                "scale": 0.07689,
                 "seed": 3511,
-                "smallest": 0.005
+                "smallest": 0.0035618
               },
               {
                 "node": "multiply",
                 "inputs": [
-                  0.4,
+                  0.16714,
                   {
                     "node": "fractal",
-                    "scale": 0.04,
+                    "scale": 0.030988,
                     "seed": 3512,
-                    "smallest": 0.003
+                    "smallest": 0.004003
                   }
                 ]
               }
@@ -27960,26 +27960,26 @@
         },
         "color_map": [
           [
-            0,
+            -0.053377,
             {
               "pattern": {
                 "node": "add",
                 "inputs": [
                   {
                     "node": "fractal",
-                    "scale": 0.15,
+                    "scale": 0.21021,
                     "seed": 3521,
-                    "smallest": 0.002
+                    "smallest": 0.0070209
                   },
                   {
                     "node": "multiply",
                     "inputs": [
-                      0.6,
+                      0.66772,
                       {
                         "node": "fractal",
-                        "scale": 0.008,
+                        "scale": 0.024668,
                         "seed": 3522,
-                        "smallest": 0.0008
+                        "smallest": 0.00027921
                       }
                     ]
                   }
@@ -27987,56 +27987,56 @@
               },
               "color_map": [
                 [
-                  -0.4,
+                  -0.26888,
                   "$crust2"
                 ],
                 [
-                  0.4,
+                  0.28556,
                   "$crust"
                 ]
               ]
             }
           ],
           [
-            1,
+            1.004,
             {
               "pattern": {
                 "node": "bombing",
                 "shape": "stone",
-                "cell": 0.03,
+                "cell": 0.010754,
                 "size": [
-                  0.015,
-                  0.04
+                  0.01123,
+                  0.042801
                 ],
-                "width": 0.8,
-                "density": 0.9,
+                "width": 0.76792,
+                "density": 0.40097,
                 "seed": 3541,
                 "output": "mask"
               },
               "color_map": [
                 [
-                  0,
+                  0.13122,
                   {
                     "pattern": {
                       "node": "bombing",
                       "shape": "stone",
-                      "cell": 0.012,
+                      "cell": 0.027616,
                       "size": [
-                        0.006,
-                        0.016
+                        0.0015054,
+                        0.034425
                       ],
-                      "width": 0.85,
-                      "density": 1.6,
+                      "width": 0.88695,
+                      "density": 2.5057,
                       "seed": 3531,
                       "output": "mask"
                     },
                     "color_map": [
                       [
-                        0,
+                        0.4,
                         "$hollow"
                       ],
                       [
-                        1,
+                        1.199,
                         {
                           "pattern": {
                             "node": "add",
@@ -28044,17 +28044,17 @@
                               {
                                 "node": "multiply",
                                 "inputs": [
-                                  0.5,
+                                  0.40625,
                                   {
                                     "node": "bombing",
                                     "shape": "stone",
-                                    "cell": 0.012,
+                                    "cell": 0.027616,
                                     "size": [
-                                      0.006,
-                                      0.016
+                                      0.0015054,
+                                      0.034425
                                     ],
-                                    "width": 0.85,
-                                    "density": 1.6,
+                                    "width": 0.88695,
+                                    "density": 2.5057,
                                     "seed": 3531,
                                     "output": "id"
                                   }
@@ -28063,17 +28063,17 @@
                               {
                                 "node": "multiply",
                                 "inputs": [
-                                  0.3,
+                                  0.38394,
                                   {
                                     "node": "bombing",
                                     "shape": "stone",
-                                    "cell": 0.012,
+                                    "cell": 0.027616,
                                     "size": [
-                                      0.006,
-                                      0.016
+                                      0.0015054,
+                                      0.034425
                                     ],
-                                    "width": 0.85,
-                                    "density": 1.6,
+                                    "width": 0.88695,
+                                    "density": 2.5057,
                                     "seed": 3531,
                                     "output": "facet"
                                   }
@@ -28086,13 +28086,13 @@
                                   {
                                     "node": "bombing",
                                     "shape": "stone",
-                                    "cell": 0.012,
+                                    "cell": 0.027616,
                                     "size": [
-                                      0.006,
-                                      0.016
+                                      0.0015054,
+                                      0.034425
                                     ],
-                                    "width": 0.85,
-                                    "density": 1.6,
+                                    "width": 0.88695,
+                                    "density": 2.5057,
                                     "seed": 3531,
                                     "output": "edge"
                                   }
@@ -28101,23 +28101,23 @@
                               {
                                 "node": "multiply",
                                 "inputs": [
-                                  0.2,
+                                  0.15358,
                                   {
                                     "node": "fractal",
-                                    "scale": 0.002,
+                                    "scale": 0.0008391,
                                     "seed": 3533,
-                                    "smallest": 0.0001
+                                    "smallest": 0.00039655
                                   }
                                 ]
                               },
                               {
                                 "node": "multiply",
                                 "inputs": [
-                                  0.35,
+                                  0.17768,
                                   {
                                     "node": "cells",
                                     "style": "id",
-                                    "scale": 0.00025,
+                                    "scale": 0.00030759,
                                     "seed": 3534
                                   }
                                 ]
@@ -28126,19 +28126,19 @@
                           },
                           "color_map": [
                             [
-                              -0.3,
+                              -0.5661,
                               "$rim"
                             ],
                             [
-                              0.15,
+                              -0.10037,
                               "$dark"
                             ],
                             [
-                              0.6,
+                              0.36536,
                               "$mid"
                             ],
                             [
-                              1.15,
+                              0.93459,
                               "$light"
                             ]
                           ]
@@ -28148,7 +28148,7 @@
                   }
                 ],
                 [
-                  1,
+                  0.64527,
                   {
                     "pattern": {
                       "node": "add",
@@ -28156,17 +28156,17 @@
                         {
                           "node": "multiply",
                           "inputs": [
-                            0.5,
+                            1.043,
                             {
                               "node": "bombing",
                               "shape": "stone",
-                              "cell": 0.03,
+                              "cell": 0.010754,
                               "size": [
-                                0.015,
-                                0.04
+                                0.01123,
+                                0.042801
                               ],
-                              "width": 0.8,
-                              "density": 0.9,
+                              "width": 0.76792,
+                              "density": 0.40097,
                               "seed": 3541,
                               "output": "id"
                             }
@@ -28175,17 +28175,17 @@
                         {
                           "node": "multiply",
                           "inputs": [
-                            0.3,
+                            0.17954,
                             {
                               "node": "bombing",
                               "shape": "stone",
-                              "cell": 0.03,
+                              "cell": 0.010754,
                               "size": [
-                                0.015,
-                                0.04
+                                0.01123,
+                                0.042801
                               ],
-                              "width": 0.8,
-                              "density": 0.9,
+                              "width": 0.76792,
+                              "density": 0.40097,
                               "seed": 3541,
                               "output": "facet"
                             }
@@ -28198,13 +28198,13 @@
                             {
                               "node": "bombing",
                               "shape": "stone",
-                              "cell": 0.03,
+                              "cell": 0.010754,
                               "size": [
-                                0.015,
-                                0.04
+                                0.01123,
+                                0.042801
                               ],
-                              "width": 0.8,
-                              "density": 0.9,
+                              "width": 0.76792,
+                              "density": 0.40097,
                               "seed": 3541,
                               "output": "edge"
                             }
@@ -28213,23 +28213,23 @@
                         {
                           "node": "multiply",
                           "inputs": [
-                            0.2,
+                            0.49986,
                             {
                               "node": "fractal",
-                              "scale": 0.005,
+                              "scale": 0.0021527,
                               "seed": 3543,
-                              "smallest": 0.00025
+                              "smallest": 0.00014865
                             }
                           ]
                         },
                         {
                           "node": "multiply",
                           "inputs": [
-                            0.35,
+                            0.2757,
                             {
                               "node": "cells",
                               "style": "id",
-                              "scale": 0.000625,
+                              "scale": 0.0017641,
                               "seed": 3544
                             }
                           ]
@@ -28238,19 +28238,19 @@
                     },
                     "color_map": [
                       [
-                        -0.3,
+                        -0.48639,
                         "$rim"
                       ],
                       [
-                        0.15,
+                        -0.054803,
                         "$dark"
                       ],
                       [
-                        0.6,
+                        0.37679,
                         "$mid"
                       ],
                       [
-                        1.15,
+                        0.90428,
                         "$light"
                       ]
                     ]
@@ -28278,9 +28278,9 @@
                     "inputs": [
                       {
                         "node": "fractal",
-                        "scale": 0.25,
+                        "scale": 0.07689,
                         "seed": 3511,
-                        "smallest": 0.005
+                        "smallest": 0.0035618
                       },
                       {
                         "node": "multiply",
@@ -28288,9 +28288,9 @@
                           0.4,
                           {
                             "node": "fractal",
-                            "scale": 0.04,
+                            "scale": 0.030988,
                             "seed": 3512,
-                            "smallest": 0.003
+                            "smallest": 0.004003
                           }
                         ]
                       }
@@ -28315,9 +28315,9 @@
                         "inputs": [
                           {
                             "node": "fractal",
-                            "scale": 0.25,
+                            "scale": 0.07689,
                             "seed": 3511,
-                            "smallest": 0.005
+                            "smallest": 0.0035618
                           },
                           {
                             "node": "multiply",
@@ -28325,9 +28325,9 @@
                               0.4,
                               {
                                 "node": "fractal",
-                                "scale": 0.04,
+                                "scale": 0.030988,
                                 "seed": 3512,
-                                "smallest": 0.003
+                                "smallest": 0.004003
                               }
                             ]
                           }
@@ -28339,13 +28339,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.012,
+                  "cell": 0.027616,
                   "size": [
-                    0.006,
-                    0.016
+                    0.0015054,
+                    0.034425
                   ],
-                  "width": 0.85,
-                  "density": 1.6,
+                  "width": 0.88695,
+                  "density": 2.5057,
                   "seed": 3531,
                   "output": "height"
                 }
@@ -28367,9 +28367,9 @@
                         "inputs": [
                           {
                             "node": "fractal",
-                            "scale": 0.25,
+                            "scale": 0.07689,
                             "seed": 3511,
-                            "smallest": 0.005
+                            "smallest": 0.0035618
                           },
                           {
                             "node": "multiply",
@@ -28377,9 +28377,9 @@
                               0.4,
                               {
                                 "node": "fractal",
-                                "scale": 0.04,
+                                "scale": 0.030988,
                                 "seed": 3512,
-                                "smallest": 0.003
+                                "smallest": 0.004003
                               }
                             ]
                           }
@@ -28391,13 +28391,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.03,
+                  "cell": 0.010754,
                   "size": [
-                    0.015,
-                    0.04
+                    0.01123,
+                    0.042801
                   ],
-                  "width": 0.8,
-                  "density": 0.9,
+                  "width": 0.76792,
+                  "density": 0.40097,
                   "seed": 3541,
                   "output": "height"
                 }
@@ -28468,43 +28468,204 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 7.726091,
+            "fitted": 0.894902
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 0.900099,
+            "author_solved": 3.967179,
+            "patches": 3,
+            "chosen": "generation 54's best"
+          },
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.78654,
+            "variables.crust": [
+              0.7717,
+              0.5985,
+              0.3907
+            ],
+            "variables.crust2": [
+              0.2924,
+              0.154,
+              0.0561
+            ],
+            "variables.hollow": [
+              0.0858,
+              0.0515,
+              0.0224
+            ],
+            "variables.light": [
+              0.6182,
+              0.5077,
+              0.3775
+            ],
+            "variables.mid": [
+              0.1729,
+              0.0672,
+              0.0048
+            ],
+            "variables.dark": [
+              0.2208,
+              0.1439,
+              0.081
+            ],
+            "variables.rim": [
+              0.1563,
+              0.1072,
+              0.0682
+            ],
+            "material.albedo.pattern.from": -0.034951,
+            "material.albedo.pattern.to": 0.13723,
+            "material.albedo.pattern.input.inputs.0.scale": 0.07689,
+            "material.normal.graph.inputs.0.inputs.1.input.inputs.0.scale": 0.07689,
+            "material.normal.graph.inputs.1.inputs.0.inputs.1.input.inputs.0.scale": 0.07689,
+            "material.normal.graph.inputs.2.inputs.0.inputs.1.input.inputs.0.scale": 0.07689,
+            "material.albedo.pattern.input.inputs.0.smallest": 0.0035618,
+            "material.normal.graph.inputs.0.inputs.1.input.inputs.0.smallest": 0.0035618,
+            "material.normal.graph.inputs.1.inputs.0.inputs.1.input.inputs.0.smallest": 0.0035618,
+            "material.normal.graph.inputs.2.inputs.0.inputs.1.input.inputs.0.smallest": 0.0035618,
+            "material.albedo.pattern.input.inputs.1.inputs.0": 0.16714,
+            "material.albedo.pattern.input.inputs.1.inputs.1.scale": 0.030988,
+            "material.normal.graph.inputs.0.inputs.1.input.inputs.1.inputs.1.scale": 0.030988,
+            "material.normal.graph.inputs.1.inputs.0.inputs.1.input.inputs.1.inputs.1.scale": 0.030988,
+            "material.normal.graph.inputs.2.inputs.0.inputs.1.input.inputs.1.inputs.1.scale": 0.030988,
+            "material.albedo.pattern.input.inputs.1.inputs.1.smallest": 0.004003,
+            "material.normal.graph.inputs.0.inputs.1.input.inputs.1.inputs.1.smallest": 0.004003,
+            "material.normal.graph.inputs.1.inputs.0.inputs.1.input.inputs.1.inputs.1.smallest": 0.004003,
+            "material.normal.graph.inputs.2.inputs.0.inputs.1.input.inputs.1.inputs.1.smallest": 0.004003,
+            "material.albedo.color_map.0.0": -0.053377,
+            "material.albedo.color_map.1.0": 1.004,
+            "material.albedo.color_map.0.1.pattern.inputs.0.scale": 0.21021,
+            "material.albedo.color_map.0.1.pattern.inputs.0.smallest": 0.0070209,
+            "material.albedo.color_map.0.1.pattern.inputs.1.inputs.0": 0.66772,
+            "material.albedo.color_map.0.1.pattern.inputs.1.inputs.1.scale": 0.024668,
+            "material.albedo.color_map.0.1.pattern.inputs.1.inputs.1.smallest": 0.00027921,
+            "material.albedo.color_map.0.1.color_map.0.0": -0.26888,
+            "material.albedo.color_map.0.1.color_map.1.0": 0.28556,
+            "material.albedo.color_map.1.1.pattern.cell": 0.010754,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.0.inputs.1.cell": 0.010754,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.1.inputs.1.cell": 0.010754,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.2.inputs.1.cell": 0.010754,
+            "material.normal.graph.inputs.2.inputs.1.cell": 0.010754,
+            "material.albedo.color_map.1.1.pattern.size.0": 0.01123,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.0.inputs.1.size.0": 0.01123,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.1.inputs.1.size.0": 0.01123,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.2.inputs.1.size.0": 0.01123,
+            "material.normal.graph.inputs.2.inputs.1.size.0": 0.01123,
+            "material.albedo.color_map.1.1.pattern.size.1": 0.042801,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.0.inputs.1.size.1": 0.042801,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.1.inputs.1.size.1": 0.042801,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.2.inputs.1.size.1": 0.042801,
+            "material.normal.graph.inputs.2.inputs.1.size.1": 0.042801,
+            "material.albedo.color_map.1.1.pattern.width": 0.76792,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.0.inputs.1.width": 0.76792,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.1.inputs.1.width": 0.76792,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.2.inputs.1.width": 0.76792,
+            "material.normal.graph.inputs.2.inputs.1.width": 0.76792,
+            "material.albedo.color_map.1.1.pattern.density": 0.40097,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.0.inputs.1.density": 0.40097,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.1.inputs.1.density": 0.40097,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.2.inputs.1.density": 0.40097,
+            "material.normal.graph.inputs.2.inputs.1.density": 0.40097,
+            "material.albedo.color_map.1.1.color_map.0.0": 0.13122,
+            "material.albedo.color_map.1.1.color_map.1.0": 0.64527,
+            "material.albedo.color_map.1.1.color_map.0.1.pattern.cell": 0.027616,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.cell": 0.027616,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.cell": 0.027616,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.cell": 0.027616,
+            "material.normal.graph.inputs.1.inputs.1.cell": 0.027616,
+            "material.albedo.color_map.1.1.color_map.0.1.pattern.size.0": 0.0015054,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.size.0": 0.0015054,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.size.0": 0.0015054,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.size.0": 0.0015054,
+            "material.normal.graph.inputs.1.inputs.1.size.0": 0.0015054,
+            "material.albedo.color_map.1.1.color_map.0.1.pattern.size.1": 0.034425,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.size.1": 0.034425,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.size.1": 0.034425,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.size.1": 0.034425,
+            "material.normal.graph.inputs.1.inputs.1.size.1": 0.034425,
+            "material.albedo.color_map.1.1.color_map.0.1.pattern.width": 0.88695,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.width": 0.88695,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.width": 0.88695,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.width": 0.88695,
+            "material.normal.graph.inputs.1.inputs.1.width": 0.88695,
+            "material.albedo.color_map.1.1.color_map.0.1.pattern.density": 2.5057,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.density": 2.5057,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.density": 2.5057,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.density": 2.5057,
+            "material.normal.graph.inputs.1.inputs.1.density": 2.5057,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.0.0": 0.4,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.0": 1.199,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.0": 0.40625,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.0": 0.38394,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.3.inputs.0": 0.15358,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.3.inputs.1.scale": 0.0008391,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.3.inputs.1.smallest": 0.00039655,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.4.inputs.0": 0.17768,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.pattern.inputs.4.inputs.1.scale": 0.00030759,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.color_map.0.0": -0.5661,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.color_map.1.0": -0.10037,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.color_map.2.0": 0.36536,
+            "material.albedo.color_map.1.1.color_map.0.1.color_map.1.1.color_map.3.0": 0.93459,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.0.inputs.0": 1.043,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.1.inputs.0": 0.17954,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.3.inputs.0": 0.49986,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.3.inputs.1.scale": 0.0021527,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.3.inputs.1.smallest": 0.00014865,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.4.inputs.0": 0.2757,
+            "material.albedo.color_map.1.1.color_map.1.1.pattern.inputs.4.inputs.1.scale": 0.0017641,
+            "material.albedo.color_map.1.1.color_map.1.1.color_map.0.0": -0.48639,
+            "material.albedo.color_map.1.1.color_map.1.1.color_map.1.0": -0.054803,
+            "material.albedo.color_map.1.1.color_map.1.1.color_map.2.0": 0.37679,
+            "material.albedo.color_map.1.1.color_map.1.1.color_map.3.0": 0.90428
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7865
   },
   "seedling_soil": {
     "show": "landscape",
     "doc": "Dark moist forest soil, crumbly, with tufts of tiny green seedlings and a few pale twigs; modelled on Poly Haven's mud_forest.",
     "variables": {
       "soil": [
-        0.17,
-        0.11,
-        0.07
+        0.0337,
+        0.0161,
+        0.0047
       ],
       "soil2": [
-        0.09,
-        0.06,
-        0.04
+        0.0101,
+        0.0055,
+        0.0032
       ],
       "crumb": [
-        0.26,
-        0.18,
-        0.11
+        0.0494,
+        0.0259,
+        0.0107
       ],
       "green": [
-        0.3,
-        0.38,
-        0.12
+        0.2802,
+        0.1961,
+        0.0736
       ],
       "green2": [
-        0.16,
-        0.22,
-        0.07
+        0.1176,
+        0.1075,
+        0.0123
       ],
       "twig": [
-        0.4,
-        0.3,
-        0.2
+        0.1311,
+        0.057,
+        0.0208
       ]
     },
     "material": {
@@ -28516,102 +28677,102 @@
             {
               "node": "bombing",
               "shape": "leaf",
-              "cell": 0.03,
+              "cell": 0.032212,
               "size": [
-                0.006,
-                0.015
+                0.012575,
+                0.057961
               ],
-              "width": 0.35,
-              "density": 1.6,
+              "width": 0.27533,
+              "density": 0.68504,
               "seed": 3641,
               "output": "mask"
             },
             {
               "node": "smoothstep",
               "from": 0.0,
-              "to": 0.3,
+              "to": 0.19595,
               "input": {
                 "node": "fractal",
-                "scale": 0.3,
+                "scale": 0.20664,
                 "seed": 3631,
-                "smallest": 0.05
+                "smallest": 0.032991
               }
             }
           ]
         },
         "color_map": [
           [
-            0,
+            0.13499,
             {
               "pattern": {
                 "node": "bombing",
                 "shape": "leaf",
-                "cell": 0.05,
+                "cell": 0.059181,
                 "size": [
-                  0.03,
-                  0.08
+                  0.017145,
+                  0.23554
                 ],
-                "width": 0.04,
-                "density": 0.5,
+                "width": 0.068789,
+                "density": 0.34404,
                 "seed": 3651,
                 "output": "mask"
               },
               "color_map": [
                 [
-                  0,
+                  0.077774,
                   {
                     "pattern": {
                       "node": "bombing",
                       "shape": "leaf",
-                      "cell": 0.04,
+                      "cell": 0.020061,
                       "size": [
-                        0.01,
-                        0.025
+                        0.0041586,
+                        0.012508
                       ],
-                      "width": 0.6,
-                      "density": 0.6,
+                      "width": 0.37901,
+                      "density": 0.37481,
                       "seed": 3671,
                       "output": "mask"
                     },
                     "color_map": [
                       [
-                        0,
+                        0.12718,
                         {
                           "pattern": {
                             "node": "bombing",
                             "shape": "stone",
-                            "cell": 0.006,
+                            "cell": 0.012788,
                             "size": [
-                              0.003,
-                              0.008
+                              0.00075334,
+                              0.025818
                             ],
-                            "width": 0.8,
-                            "density": 1.0,
+                            "width": 0.55493,
+                            "density": 1.2243,
                             "seed": 3621,
                             "output": "mask"
                           },
                           "color_map": [
                             [
-                              0,
+                              -0.12272,
                               {
                                 "pattern": {
                                   "node": "add",
                                   "inputs": [
                                     {
                                       "node": "fractal",
-                                      "scale": 0.3,
+                                      "scale": 0.2643,
                                       "seed": 3611,
-                                      "smallest": 0.005
+                                      "smallest": 0.001804
                                     },
                                     {
                                       "node": "multiply",
                                       "inputs": [
-                                        0.6,
+                                        0.27232,
                                         {
                                           "node": "fractal",
-                                          "scale": 0.006,
+                                          "scale": 0.0046674,
                                           "seed": 3612,
-                                          "smallest": 0.001
+                                          "smallest": 0.0009285
                                         }
                                       ]
                                     }
@@ -28619,22 +28780,22 @@
                                 },
                                 "color_map": [
                                   [
-                                    -0.5,
+                                    -0.49901,
                                     "$soil2"
                                   ],
                                   [
-                                    0.3,
+                                    -0.038957,
                                     "$soil"
                                   ],
                                   [
-                                    0.7,
+                                    0.19107,
                                     "$crumb"
                                   ]
                                 ]
                               }
                             ],
                             [
-                              1,
+                              1.2311,
                               {
                                 "pattern": {
                                   "node": "add",
@@ -28642,17 +28803,17 @@
                                     {
                                       "node": "multiply",
                                       "inputs": [
-                                        0.5,
+                                        0.27319,
                                         {
                                           "node": "bombing",
                                           "shape": "stone",
-                                          "cell": 0.006,
+                                          "cell": 0.012788,
                                           "size": [
-                                            0.003,
-                                            0.008
+                                            0.00075334,
+                                            0.025818
                                           ],
-                                          "width": 0.8,
-                                          "density": 1.0,
+                                          "width": 0.55493,
+                                          "density": 1.2243,
                                           "seed": 3621,
                                           "output": "id"
                                         }
@@ -28661,17 +28822,17 @@
                                     {
                                       "node": "multiply",
                                       "inputs": [
-                                        0.3,
+                                        0.73339,
                                         {
                                           "node": "bombing",
                                           "shape": "stone",
-                                          "cell": 0.006,
+                                          "cell": 0.012788,
                                           "size": [
-                                            0.003,
-                                            0.008
+                                            0.00075334,
+                                            0.025818
                                           ],
-                                          "width": 0.8,
-                                          "density": 1.0,
+                                          "width": 0.55493,
+                                          "density": 1.2243,
                                           "seed": 3621,
                                           "output": "facet"
                                         }
@@ -28684,13 +28845,13 @@
                                         {
                                           "node": "bombing",
                                           "shape": "stone",
-                                          "cell": 0.006,
+                                          "cell": 0.012788,
                                           "size": [
-                                            0.003,
-                                            0.008
+                                            0.00075334,
+                                            0.025818
                                           ],
-                                          "width": 0.8,
-                                          "density": 1.0,
+                                          "width": 0.55493,
+                                          "density": 1.2243,
                                           "seed": 3621,
                                           "output": "edge"
                                         }
@@ -28699,23 +28860,23 @@
                                     {
                                       "node": "multiply",
                                       "inputs": [
-                                        0.2,
+                                        0.21351,
                                         {
                                           "node": "fractal",
-                                          "scale": 0.001,
+                                          "scale": 0.0013022,
                                           "seed": 3623,
-                                          "smallest": 5e-05
+                                          "smallest": 3.9345e-05
                                         }
                                       ]
                                     },
                                     {
                                       "node": "multiply",
                                       "inputs": [
-                                        0.35,
+                                        0.14569,
                                         {
                                           "node": "cells",
                                           "style": "id",
-                                          "scale": 0.000125,
+                                          "scale": 0.00022274,
                                           "seed": 3624
                                         }
                                       ]
@@ -28724,19 +28885,19 @@
                                 },
                                 "color_map": [
                                   [
-                                    -0.3,
+                                    0.23619,
                                     "$soil2"
                                   ],
                                   [
-                                    0.15,
+                                    0.50754,
                                     "$soil2"
                                   ],
                                   [
-                                    0.6,
+                                    0.77888,
                                     "$soil"
                                   ],
                                   [
-                                    1.15,
+                                    1.1105,
                                     "$crumb"
                                   ]
                                 ]
@@ -28746,28 +28907,28 @@
                         }
                       ],
                       [
-                        1,
+                        0.94839,
                         {
                           "pattern": {
                             "node": "bombing",
                             "shape": "leaf",
-                            "cell": 0.04,
+                            "cell": 0.020061,
                             "size": [
-                              0.01,
-                              0.025
+                              0.0041586,
+                              0.012508
                             ],
-                            "width": 0.6,
-                            "density": 0.6,
+                            "width": 0.37901,
+                            "density": 0.37481,
                             "seed": 3671,
                             "output": "id"
                           },
                           "color_map": [
                             [
-                              0,
+                              -0.18346,
                               "$soil2"
                             ],
                             [
-                              0.5,
+                              0.49452,
                               "$twig"
                             ]
                           ]
@@ -28777,28 +28938,28 @@
                   }
                 ],
                 [
-                  1,
+                  1.0306,
                   {
                     "pattern": {
                       "node": "bombing",
                       "shape": "leaf",
-                      "cell": 0.05,
+                      "cell": 0.059181,
                       "size": [
-                        0.03,
-                        0.08
+                        0.017145,
+                        0.23554
                       ],
-                      "width": 0.04,
-                      "density": 0.5,
+                      "width": 0.068789,
+                      "density": 0.34404,
                       "seed": 3651,
                       "output": "id"
                     },
                     "color_map": [
                       [
-                        0,
+                        -0.25764,
                         "$soil"
                       ],
                       [
-                        0.5,
+                        0.73052,
                         "$twig"
                       ]
                     ]
@@ -28808,28 +28969,28 @@
             }
           ],
           [
-            1,
+            0.82946,
             {
               "pattern": {
                 "node": "bombing",
                 "shape": "leaf",
-                "cell": 0.03,
+                "cell": 0.032212,
                 "size": [
-                  0.006,
-                  0.015
+                  0.012575,
+                  0.057961
                 ],
-                "width": 0.35,
-                "density": 1.6,
+                "width": 0.27533,
+                "density": 0.68504,
                 "seed": 3641,
                 "output": "id"
               },
               "color_map": [
                 [
-                  0,
+                  0.20753,
                   "$green2"
                 ],
                 [
-                  0.6,
+                  0.72651,
                   "$green"
                 ]
               ]
@@ -28848,13 +29009,13 @@
                 {
                   "node": "bombing",
                   "shape": "stone",
-                  "cell": 0.006,
+                  "cell": 0.012788,
                   "size": [
-                    0.003,
-                    0.008
+                    0.00075334,
+                    0.025818
                   ],
-                  "width": 0.8,
-                  "density": 1.0,
+                  "width": 0.55493,
+                  "density": 1.2243,
                   "seed": 3621,
                   "output": "height"
                 }
@@ -28867,13 +29028,13 @@
                 {
                   "node": "bombing",
                   "shape": "leaf",
-                  "cell": 0.03,
+                  "cell": 0.032212,
                   "size": [
-                    0.006,
-                    0.015
+                    0.012575,
+                    0.057961
                   ],
-                  "width": 0.35,
-                  "density": 1.6,
+                  "width": 0.27533,
+                  "density": 0.68504,
                   "seed": 3641,
                   "output": "height"
                 }
@@ -28940,43 +29101,191 @@
             ],
             "chroma": 0.08
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 314.759402,
+            "fitted": 0.76017
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 0.76152,
+            "author_solved": 2.513382,
+            "patches": 3,
+            "chosen": "generation 59's best"
+          },
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.0765,
+            "variables.soil": [
+              0.0337,
+              0.0161,
+              0.0047
+            ],
+            "variables.soil2": [
+              0.0101,
+              0.0055,
+              0.0032
+            ],
+            "variables.crumb": [
+              0.0494,
+              0.0259,
+              0.0107
+            ],
+            "variables.green": [
+              0.2802,
+              0.1961,
+              0.0736
+            ],
+            "variables.green2": [
+              0.1176,
+              0.1075,
+              0.0123
+            ],
+            "variables.twig": [
+              0.1311,
+              0.057,
+              0.0208
+            ],
+            "material.albedo.pattern.inputs.0.cell": 0.032212,
+            "material.albedo.color_map.1.1.pattern.cell": 0.032212,
+            "material.normal.graph.inputs.1.inputs.1.cell": 0.032212,
+            "material.albedo.pattern.inputs.0.size.0": 0.012575,
+            "material.albedo.color_map.1.1.pattern.size.0": 0.012575,
+            "material.normal.graph.inputs.1.inputs.1.size.0": 0.012575,
+            "material.albedo.pattern.inputs.0.size.1": 0.057961,
+            "material.albedo.color_map.1.1.pattern.size.1": 0.057961,
+            "material.normal.graph.inputs.1.inputs.1.size.1": 0.057961,
+            "material.albedo.pattern.inputs.0.width": 0.27533,
+            "material.albedo.color_map.1.1.pattern.width": 0.27533,
+            "material.normal.graph.inputs.1.inputs.1.width": 0.27533,
+            "material.albedo.pattern.inputs.0.density": 0.68504,
+            "material.albedo.color_map.1.1.pattern.density": 0.68504,
+            "material.normal.graph.inputs.1.inputs.1.density": 0.68504,
+            "material.albedo.pattern.inputs.1.to": 0.19595,
+            "material.albedo.pattern.inputs.1.input.scale": 0.20664,
+            "material.albedo.pattern.inputs.1.input.smallest": 0.032991,
+            "material.albedo.color_map.0.0": 0.13499,
+            "material.albedo.color_map.1.0": 0.82946,
+            "material.albedo.color_map.0.1.pattern.cell": 0.059181,
+            "material.albedo.color_map.0.1.color_map.1.1.pattern.cell": 0.059181,
+            "material.albedo.color_map.0.1.pattern.size.0": 0.017145,
+            "material.albedo.color_map.0.1.color_map.1.1.pattern.size.0": 0.017145,
+            "material.albedo.color_map.0.1.pattern.size.1": 0.23554,
+            "material.albedo.color_map.0.1.color_map.1.1.pattern.size.1": 0.23554,
+            "material.albedo.color_map.0.1.pattern.width": 0.068789,
+            "material.albedo.color_map.0.1.color_map.1.1.pattern.width": 0.068789,
+            "material.albedo.color_map.0.1.pattern.density": 0.34404,
+            "material.albedo.color_map.0.1.color_map.1.1.pattern.density": 0.34404,
+            "material.albedo.color_map.0.1.color_map.0.0": 0.077774,
+            "material.albedo.color_map.0.1.color_map.1.0": 1.0306,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.cell": 0.020061,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.1.pattern.cell": 0.020061,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.size.0": 0.0041586,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.1.pattern.size.0": 0.0041586,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.size.1": 0.012508,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.1.pattern.size.1": 0.012508,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.width": 0.37901,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.1.pattern.width": 0.37901,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.density": 0.37481,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.1.pattern.density": 0.37481,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.0": 0.12718,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.0": 0.94839,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.cell": 0.012788,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.cell": 0.012788,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.cell": 0.012788,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.cell": 0.012788,
+            "material.normal.graph.inputs.0.inputs.1.cell": 0.012788,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.size.0": 0.00075334,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.size.0": 0.00075334,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.size.0": 0.00075334,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.size.0": 0.00075334,
+            "material.normal.graph.inputs.0.inputs.1.size.0": 0.00075334,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.size.1": 0.025818,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.size.1": 0.025818,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.size.1": 0.025818,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.size.1": 0.025818,
+            "material.normal.graph.inputs.0.inputs.1.size.1": 0.025818,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.width": 0.55493,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.width": 0.55493,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.width": 0.55493,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.width": 0.55493,
+            "material.normal.graph.inputs.0.inputs.1.width": 0.55493,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.density": 1.2243,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.1.density": 1.2243,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.1.density": 1.2243,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.2.inputs.1.density": 1.2243,
+            "material.normal.graph.inputs.0.inputs.1.density": 1.2243,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.0": -0.12272,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.0": 1.2311,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.0.scale": 0.2643,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.0.smallest": 0.001804,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.1.inputs.0": 0.27232,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.1.inputs.1.scale": 0.0046674,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.1.inputs.1.smallest": 0.0009285,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.0": -0.49901,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.0": -0.038957,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.1.color_map.2.0": 0.19107,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.0.inputs.0": 0.27319,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.1.inputs.0": 0.73339,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.3.inputs.0": 0.21351,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.3.inputs.1.scale": 0.0013022,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.3.inputs.1.smallest": 3.9345e-05,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.4.inputs.0": 0.14569,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.pattern.inputs.4.inputs.1.scale": 0.00022274,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.color_map.0.0": 0.23619,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.color_map.1.0": 0.50754,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.color_map.2.0": 0.77888,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.1.color_map.3.0": 1.1105,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.1.color_map.0.0": -0.18346,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.1.color_map.1.0": 0.49452,
+            "material.albedo.color_map.0.1.color_map.1.1.color_map.0.0": -0.25764,
+            "material.albedo.color_map.0.1.color_map.1.1.color_map.1.0": 0.73052,
+            "material.albedo.color_map.1.1.color_map.0.0": 0.20753,
+            "material.albedo.color_map.1.1.color_map.1.0": 0.72651
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.0765
   },
   "cobblestones": {
     "show": "landscape",
     "doc": "Cobbled paving: rough square setts a hand and a half across in wavering rows, blue-grey with some buff ones, rounded and darker at their edges, set in joints of dark grit; modelled on Poly Haven's cobblestone_floor_08.",
     "variables": {
       "stone": [
-        0.52,
-        0.55,
-        0.56
+        0.4916,
+        0.4994,
+        0.46
       ],
       "stone2": [
-        0.36,
-        0.39,
-        0.41
+        0.3701,
+        0.3575,
+        0.3173
       ],
       "warm": [
-        0.55,
-        0.48,
-        0.4
+        0.5647,
+        0.4562,
+        0.3582
       ],
       "edge": [
-        0.22,
-        0.22,
-        0.21
+        0.1525,
+        0.1436,
+        0.1164
       ],
       "joint": [
-        0.18,
-        0.16,
-        0.13
+        0.0455,
+        0.0307,
+        0.0083
       ],
       "joint2": [
-        0.32,
-        0.29,
-        0.24
+        0.3205,
+        0.2585,
+        0.188
       ]
     },
     "material": {
@@ -29251,7 +29560,81 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 21.58522,
+            "fitted": 3.625121
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 3.595006,
+            "author_solved": 10.01664,
+            "patches": 3,
+            "chosen": "generation 60's best"
+          },
+          "date": "2026-11-28",
+          "applied": "colours only: the fitted structure pinched the setts into star shapes",
+          "values": {
+            "scale": 1.3868,
+            "variables.stone": [
+              0.4916,
+              0.4994,
+              0.46
+            ],
+            "variables.stone2": [
+              0.3701,
+              0.3575,
+              0.3173
+            ],
+            "variables.warm": [
+              0.5647,
+              0.4562,
+              0.3582
+            ],
+            "variables.edge": [
+              0.1525,
+              0.1436,
+              0.1164
+            ],
+            "variables.joint": [
+              0.0455,
+              0.0307,
+              0.0083
+            ],
+            "variables.joint2": [
+              0.3205,
+              0.2585,
+              0.188
+            ],
+            "material.albedo.pattern.input.amount": 0.054993,
+            "material.albedo.color_map.0.1.pattern.input.amount": 0.054993,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.inputs.0.input.amount": 0.054993,
+            "material.normal.graph.inputs.0.inputs.1.input.amount": 0.054993,
+            "material.albedo.pattern.input.scale": 0.059291,
+            "material.albedo.color_map.0.1.pattern.input.scale": 0.059291,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.inputs.0.input.scale": 0.059291,
+            "material.normal.graph.inputs.0.inputs.1.input.scale": 0.059291,
+            "material.albedo.color_map.0.0": -0.48292,
+            "material.albedo.color_map.1.0": 1.4746,
+            "material.albedo.color_map.0.1.color_map.0.0": 0.34652,
+            "material.albedo.color_map.0.1.color_map.1.0": 1.2523,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.inputs.1.inputs.0": 0.35153,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.inputs.1.inputs.1.scale": 0.010124,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.inputs.1.inputs.1.smallest": 0.00084683,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.0": 0.31631,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.0": 0.66416,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.2.0": 0.8539,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.3.0": 1.012,
+            "material.albedo.color_map.1.1.pattern.scale": 0.036078,
+            "material.albedo.color_map.1.1.pattern.smallest": 0.003986,
+            "material.albedo.color_map.1.1.color_map.0.0": -0.16665,
+            "material.albedo.color_map.1.1.color_map.1.0": 0.1881
+          }
+        }
       }
     ]
   },
@@ -29260,29 +29643,29 @@
     "doc": "A pitted ochre rock face: pink-orange stone crazed by a network of dark cracks, finer ones between, with grey patina in patches and small pits; modelled on Poly Haven's rock_pitted_mossy.",
     "variables": {
       "rock": [
-        0.66,
-        0.44,
-        0.3
+        0.7352,
+        0.4619,
+        0.3279
       ],
       "rock2": [
-        0.5,
-        0.32,
-        0.21
+        0.6966,
+        0.3724,
+        0.1693
       ],
       "patina": [
-        0.62,
-        0.6,
-        0.52
+        0.7245,
+        0.562,
+        0.3633
       ],
       "crack": [
-        0.22,
-        0.15,
-        0.1
+        0.2236,
+        0.1297,
+        0.0506
       ],
       "pit": [
-        0.35,
-        0.25,
-        0.17
+        0.3866,
+        0.2887,
+        0.1882
       ]
     },
     "material": {
@@ -29571,7 +29954,95 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 41.124854,
+            "fitted": 1.24843
+          },
+          "iterations": 60,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved+free+roam",
+          "judged": {
+            "fitted": 1.109911,
+            "author_solved": 10.953601,
+            "patches": 3,
+            "chosen": "generation 53's best"
+          },
+          "date": "2026-11-28",
+          "applied": "colours only: the fitted structure lost the network of cracks for tangled loops",
+          "values": {
+            "scale": 1.2799,
+            "variables.rock": [
+              0.7352,
+              0.4619,
+              0.3279
+            ],
+            "variables.rock2": [
+              0.6966,
+              0.3724,
+              0.1693
+            ],
+            "variables.patina": [
+              0.7245,
+              0.562,
+              0.3633
+            ],
+            "variables.crack": [
+              0.2236,
+              0.1297,
+              0.0506
+            ],
+            "variables.pit": [
+              0.3866,
+              0.2887,
+              0.1882
+            ],
+            "material.albedo.pattern.inputs.0.from": 0.14625,
+            "material.albedo.pattern.inputs.0.input.amount": 0.12833,
+            "material.normal.graph.inputs.0.inputs.1.inputs.0.input.amount": 0.12833,
+            "material.albedo.pattern.inputs.0.input.scale": 0.070958,
+            "material.normal.graph.inputs.0.inputs.1.inputs.0.input.scale": 0.070958,
+            "material.albedo.pattern.inputs.0.input.input.scale": 0.060776,
+            "material.normal.graph.inputs.0.inputs.1.inputs.0.input.input.scale": 0.060776,
+            "material.albedo.pattern.inputs.1.inputs.0": 0.77363,
+            "material.albedo.pattern.inputs.1.inputs.1.from": 0.30346,
+            "material.albedo.pattern.inputs.1.inputs.1.input.amount": 0.03902,
+            "material.normal.graph.inputs.0.inputs.1.inputs.1.inputs.1.input.amount": 0.03902,
+            "material.albedo.pattern.inputs.1.inputs.1.input.scale": 0.0093717,
+            "material.normal.graph.inputs.0.inputs.1.inputs.1.inputs.1.input.scale": 0.0093717,
+            "material.albedo.pattern.inputs.1.inputs.1.input.input.scale": 0.035327,
+            "material.normal.graph.inputs.0.inputs.1.inputs.1.inputs.1.input.input.scale": 0.035327,
+            "material.albedo.color_map.0.0": 0.5189,
+            "material.albedo.color_map.1.0": 1.066,
+            "material.albedo.color_map.0.1.pattern.from": 0.26225,
+            "material.albedo.color_map.0.1.pattern.to": 0.82504,
+            "material.albedo.color_map.0.1.pattern.input.scale": 0.0078806,
+            "material.normal.graph.inputs.1.inputs.1.input.scale": 0.0078806,
+            "material.albedo.color_map.0.1.pattern.input.smallest": 0.00043975,
+            "material.normal.graph.inputs.1.inputs.1.input.smallest": 0.00043975,
+            "material.albedo.color_map.0.1.color_map.0.0": 0.46685,
+            "material.albedo.color_map.0.1.color_map.1.0": 0.99924,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.from": 0.050085,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.to": 0.31924,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.input.scale": 0.025147,
+            "material.albedo.color_map.0.1.color_map.0.1.pattern.input.smallest": 0.0075025,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.0": 0.32625,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.1.0": 0.90979,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.0.inputs.0": 1.2341,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.0.inputs.1.scale": 0.11481,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.0.inputs.1.smallest": 0.0033437,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.1.scale": 0.010589,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.1.smallest": 0.00020381,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.2.inputs.0": 0.47689,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.2.inputs.1.scale": 0.001751,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.pattern.inputs.2.inputs.1.smallest": 0.00037398,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.0.0": -0.42154,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.1.0": -0.057302,
+            "material.albedo.color_map.0.1.color_map.0.1.color_map.0.1.color_map.2.0": 0.48905
+          }
+        }
       }
     ]
   }

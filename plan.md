@@ -3113,3 +3113,28 @@ Design:
 Assumed, to measure: the halves' rounds each cost about half (dispatches per round double, but
 each is half the paths); the picture is the same pixel for pixel, the halves' paths being the
 same paths in other queues.
+
+## 23. The rock material in the kernels
+
+Known (profiles of the GPU's host queue): on pebble-beach the procedural `rock` material is 39%
+of the host's shading, finding a hit's pebble 10%; after sections 21 and 22 the host's shading
+is what such a render waits on.
+
+Steps:
+1. `shared::rock`: the rock's noise (its seed's offset and octave rotation), cracks, pits,
+   flutes, the fractal and crackle relief, the bump's gradient, and its albedo before and after
+   the cross-bedding (layers and beds read from its tables), generic over the float. The
+   renderer's `Rock` calls it; checked bit for bit against the code it replaces at many points
+   before that is deleted. Cross-bedding stays the renderer's (`cross_beds` is the terrain's
+   too), between the two halves of the albedo.
+2. `Rock::flat`: a record for the kernels (`FlatMaterial::Rock`), for a rock without
+   cross-bedding, wetness (a film reflecting as a mirror) or crackle (hashed by the sine of large
+   arguments, which f32 can't follow): those stay the host's.
+3. `pathtrace::MAT_ROCK`: at the hit, the rock's albedo and bumped normal (its fractal detail
+   to the pixel's footprint, as the renderer's), shaded as Lambertian.
+4. A medium of several rocks by place (`procedural::rock::Assorted`: the pebbles) flattened
+   triangle by triangle, each its pebble's rock.
+
+Assumed, to measure: the kernels' f32 noise matches the renderer's to well within what the eye
+sees (the clouds' tests set the tolerance); pebble-beach leaves the host but for its wet
+pebbles, if any.

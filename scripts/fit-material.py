@@ -64,7 +64,8 @@ and `overlay`):
 
 A reference's `"view": "wall"` renders it on a vertical plane facing the camera, for scans of
 cliffs and walls (taken facing them, their up the scene's up); by default it is ground, seen
-from above.
+from above. A reference's `"rotate"` turns the scan by quarter turns anticlockwise before it
+is compared: a wood scanned with its grain across, for a preset whose grain runs up the wall.
 
 Fit it with `scripts/fit-material.py scree` (its first reference; `scree:1` the second): the
 scan is fetched into references/materials/ if it isn't there (fetch-material-reference.py), and
@@ -130,12 +131,16 @@ def srgb_to_linear(c):
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
+ROTATE = 0  # quarter turns of the scan, anticlockwise: a reference's "rotate", as its preset lies
+
+
 def load_reference(path, resolution, crop=None):
     """The reference albedo, sRGB-encoded in [0, 1], resampled to resolution square (averaged
     in linear light, as the render's pixels average it); or a crop of it, (x, y, width) as
-    fractions of its width."""
+    fractions of its width. Turned by `ROTATE` quarter turns first: a wood scanned with its grain
+    across, for a preset whose grain runs up."""
     im = np.asarray(Image.open(path).convert("RGB"), dtype=np.float64) / 255.
-    lin = srgb_to_linear(im)
+    lin = np.rot90(srgb_to_linear(im), ROTATE)
     if crop:
         n = min(lin.shape[:2])
         x, y, w = (int(round(c * n)) for c in crop)
@@ -150,6 +155,7 @@ def load_reference(path, resolution, crop=None):
 # width as fractions of the scan's width), one in each quadrant, so no one tile's lighting or
 # odd stone decides the fit.
 DETAIL = 0.25
+ROAM = 25  # how far a roaming fit's patches lie from the origin, in the scan's sizes
 DETAIL_TILES = [(0.125, 0.125, DETAIL), (0.625, 0.125, DETAIL), (0.125, 0.625, DETAIL), (0.625, 0.625, DETAIL)]
 
 
@@ -673,7 +679,7 @@ def put(obj, path, value):
     obj[path[-1]] = value
 
 
-def free_params(preset, taken=()):
+def free_params(preset, taken=(), hold=()):
     """Every number of a preset's graphs a fit can move, as spec params (`--free`): the sizes
     of its noises and cells (`scale`, `smallest`, a warp's `amount`, a bombing's `cell` and
     `size`; up to four times either way, on a log scale), roughness and jitter (within a
@@ -681,9 +687,20 @@ def free_params(preset, taken=()):
     thresholds, `transform`'s stretches, scalar variables (shares, densities: three times),
     a layer's coverage, and each colour map's stops (an offset and a stretch). Seeds and
     octave counts stay. Nodes of the same seed and value are one parameter: a cell pattern's
-    `id` and its `stones` must stay the same cells. `taken` are paths the spec already has."""
+    `id` and its `stones` must stay the same cells. `taken` are paths the spec already has;
+    `hold` (the reference's `"hold"`) names numbers to keep as written, each `{"node", "field",
+    "seed"}` (a missing key matches any): a size the scan shows plainly, which the search would
+    otherwise trade for a better palette."""
     params, tied = [], {}
     taken = {tuple(t) for t in taken}
+    # A bump ("normal") isn't rendered for a fit, so its numbers aren't searched; but where it
+    # repeats a node the albedo has (a stone's `height` beside its `mask`), it moves with it,
+    # or the fitted stones lose their relief.
+    bump, bumps = False, []
+
+    def held(node, k, seed):
+        return any(h.get("node", node) == node and h.get("field", k) == k and h.get("seed", seed) == seed
+                   for h in hold)
 
     def add(path, v, kind, key=None):
         if tuple(path) in taken or v == 0:
@@ -691,6 +708,8 @@ def free_params(preset, taken=()):
         if key is not None and key in tied:
             tied[key]["paths"].append(list(path))
             return
+        if bump:
+            return  # a bump's own numbers aren't searched: it isn't rendered (strip_relief)
         if kind == "length":
             p = {"min": abs(v) / 4., "max": abs(v) * 4., "log": True} if v > 0 else None
         elif kind == "factor":
@@ -720,9 +739,12 @@ def free_params(preset, taken=()):
             return
         node, seed = o.get("node"), o.get("seed")
         for k, v in o.items():
-            if k == "normal":
-                continue  # bump: not rendered for a fit (strip_relief)
+            if k == "normal" and not bump:
+                bumps.append((v, path + [k]))
+                continue  # walked after the rest, below
             here = path + [k]
+            if held(node, k, seed):
+                continue
             key = lambda: (node, k, seed, v) if seed is not None else None
             if k in ("scale", "smallest", "cell", "wavelength") and number(v) and node:
                 add(here, v, "length", key())
@@ -751,7 +773,7 @@ def free_params(preset, taken=()):
                         add(here + [i], x, "factor" if node == "multiply" else "offset")
             elif k == "color_map" and isinstance(v, list):
                 stops = [here + [i, 0] for i, e in enumerate(v) if isinstance(e, list) and number(e[0])]
-                if len(stops) >= 2 and not any(tuple(s) in taken for s in stops):
+                if len(stops) >= 2 and not bump and not any(tuple(s) in taken for s in stops):
                     params.append({"kind": "stops", "paths": stops, "free": "stops"})
             walk(v, here)
 
@@ -760,6 +782,9 @@ def free_params(preset, taken=()):
             add(["variables", name], v, "count")
     walk(preset.get("variables", {}), ["variables"])
     walk(preset.get("material", {}), ["material"])
+    bump = True
+    for v, path in bumps:
+        walk(v, path)
     return params
 
 
@@ -924,14 +949,15 @@ class Problem:
 
 def legal_bombing(o):
     """Bombing nodes' sizes kept as the parser takes them, [smallest, largest] and at most four
-    cells, however the free search has scaled the cell and the sizes apart."""
+    cells, however the free search has scaled the cell and the sizes apart (a little inside four,
+    so a recorded value rounded up stays legal)."""
     if isinstance(o, list):
         for x in o:
             legal_bombing(x)
     elif isinstance(o, dict):
         if o.get("node") == "bombing" and isinstance(o.get("size"), list) and len(o["size"]) == 2:
             cell = o.get("cell", 0.05)
-            a, b = sorted(min(float(v), 4. * cell) for v in o["size"])
+            a, b = sorted(min(float(v), 3.98 * cell) for v in o["size"])
             o["size"] = [a, b]
         for v in o.values():
             legal_bombing(v)
@@ -1055,22 +1081,25 @@ class ColourSolve:
         return out
 
 
-def scene(usage, library_path, size, resolution, samples, seed, view="ground", lighting="sun"):
+def scene(usage, library_path, size, resolution, samples, seed, view="ground", lighting="sun", offset=(0., 0.)):
     # A scan of a cliff was taken facing the cliff, its up the scene's up: seen as a wall (the
     # plane z = 0, from in front), so a preset's beds and streaks along y line up with it.
     # Lit by a sun behind the camera, of irradiance pi so a matte surface facing it shows its
     # albedo, under a black sky: each point's light is then exact (a white sky's is sampled,
     # and its noise, a tenth of the albedo at a sample a pixel, reads as grain to the spectra).
-    # The scans are albedo maps, lit evenly; `strip_relief` takes the preset's bump off so the
+    # The scans are albedo maps, lit evenly; `strip_relief` takes the preset's bump and gloss off so the
     # sun doesn't shade it (under the white sky a matte surface showed its albedo regardless).
     toward = [0, 0, -1] if view == "wall" else [0, 1, 0]
     light = {"background": [0, 0, 0], "sun": {"direction": toward, "intensity": math.pi, "angular_radius": 0.01}} \
         if lighting == "sun" else {"background": [1, 1, 1]}
+    # The camera looks at the surface `offset` (metres along it) from the origin: a fit that
+    # roams scores each generation on another patch, so it can't fit one patch's accidents.
+    ox, oy = offset
     if view == "wall":
-        camera = {"type": "orthographic", "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "height": size}
+        camera = {"type": "orthographic", "location": [ox, oy, -5], "lookat": [ox, oy, 0], "up": [0, 1, 0], "height": size}
         ground = {"type": "plane", "normal": [0, 0, -1], "distance": 0, "material": "M"}
     else:
-        camera = {"type": "orthographic", "location": [0, 5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "height": size}
+        camera = {"type": "orthographic", "location": [ox, 5, oy], "lookat": [ox, 0, oy], "up": [0, 0, 1], "height": size}
         ground = {"type": "plane", "y": 0, "material": "M"}
     return {
         "width": 2 * resolution, "height": 2 * resolution, "supersamples": samples, "max_depth": 2, "seed": seed,
@@ -1082,9 +1111,23 @@ def scene(usage, library_path, size, resolution, samples, seed, view="ground", l
     }
 
 
+def sig(x):
+    """x to five significant figures, as a fit records it: places would round a millimetre's
+    cell by a few percent, and could push a bombing's stones past the four cells it allows."""
+    return float("%.5g" % x) if isinstance(x, float) else x
+
+
 def strip_relief(o):
-    """o without its bump maps (every "normal" key)."""
+    """o without its bump maps (every "normal" key), and matte: a glossy layer (`plastic`, wet
+    sand and mud) seen straight down with the sun behind the camera mirrors the sun into it, a
+    white sheet the scan, an albedo map, never shows; so it is drawn as `lambertian` in its own
+    albedo, and a `conductor` in its `reflectance` (a named metal's, which the JSON doesn't
+    give, as mid grey)."""
     if isinstance(o, dict):
+        if o.get("type") == "plastic" and "albedo" in o:
+            return {"type": "lambertian", "albedo": strip_relief(o["albedo"])}
+        if o.get("type") == "conductor":  # a metal, likewise: drawn in its reflectance's colour
+            return {"type": "lambertian", "albedo": strip_relief(o.get("reflectance", [0.6, 0.6, 0.6]))}
         return {k: strip_relief(v) for k, v in o.items() if k != "normal"}
     if isinstance(o, list):
         return [strip_relief(v) for v in o]
@@ -1095,14 +1138,33 @@ class RenderFailed(Exception):
     """The renderer refused a candidate (a panic, say, at an extreme of its parameters)."""
 
 
+def resolve_variant(preset, library=None):
+    """A variant (a preset whose material is another preset, `{"type": "library", "name", ...}`,
+    its other fields setting that preset's variables, as a palette) as the base preset with those
+    variables set: so the fitting render can strip its gloss (`strip_relief` sees only the base's
+    materials), and a fit's paths into the variant's fields still reach it."""
+    m = preset.get("material", {})
+    if not (isinstance(m, dict) and m.get("type") == "library" and "name" in m):
+        return preset
+    library = library or json.load(open(os.path.join(ROOT, "src/material/library.json")))
+    base = json.loads(json.dumps(library[m["name"]]))
+    base["variables"] = dict(base.get("variables", {}),
+                             **{k: v for k, v in m.items() if k not in ("type", "name", "scale", "seed", "over")})
+    if "scale" in m or "scale" in preset:
+        base["scale"] = base.get("scale", 1.) * m.get("scale", 1.) * preset.get("scale", 1.)
+    return resolve_variant(base, library)
+
+
 def render(preset, usage, name, args, size, tmp, tag, linear=False):
     lighting = getattr(args, "lighting", "sun")
+    preset = resolve_variant(preset)
     if lighting == "sun":
         preset = strip_relief(preset)
     library_path = os.path.join(tmp, "library-%s.json" % tag)
     json.dump({name: preset}, open(library_path, "w"))
     path = os.path.join(tmp, "scene-%s.json" % tag)
-    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view, lighting), open(path, "w"))
+    json.dump(scene(usage, library_path, size, args.resolution, args.samples, args.seed, args.view, lighting,
+                    getattr(args, "offset", (0., 0.))), open(path, "w"))
     out = os.path.join(tmp, "render-%s.png" % tag)
     run = subprocess.run([args.rays, path, "--fresh", "-o", out], cwd=ROOT,
                          stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -1135,6 +1197,10 @@ def main():
                    help="search every number of the preset's graphs too (free_params), not only the spec's")
     a.add_argument("--no-solve", dest="solve", action="store_false",
                    help="search for the colours with the rest (as fits before ColourSolve did)")
+    a.add_argument("--fixed", dest="roam", action="store_false",
+                   help="score every candidate on the same patch (by default each generation is scored on another,"
+                        " and the fit chosen by its loss on patches it was never scored on)")
+    a.add_argument("--judges", type=int, default=3, help="fresh patches the final choice is scored on, when roaming")
     a.add_argument("--no-detail", dest="detail", action="store_false",
                    help="the whole scan only, without the detail view (half the renders)")
     args = a.parse_args()
@@ -1166,6 +1232,8 @@ def main():
     usage = {"type": "library", "name": name, **spec.get("usage", {})}
     size = float(spec["size"])
     args.view = spec.get("view", "ground")
+    global ROTATE
+    ROTATE = int(spec.get("rotate", 0))
     reference = load_reference(os.path.join(base, spec["reference"]), args.resolution)
     details = [load_reference(os.path.join(base, spec["reference"]), args.resolution, t) for t in DETAIL_TILES] \
         if args.detail else []
@@ -1174,7 +1242,7 @@ def main():
     loss = FloorLoss(details) if args.loss == "floor" else FitLoss() if args.structure else PatchLoss()
     if args.free:
         taken = [p["path"] for p in spec["params"] if "path" in p]
-        extra = free_params(preset, taken)
+        extra = free_params(preset, taken, spec.get("hold", ()))
         spec = dict(spec, params=spec["params"] + extra)
         print("free: %d more parameters (%s)" % (len(extra), ", ".join(
             "%s %d" % (k, sum(p["free"] == k for p in extra)) for k in sorted({p["free"] for p in extra}))), file=sys.stderr)
@@ -1250,7 +1318,15 @@ def main():
                 log.append((it + 1, len(xs), best[0], best[0], round(time.time() - t0, 1)))
                 print("round %d: best %.5f at %.4f" % (it + 1, best[0], best[1][0]), file=sys.stderr)
                 lo, hi, step = max(best[1][0] - step, 0.), min(best[1][0] + step, 1.), step / 4
+        # Roaming: each generation's candidates share a patch, a new one each generation, up to
+        # ROAM sizes from the origin, so all of a generation are compared alike but none can fit
+        # one patch's accidents. A generation's best is then partly its patch's luck, so the fit is
+        # chosen afterwards from the generations' bests by their loss on patches no generation saw.
+        roam = np.random.default_rng(args.seed + 7919)
+        leaders = []  # (generation's best loss, x)
         for it in range(args.iterations if es else 0):
+            if args.roam:
+                args.offset = tuple(float(v) for v in roam.uniform(-ROAM * size, ROAM * size, 2))
             xs = es.ask()
             results = []
             for k, x in enumerate(xs):
@@ -1262,10 +1338,45 @@ def main():
                     results.append((1e6, None, None))
             es.tell(xs, [r[0] for r in results])
             k = int(np.argmin([r[0] for r in results]))
+            leaders.append((results[k][0], np.array(xs[k]), it))
             if results[k][0] < best[0]:
                 best = (results[k][0], np.array(xs[k]), results[k][1], results[k][2])
             log.append((it + 1, es.countevals, best[0], results[k][0], round(time.time() - t0, 1)))
             print("iteration %d: best %.5f (this generation %.5f)" % (it + 1, best[0], results[k][0]), file=sys.stderr)
+        judged = None
+        if args.roam and leaders:
+            # The judges: patches drawn apart from the generations'. Candidates: CMA-ES's mean and
+            # the best of the generations in the search's last half, a few of the lowest.
+            judges = [tuple(float(v) for v in np.random.default_rng(args.seed + 104729 + j).uniform(-ROAM * size, ROAM * size, 2))
+                      for j in range(args.judges)]
+            late = sorted([l for l in leaders if l[2] >= len(leaders) // 2], key=lambda l: l[0])[:3]
+            candidates = [("author's, colours solved", x0)] + [("generation %d's best" % (l[2] + 1), l[1]) for l in late] \
+                + [("the search's mean", np.array(es.result.xfavorite))]
+
+            def judge(x, label):
+                scores, last = [], None
+                for j, o in enumerate(judges):
+                    args.offset = o
+                    try:
+                        last = evaluate(x, "j%d" % j)
+                    except RenderFailed:
+                        return float("inf"), None
+                    scores.append(last[0])
+                print("judged on %d fresh patches: %.5f (%s)" % (len(judges), np.mean(scores), label), file=sys.stderr)
+                return float(np.mean(scores)), last
+
+            verdicts = [(judge(x, label), label, x) for label, x in candidates]
+            author = verdicts[0][0][0]
+            (score_, last), label, x = min(verdicts[1:], key=lambda v: v[0][0])
+            if score_ < author:
+                best = (score_, x, last[1], last[2])
+            else:
+                label, a_last = "the author's, colours solved", verdicts[0][0][1]
+                best = (author, x0, a_last[1], a_last[2])
+            judged = {"fitted": round(score_ if score_ < author else author, 6), "author_solved": round(author, 6),
+                      "patches": len(judges), "chosen": label}
+            print("chosen: %s" % label, file=sys.stderr)
+            args.offset = (0., 0.)
         _, fitted_usage = problem.make(best[1], usage)
         fitted = best[3]
         if solver is not None:
@@ -1274,7 +1385,8 @@ def main():
             imgs = rendered(fitted, fitted_usage, "fitted")
             best = (score(imgs), best[1], imgs, fitted)
             print("fitted, rendered: loss %.5f (composed %.5f)" % (best[0], composed), file=sys.stderr)
-        json.dump({"library": {name: fitted}, "material": fitted_usage, "loss": {"start": start_loss, "fitted": best[0]}},
+        json.dump({"library": {name: fitted}, "material": fitted_usage, "loss": {"start": start_loss, "fitted": best[0]},
+                   **({"judged": judged} if judged else {})},
                   open(os.path.join(args.output, "fitted.json"), "w"), indent=1)
         with open(os.path.join(args.output, "log.csv"), "w", newline="") as f:
             csv.writer(f).writerows(log)
@@ -1294,20 +1406,21 @@ def main():
                 if "paths" in p:
                     for path in p["paths"]:
                         v = get(fitted, path)
-                        values[".".join(map(str, path))] = [round(c, 4) for c in v] if isinstance(v, list) else round(v, 4)
+                        values[".".join(map(str, path))] = [sig(c) for c in v] if isinstance(v, list) else sig(v)
                     continue
                 if "field" in p:
-                    values[p["field"]] = round(fitted_usage[p["field"]], 4)
+                    values[p["field"]] = sig(fitted_usage[p["field"]])
                 else:
                     v = get(fitted, p["path"])
-                    values[".".join(map(str, p["path"]))] = [round(c, 4) for c in v] if isinstance(v, list) else round(v, 4)
+                    values[".".join(map(str, p["path"]))] = [sig(c) for c in v] if isinstance(v, list) else sig(v)
             library = json.load(open(library_path))
             name, index = reference_at
             library[name]["references"][index]["fit"] = {
                 "loss": {"start": round(start_loss, 6), "fitted": round(best[0], 6)},
                 "iterations": args.iterations, "resolution": args.resolution, "samples": args.samples,
                 "loss_kind": ("floor" if args.loss == "floor" else "structure" if args.structure else "colour") + ("+detail" if args.detail else "")
-                + ("+solved" if solver else ""),
+                + ("+solved" if solver else "") + ("+free" if args.free else "") + ("+roam" if judged else ""),
+                **({"judged": judged} if judged else {}),
                 "date": time.strftime("%Y-%m-%d"), "applied": False, "values": values}
             with open(library_path, "w") as f:
                 json.dump(library, f, indent=2)

@@ -312,13 +312,18 @@ impl Layer {
 
     /// The layers of a world's `patches` (finest first) and its `globe`; a close level
     /// (`close`, the finest) drawn with the closed basins of the patch around it
-    /// (`SimFields::take_basins`).
+    /// (`SimFields::take_basins`), and its ground classes.
     pub fn of_world(patches: Vec<Terrain>, globe: Option<Terrain>, close: bool, min_river_width: f64) -> Vec<Layer> {
         let n = patches.len();
         let mut layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, min_river_width)).collect();
         if close && n >= 2 {
             let (fine, around) = layers.split_at_mut(1);
             fine[0].fields.take_basins(&fine[0].domain, &around[0].fields, &around[0].domain);
+            // And what covers its ground: its own simulation, with its edges held, leaves more or
+            // less sediment than the patch around it does over the same ground, so its classes
+            // would stand out as a square of their own.
+            let (fine, around) = (&mut fine[0], &around[0]);
+            fine.class = fine.domain.dirs.iter().map(|d| around.class_at(d)).collect();
         }
         layers
     }
@@ -1302,16 +1307,20 @@ impl Ground {
         let r = self.frame.radius;
         // What the simulation left here, looked up within half a cell of the point so that
         // over many samples the classes blend rather than show the grid.
-        let class = match self.layer_at(&d) {
+        let q = d * r;
+        let n = |s: f64, o: f64| self.noise.fbm(q.x / s + o * 17., q.y / s, q.z / s, 4, 0.5, 2.);
+        // From a layer chosen by the layers' blend there, so that where one patch gives way to
+        // the one around it (each with its own sediment, by its own simulation) the classes
+        // mix over the blend, along a ragged line, rather than switch along its square edge.
+        let threshold = (0.5 * rand() + 0.5 + 2. * (n(300., 0.47) - 0.5)).clamp(0.02, 0.98);
+        let class = match self.layers.iter().find(|l| l.weight(&d) > threshold).or_else(|| self.layer_at(&d)) {
             Some(l) => {
                 let (t1, t2) = Relief::tangents(&d);
                 let j = (d + (t1 * (rand() - 0.5) + t2 * (rand() - 0.5)) * l.spacing / r).normalize();
-                self.layer_at(&j).map_or(LAND, |l| l.class_at(&j))
+                if l.contains(&j) { l.class_at(&j) } else { self.layer_at(&j).map_or(LAND, |l| l.class_at(&j)) }
             }
             None => LAND,
         };
-        let q = d * r;
-        let n = |s: f64, o: f64| self.noise.fbm(q.x / s + o * 17., q.y / s, q.z / s, 4, 0.5, 2.);
         // Fine variation, seen close up.
         let grain = 0.85 + 0.3 * n(7., 0.21);
         let mix = |a: Color, b: Color, t: f64| { let t = t.clamp(0., 1.); a * (1. - t) + b * t };

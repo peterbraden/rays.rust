@@ -546,6 +546,19 @@ stone_block_wall (rock_wall_08: rough grey blocks in courses; 220 → 3.95). The
 boards and bark are fitted as walls (`"view": "wall"`); bricks there are moved a quarter of
 their depth off the wall's plane, as alternate courses are offset by half of it.
 
+And nine more, fitted the same way: hessian (hessian_230: an open weave of jute threads, each
+direction a `wave` over a `gradient`, the second along y and z together so the weave holds on
+floors and walls; 34.5 → 9.44), rusty_corrugated_iron (rusty_corrugated_iron: ridges in the
+bump, rust streaked down the sheet; 1057 → 0.92), cracked_red_ground (cracked_red_ground:
+mottled red-brown earth with faint cracks; 483 → 4.16), pebble_concrete
+(pebble_embedded_concrete: grey cement studded with small pebbles, washed paler in streaks; 419
+→ 7.82), mossy_cobbles (mossy_cobblestone: grey and buff setts with moss in every joint; 45.0 →
+1.76), snowy_asphalt (asphalt_snow: tarmac under broken, lacy snow; 32.5 → 10.2), wood_shingles
+(roof_slates_02: silver-grey split shakes in overlapping courses, each course shadowed by a
+`ramp` wave; 22.5 → 4.19), eucalyptus_bark (eucalyptus_bark: smooth brown bark peeling to olive
+and grey; 732 → 6.91) and lunar_regolith (moon_01: faintly mottled grey dust with soft craters
+in the bump; 37.8 → 29.5, the scan nearly featureless, so little for the loss to compare).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

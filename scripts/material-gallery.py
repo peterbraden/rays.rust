@@ -11,7 +11,9 @@ hills a few hundred metres across from above, so it is seen from a metre to the 
 "bark" (a trunk). Overlays that are natural are shown over "over_for_landscape" in the library
 (default granite_outcrop; "plain" for a plain grey rock) in those views.
 
-    scripts/material-gallery.py [--size 320] [--samples 64] [--only name,...] [--library FILE] [-o docs/material-library.jpg]
+    scripts/material-gallery.py [--size 320] [--samples 64] [--only name,...] [--library FILE] [--objects] [-o docs/material-library.jpg]
+
+--objects shows every preset on the block and sphere, ground and bark included.
 
 --library adds a file of presets (library.json's form) over the built-in ones, as a scene's
 "library" does: presets are read at run time, so one can be tuned there and re-rendered
@@ -107,6 +109,7 @@ def main():
     a.add_argument("--columns", type=int, default=7)
     a.add_argument("--only", default="")
     a.add_argument("--library", default="", help="a file of presets over the built-in ones")
+    a.add_argument("--objects", action="store_true", help="every preset on the block and sphere, whatever its \"show\"")
     a.add_argument("--rays", default=os.path.join(ROOT, "target/release/rays"))
     a.add_argument("-o", "--output", default=os.path.join(ROOT, "docs/material-library.jpg"))
     args = a.parse_args()
@@ -123,7 +126,7 @@ def main():
         for n in names:
             path = os.path.join(tmp, n + ".json")
             p = library[n]
-            show = p.get("show", "object")
+            show = "object" if args.objects else p.get("show", "object")
             m = {"type": "library", "name": n}
             if p.get("overlay"):
                 m["over"] = BASES.get(n, PALE) if show == "object" else (PLAIN_ROCK if p.get("over_for_landscape") == "plain" else {"type": "library", "name": p.get("over_for_landscape", "granite_outcrop")})

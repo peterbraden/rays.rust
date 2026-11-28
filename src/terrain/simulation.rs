@@ -862,7 +862,14 @@ impl Terrain {
                 let fresh = (self.sediment[i] - self.settled.get(i).copied().unwrap_or(self.sediment[i])).max(0.);
                 (self.sand[i] + a.sand_fraction.clamp(0., 1.) * fresh).min(self.sediment[i])
             }).collect();
-            let change = crate::terrain::aeolian::blow(&self.domain, &self.surface(), &loose, &self.precipitation, &sink, self.wind, &a, dt);
+            // (Its rain as plants feel it: where it is cold little evaporates, and less rain
+            // holds the ground.)
+            let surface = self.surface();
+            let rain: Vec<f64> = match &self.temperature {
+                Some(t) => (0..n).map(|i| crate::terrain::aeolian::effective_rain(self.precipitation[i], t[i] - crate::terrain::climate::LAPSE_RATE * surface[i].max(0.))).collect(),
+                None => self.precipitation.clone(),
+            };
+            let change = crate::terrain::aeolian::blow(&self.domain, &surface, &loose, &rain, &sink, self.wind, &a, dt);
             let before = self.bed.clone();
             for (b, c) in self.bed.iter_mut().zip(&change) { *b += c; }
             self.record(&before);

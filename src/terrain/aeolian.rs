@@ -51,7 +51,21 @@ impl Default for AeolianParams {
     }
 }
 
-/// How bare the ground is of plants where `rain` mm/yr falls, 0 to 1.
+/// Rain that is as wet for plants as `rain` mm/yr is where the annual mean temperature is
+/// `mean` °C, in a hot desert's terms: scaled by Köppen's threshold for a dry climate
+/// (`climate::Local::dry_threshold`, 20 T + 140 mm, at least 100), against its value at 25 °C.
+/// Little evaporates where it is cold, so the same rain grows plants there that it doesn't in
+/// a hot desert: the dry taiga of Yakutia, with 200-300 mm a year, is forest, and its sand
+/// is held (the `vegetation` band is for the hot deserts where dunes were measured).
+pub fn effective_rain(rain: f64, mean: f64) -> f64 {
+    rain * HOT_DRY_THRESHOLD / (20. * mean + 140.).max(100.)
+}
+
+/// Köppen's dry threshold at 25 °C, mm/yr.
+const HOT_DRY_THRESHOLD: f64 = 20. * 25. + 140.;
+
+/// How bare the ground is of plants where `rain` mm/yr falls (in a hot desert's terms,
+/// `effective_rain`), 0 to 1.
 pub fn bare(rain: f64, p: &AeolianParams) -> f64 {
     let (a, b) = p.vegetation;
     let t = ((rain - a) / (b - a).max(1e-9)).clamp(0., 1.);
@@ -162,6 +176,16 @@ mod tests {
         assert!((0..n).all(|k| c[k] >= -loose[k] - 1e-9));
         let green = blow(&d, &h, &loose, &vec![600.; n], &sink, (1., 0.), &p, 500.);
         assert!(green.iter().all(|&x| x == 0.));
+    }
+
+    #[test]
+    fn test_cold_dry_ground_is_held_by_plants() {
+        // 250 mm a year: a third bare in a hot desert, held in the taiga.
+        let p = AeolianParams::default();
+        assert!(bare(effective_rain(250., 25.), &p) > 0.3);
+        assert!(bare(effective_rain(250., 0.), &p) == 0.);
+        assert!(bare(effective_rain(150., -5.), &p) == 0.);
+        assert_eq!(effective_rain(300., 25.), 300.);
     }
 
     #[test]

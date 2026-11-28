@@ -286,7 +286,10 @@ rubble grown over below the treeline, and graphs read it as `till`.
 In deserts the wind takes the sand out of freshly laid alluvium, leaving its gravel as a lag
 that armours the ground (desert pavement), and carries it along the prevailing wind, dropping
 it where the wind slackens: in the lee of ranges and ridges, and where plants take hold
-(`terrain::aeolian`, `aeolian` in a scene; `Terrain::sand`, a `sand` field). At full scale
+(`terrain::aeolian`, `aeolian` in a scene; `Terrain::sand`, a `sand` field). How dry is dry
+follows the temperature: rain is weighed against Köppen's threshold for a dry climate
+(`aeolian::effective_rain`), so a cold forest with 250 mm a year holds its ground where a hot
+desert with the same rain blows. At full scale
 the sand is drawn as dunes: ridges about 400 m apart across the wind, with gentle windward
 slopes and slip faces down their lee, breaking into barchans where the sand is thin
 (`Relief::dunes`). Real sand seas gather over hundreds of kilometres and millions of years,

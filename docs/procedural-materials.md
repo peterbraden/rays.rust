@@ -597,6 +597,16 @@ paper with faint ribs; 779 → 29.0). A `checker` is moved half a cell off the g
 wall's planes, so neither lies on a boundary. The regular weaves score high only because the
 loss can't line a strict lattice up with the photograph's; they look as their scans do.
 
+And six more from ambientCG: scaly_bark (Bark014: elongated reddish plates, stretched cells,
+with moss in the fissures; 18.6 → 7.73), lawn (Grass004: two layers of thin `leaf` sprites as
+blades; 831 → 5.68), oak_floorboards (WoodFloor051: long boards, a flat `brick`, staggered;
+33.3 → 4.94), road_markings (Road007: asphalt with a dashed centre line and edge lines 3 m out,
+`triangle` waves across the road for the lines and a `square` wave along it for the dashes;
+1830 → 54.1, its colours only, as the fitted size moved the edge lines out of the frame),
+lichen_crusted_rock (Rock045: buff rock with `disc` rosettes of lichen and green crust; 93.8 →
+24.9) and crushed_stone (Gravel020: angular grey chippings in two layers of `stone` sprites;
+440 → 3.26).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

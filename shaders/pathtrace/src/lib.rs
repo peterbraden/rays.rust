@@ -167,6 +167,11 @@ pub const FLAG_SUN: u32 = 4;
 pub const FLAG_AERIAL: u32 = 8;
 /// The air along a camera ray is tested for shadow (`crepuscular_samples`): crepuscular rays.
 pub const FLAG_CREPUSCULAR: u32 = 16;
+/// A block's paths in two halves, by row, each with queues of its own, so that the host can
+/// shade one's waiting paths while the device runs the other's rounds (the renderer's
+/// `gpu::Half`): `start_paths` starts only the slots of its half's rows, even or odd.
+pub const FLAG_ROWS_EVEN: u32 = 32;
+pub const FLAG_ROWS_ODD: u32 = 64;
 /// `Prim::info.x`.
 pub const PRIM_TRIANGLE: u32 = 0;
 pub const PRIM_SPHERE: u32 = 1;
@@ -4524,8 +4529,12 @@ pub fn start_paths(
     if j >= slots(params) {
         return;
     }
-    let ray = rays[j as usize];
     let pixel = j % (params.dims.x * params.dims.y);
+    let odd = (pixel / params.dims.x) % 2 == 1;
+    if (params.offs2.w & FLAG_ROWS_EVEN != 0 && odd) || (params.offs2.w & FLAG_ROWS_ODD != 0 && !odd) {
+        return;
+    }
+    let ray = rays[j as usize];
     let sample = if ray.d.w >= 0.5 { ray.d.w as u32 - 1 } else { 0 };
     let path = PathState::start(pixel, sample, params.seed.x, &ray);
     paths[j as usize] = path;

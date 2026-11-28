@@ -122,19 +122,17 @@ pub struct GpuRenderer {
     /// The paths started from their camera rays, and the first round's queue
     /// (`pathtrace::start_paths`), in a bind group of their own.
     start_pipeline: wgpu::ComputePipeline,
-    start_group: wgpu::BindGroup,
     rays_buffer: wgpu::Buffer,
-    /// The scene and the paths, for rounds reading the queue's side 0 and its side 1: they
-    /// differ in their parameters (`Params::seed.z`).
-    round_groups: [wgpu::BindGroup; 2],
     add_group: wgpu::BindGroup,
     params: Params,
-    params_buffers: [wgpu::Buffer; 2],
-    /// The two queues of paths (`pathtrace::queue`), and the buffer each round's dispatch is
-    /// read from: the header of the queue it reads, copied there, as a buffer bound for
-    /// writing can't also be a dispatch's arguments. `empty_header` resets a side.
-    queue_buffer: wgpu::Buffer,
-    dispatch_buffer: wgpu::Buffer,
+    /// The block's halves (`Half`): two where the scene has materials the host shades, so
+    /// that the host shades one's paths while the device runs the other's rounds; else one,
+    /// the whole block.
+    halves: Vec<Half>,
+    /// The kernels that gather the paths waiting for the host and scatter them back
+    /// (`pathtrace::gather_host`, `scatter_host`), where it shades any.
+    host_kernels: Option<(wgpu::ComputePipeline, wgpu::ComputePipeline)>,
+    /// `empty_header` resets a side of a queue.
     empty_header: wgpu::Buffer,
     paths_buffer: wgpu::Buffer,
     accum_buffer: wgpu::Buffer,
@@ -145,8 +143,6 @@ pub struct GpuRenderer {
     rounds_buffer: wgpu::Buffer,
     /// The image, then the rounds, read together.
     readback: wgpu::Buffer,
-    /// Where the scene has materials the host shades (`host`): what serves its queue.
-    host_queue: Option<HostQueue>,
     /// The most samples of each pixel a pass may carry at once (`pathtrace::slots`): what the
     /// wavefront's buffers have room for, within `WAVEFRONT_BUDGET`.
     pub lanes: usize,
@@ -168,13 +164,31 @@ pub struct GpuRenderer {
     pub origin: Vector3<f64>,
 }
 
-/// What serves the host's queue (`host`; `GpuRenderer::serve_host`): the kernels that gather
-/// the waiting paths side by side and scatter them back once shaded (`pathtrace::gather_host`,
-/// `scatter_host`), the buffer they are gathered in, the dispatch over the host's queue (a
-/// copy of its header), and what is read: that header, then the gathered paths.
+/// A block's half (plan.md section 22): its rows (`pathtrace::FLAG_ROWS_EVEN`, `FLAG_ROWS_ODD`,
+/// or 0 for every row), and what of the wavefront is its own: its parameters, its queues and
+/// what reads them. The paths, the sky queries, the camera rays and the image are shared, the
+/// halves' slots being apart, so the halves together cost little more memory than one.
+struct Half {
+    rows: u32,
+    /// Its parameters for rounds reading the queue's side 0 and its side 1 (`Params::seed.z`).
+    params_buffers: [wgpu::Buffer; 2],
+    /// The two queues of paths and the host's (`pathtrace::queue`), and the buffer each
+    /// round's dispatch is read from: the header of the queue it reads, copied there, as a
+    /// buffer bound for writing can't also be a dispatch's arguments.
+    queue_buffer: wgpu::Buffer,
+    dispatch_buffer: wgpu::Buffer,
+    /// The scene and the paths, for rounds reading side 0 and side 1.
+    round_groups: [wgpu::BindGroup; 2],
+    start_group: wgpu::BindGroup,
+    /// Where the scene has materials the host shades (`host`): what serves its queue.
+    host: Option<HostQueue>,
+}
+
+/// What serves a half's host queue (`host`; `GpuRenderer::request_host`, `serve_host`): the
+/// buffer the waiting paths are gathered in side by side and scattered back from once shaded,
+/// the dispatch over the host's queue (a copy of its header), and what is read: that header,
+/// then the gathered paths.
 struct HostQueue {
-    gather: wgpu::ComputePipeline,
-    scatter: wgpu::ComputePipeline,
     /// The paths, the queues and `gathered`; the second with the parameters under which a
     /// kernel's appends go to side 0 of the queue, where the next rounds begin.
     groups: [wgpu::BindGroup; 2],
@@ -247,6 +261,14 @@ impl GpuRenderer {
     /// Upload the flattened scene, or say why the GPU can't render it. Async, for a browser,
     /// whose WebGPU can't be waited on.
     pub async fn create(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
+        // (`RAYS_GPU_HALVES=1` keeps a block whole, to compare.)
+        let halves = if std::env::var("RAYS_GPU_HALVES").is_ok_and(|v| v == "1") { 1 } else { 2 };
+        Self::create_with(s, flat, halves).await
+    }
+
+    /// `create`, with a block in `halves` (1 or 2) where the scene has materials the host
+    /// shades (`Half`); otherwise it is whole.
+    pub async fn create_with(s: &Scene, flat: &FlatScene, halves: usize) -> Result<GpuRenderer, String> {
         let mut setup = Vec::new();
         let mut clock = web_time::Instant::now();
         let mut lap = |setup: &mut Vec<(&'static str, f64)>, what: &'static str| {
@@ -435,18 +457,6 @@ impl GpuRenderer {
         let materials_buffer = storage("materials", bytemuck::cast_slice(&materials));
         let lights_buffer = storage("lights", bytemuck::cast_slice(&lights));
         let tables_buffer = storage("tables", bytemuck::cast_slice(&tables));
-        let params_buffers = [0, 1].map(|_| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("params"), contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        }));
-        let queue_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("queues"), size: (pathtrace::QUEUE_HEADER as u64 + 3 * slots) * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        let dispatch_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("dispatch"), size: 16,
-            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
         let empty_header = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("empty queue"), contents: bytemuck::cast_slice(&pathtrace::EMPTY_QUEUE), usage: wgpu::BufferUsages::COPY_SRC,
         });
@@ -480,23 +490,53 @@ impl GpuRenderer {
         if ray_query {
             lap(&mut setup, "the acceleration structures");
         }
-        let round_groups = [0, 1].map(|side| {
-            #[allow(unused_mut)]
-            let mut entries = vec![entry(0, &params_buffers[side]), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
-                                   entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &queue_buffer),
-                                   entry(8, &queries_buffer)];
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(a) = &acceleration {
-                entries.push(wgpu::BindGroupEntry { binding: pathtrace::ray_query::BINDING, resource: wgpu::BindingResource::AccelerationStructure(&a.tlas) });
-            }
-            device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("scene"), layout: &layout, entries: &entries })
+        let host_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("host"),
+            entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, write), binding(2, write), binding(3, write)],
         });
-        let host_queue = any_host.then(|| {
-            let host_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("host"),
-                entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, write), binding(2, write), binding(3, write)],
+        let host_kernels = any_host.then(|| (kernel("gather_host", &host_layout), kernel("scatter_host", &host_layout)));
+        // Two halves where the host shades: by row, even and odd.
+        let halves: Vec<u32> = if any_host && halves > 1 {
+            vec![pathtrace::FLAG_ROWS_EVEN, pathtrace::FLAG_ROWS_ODD]
+        } else {
+            vec![0]
+        };
+        // A half's most slots: its rows' (the even ones, if they are more).
+        let half_slots = if halves.len() > 1 { s.image.height.div_ceil(2) as u64 * s.image.width as u64 * lanes as u64 } else { slots };
+        let halves: Vec<Half> = halves.into_iter().map(|rows| {
+            let mut own = params;
+            own.offs2.w |= rows;
+            let params_buffers = [0, 1].map(|_| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("params"), contents: bytemuck::bytes_of(&own),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }));
+            let queue_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("queues"), size: (pathtrace::QUEUE_HEADER as u64 + 3 * slots) * 4,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
             });
-            let size = slots * std::mem::size_of::<PathState>() as u64;
+            let dispatch_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("dispatch"), size: 16,
+                usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            });
+            let round_groups = [0, 1].map(|side| {
+                #[allow(unused_mut)]
+                let mut entries = vec![entry(0, &params_buffers[side]), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
+                                       entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &queue_buffer),
+                                       entry(8, &queries_buffer)];
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(a) = &acceleration {
+                    entries.push(wgpu::BindGroupEntry { binding: pathtrace::ray_query::BINDING, resource: wgpu::BindingResource::AccelerationStructure(&a.tlas) });
+                }
+                device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("scene"), layout: &layout, entries: &entries })
+            });
+            // Side 1's parameters: `start_paths` appends to side 0, which the first round reads.
+            let start_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("start"),
+                layout: &start_layout,
+                entries: &[entry(0, &params_buffers[1]), entry(1, &rays_buffer), entry(2, &paths_buffer), entry(3, &queue_buffer)],
+            });
+            let host = any_host.then(|| {
+            let size = half_slots * std::mem::size_of::<PathState>() as u64;
             let gathered = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("gathered"), size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
@@ -514,33 +554,27 @@ impl GpuRenderer {
                 layout: &host_layout,
                 entries: &[entry(0, &params_buffers[side]), entry(1, &paths_buffer), entry(2, &queue_buffer), entry(3, &gathered)],
             }));
-            HostQueue {
-                gather: kernel("gather_host", &host_layout), scatter: kernel("scatter_host", &host_layout), groups, gathered, dispatch, readback,
-                guess: std::sync::atomic::AtomicUsize::new(pixels as usize),
-            }
-        });
+            HostQueue { groups, gathered, dispatch, readback, guess: std::sync::atomic::AtomicUsize::new(pixels as usize) }
+            });
+            Half { rows, params_buffers, queue_buffer, dispatch_buffer, round_groups, start_group, host }
+        }).collect();
         let add_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("image"),
             layout: &add_layout,
-            entries: &[entry(0, &params_buffers[0]), entry(1, &paths_buffer), entry(2, &accum_buffer)],
-        });
-        // Side 1's parameters: `start_paths` appends to side 0, which the first round reads.
-        let start_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("start"),
-            layout: &start_layout,
-            entries: &[entry(0, &params_buffers[1]), entry(1, &rays_buffer), entry(2, &paths_buffer), entry(3, &queue_buffer)],
+            entries: &[entry(0, &halves[0].params_buffers[0]), entry(1, &paths_buffer), entry(2, &accum_buffer)],
         });
         let mut buffers: Vec<(&'static str, u64)> = vec![("prims", prims_buffer.size()), ("nodes", nodes_buffer.size()),
             ("materials", materials_buffer.size()), ("lights", lights_buffer.size()), ("tables", tables_buffer.size()),
-            ("params", 2 * params_buffers[0].size()), ("queues", queue_buffer.size()), ("paths", paths_buffer.size()),
+            ("params", 2 * halves.len() as u64 * halves[0].params_buffers[0].size()), ("queues", halves.len() as u64 * halves[0].queue_buffer.size()), ("paths", paths_buffer.size()),
             ("camera rays", rays_buffer.size()), ("sky queries", queries_buffer.size()), ("accum", accum_buffer.size()),
             ("rounds", rounds_buffer.size()), ("readback", readback.size())];
-        if let Some(h) = &host_queue {
-            buffers.extend([("host gathered", h.gathered.size()), ("host readback", h.readback.size())]);
+        if let Some(h) = &halves[0].host {
+            let n = halves.len() as u64;
+            buffers.extend([("host gathered", n * h.gathered.size()), ("host readback", n * h.readback.size())]);
         }
-        Ok(GpuRenderer { device, queue, buffers, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline, start_group, rays_buffer,
-            round_groups, add_group, params, params_buffers,
-            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name,
+        Ok(GpuRenderer { device, queue, buffers, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline, rays_buffer,
+            add_group, params, halves, host_kernels,
+            empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, lanes: lanes as usize, block: Default::default(), adapter_name,
             #[cfg(not(target_arch = "wasm32"))]
             acceleration,
             timers, setup, origin })
@@ -577,11 +611,11 @@ impl GpuRenderer {
 
     /// `dispatch_block` from rays made already (`make_rays`).
     fn dispatch_rays(&mut self, rays: BlockRays) {
-        assert!(self.host_queue.is_none(), "a scene with materials the host shades takes its passes through block_with_host");
+        assert!(self.host_kernels.is_none(), "a scene with materials the host shades takes its passes through block_with_host");
         let slot = self.begin_pass_with(rays);
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.encode_start(&mut encoder);
-        self.encode_rounds(&mut encoder, slot);
+        self.encode_start(&mut encoder, 0);
+        self.encode_rounds(&mut encoder, 0, slot);
         self.encode_add(&mut encoder);
         self.queue.submit(Some(encoder.finish()));
     }
@@ -594,31 +628,38 @@ impl GpuRenderer {
         self.block_with_host_rays(s, flat, first, rays).await
     }
 
-    /// `block_with_host` from rays made already (`make_rays`).
+    /// `block_with_host` from rays made already (`make_rays`). With two halves (`Half`), each
+    /// half's read of its host queue is queued after its own rounds and before the other's
+    /// next ones, so that the host shades one half's paths while the device runs the other's.
     async fn block_with_host_rays(&mut self, s: &Scene, flat: &FlatScene, first: &[usize], rays: BlockRays) -> Result<(), String> {
         let slot = self.begin_pass_with(rays);
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.encode_start(&mut encoder);
-        self.encode_rounds(&mut encoder, slot);
-        self.queue.submit(Some(encoder.finish()));
-        while self.serve_host(s, flat, first).await? {
-            let rounds = self.rounds();
-            let slot = {
-                let mut block = self.block.lock().unwrap();
-                (block.counted < COUNTED_PASSES).then(|| {
-                    block.counted += 1;
-                    let run = block.counted - 1;
-                    block.after_host.push(run);
-                    run * rounds
-                })
-            };
+        let n = self.halves.len();
+        let mut reads = Vec::with_capacity(n);
+        for h in 0..n {
             let mut encoder = self.device.create_command_encoder(&Default::default());
-            if let Some(slot) = slot {
-                // How many paths these rounds start with: those the host sent on.
-                encoder.copy_buffer_to_buffer(&self.queue_buffer, 12, &self.rounds_buffer, 4 * slot as u64, 4);
-            }
-            self.encode_rounds(&mut encoder, slot);
+            self.encode_start(&mut encoder, h);
+            // (The other half's first rounds counted as the pass's too.)
+            let slot = if h == 0 { slot } else { self.run_slot(false) };
+            self.encode_rounds(&mut encoder, h, slot);
             self.queue.submit(Some(encoder.finish()));
+            reads.push(Some(self.request_host(h)));
+        }
+        while reads.iter().any(Option::is_some) {
+            for h in 0..n {
+                let Some(read) = reads[h].take() else { continue };
+                if !self.serve_host(s, flat, first, h, read).await? {
+                    continue;
+                }
+                let slot = self.run_slot(true);
+                let mut encoder = self.device.create_command_encoder(&Default::default());
+                if let Some(slot) = slot {
+                    // How many paths these rounds start with: those the host sent on.
+                    encoder.copy_buffer_to_buffer(&self.halves[h].queue_buffer, 12, &self.rounds_buffer, 4 * slot as u64, 4);
+                }
+                self.encode_rounds(&mut encoder, h, slot);
+                self.queue.submit(Some(encoder.finish()));
+                reads[h] = Some(self.request_host(h));
+            }
         }
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.encode_add(&mut encoder);
@@ -626,29 +667,57 @@ impl GpuRenderer {
         Ok(())
     }
 
-    /// The host's turn: the paths waiting for it gathered and read (`pathtrace::gather_host`),
-    /// shaded (`host::shade`), and scattered back to their slots, those that go on queued for
-    /// the next rounds (`scatter_host`). Whether any waited.
-    async fn serve_host(&self, s: &Scene, flat: &FlatScene, first: &[usize]) -> Result<bool, String> {
-        use std::sync::atomic::Ordering;
-        let host = self.host_queue.as_ref().expect("a scene with host materials");
-        let image = s.image.width * s.image.height;
-        let slots = image * self.params.seed.w as usize;
+    /// A run of rounds' slot for the scheduler's counts, if any are left before the next read;
+    /// `after` for a run that follows the host's turn, which counts towards the stages' work
+    /// but not the paths alive by round.
+    fn run_slot(&self, after: bool) -> Option<usize> {
+        let rounds = self.rounds();
+        let mut block = self.block.lock().unwrap();
+        (block.counted < COUNTED_PASSES).then(|| {
+            block.counted += 1;
+            let run = block.counted - 1;
+            if after {
+                block.after_host.push(run);
+            }
+            run * rounds
+        })
+    }
+
+    /// Half `h`'s paths waiting for the host gathered (`pathtrace::gather_host`), and their
+    /// count and as many as are guessed to wait copied to be read: queued, not waited for.
+    /// Returns the guess and the submission to wait for.
+    fn request_host(&self, h: usize) -> (u64, wgpu::SubmissionIndex) {
+        let half = &self.halves[h];
+        let host = half.host.as_ref().expect("a scene with host materials");
+        let (gather, _) = self.host_kernels.as_ref().expect("a scene with host materials");
         let size = std::mem::size_of::<PathState>() as u64;
         let header = 16 * pathtrace::HOST_QUEUE as u64;
-        let guess = host.guess.load(Ordering::Relaxed).min(slots) as u64;
+        let guess = (host.guess.load(std::sync::atomic::Ordering::Relaxed) as u64).min(host.gathered.size() / size);
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        encoder.copy_buffer_to_buffer(&self.queue_buffer, header, &host.dispatch, 0, 16);
+        encoder.copy_buffer_to_buffer(&half.queue_buffer, header, &host.dispatch, 0, 16);
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&host.gather);
+            pass.set_pipeline(gather);
             pass.set_bind_group(0, &host.groups[0], &[]);
             pass.dispatch_workgroups_indirect(&host.dispatch, 0);
         }
-        encoder.copy_buffer_to_buffer(&self.queue_buffer, header, &host.readback, 0, 16);
+        encoder.copy_buffer_to_buffer(&half.queue_buffer, header, &host.readback, 0, 16);
         encoder.copy_buffer_to_buffer(&host.gathered, 0, &host.readback, 16, guess * size);
-        self.queue.submit(Some(encoder.finish()));
-        self.map(&host.readback, 0..16 + guess * size).await?;
+        (guess, self.queue.submit(Some(encoder.finish())))
+    }
+
+    /// The host's turn for half `h`, once its read (`request_host`) is done: the paths
+    /// waiting shaded (`host::shade`), and scattered back to their slots, those that go on
+    /// queued for the next rounds (`scatter_host`). Whether any waited.
+    async fn serve_host(&self, s: &Scene, flat: &FlatScene, first: &[usize], h: usize, (guess, read): (u64, wgpu::SubmissionIndex)) -> Result<bool, String> {
+        use std::sync::atomic::Ordering;
+        let half = &self.halves[h];
+        let host = half.host.as_ref().expect("a scene with host materials");
+        let (_, scatter) = self.host_kernels.as_ref().expect("a scene with host materials");
+        let image = s.image.width * s.image.height;
+        let size = std::mem::size_of::<PathState>() as u64;
+        let header = 16 * pathtrace::HOST_QUEUE as u64;
+        self.map_after(&host.readback, 0..16 + guess * size, Some(read)).await?;
         let (count, mut paths) = {
             let data = host.readback.get_mapped_range(..16 + guess * size).unwrap();
             let count = bytemuck::pod_read_unaligned::<u32>(&data[12..16]) as u64;
@@ -697,16 +766,16 @@ impl GpuRenderer {
         // The next rounds begin at side 0 of the queue, which the scattered paths that go on
         // are appended to; then the host's queue is empty again.
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 0, 16);
-        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 16, 16);
+        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &half.queue_buffer, 0, 16);
+        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &half.queue_buffer, 16, 16);
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&host.scatter);
+            pass.set_pipeline(scatter);
             pass.set_bind_group(0, &host.groups[1], &[]);
             pass.dispatch_workgroups_indirect(&host.dispatch, 0);
         }
-        encoder.copy_buffer_to_buffer(&self.queue_buffer, 0, &self.dispatch_buffer, 0, 16);
-        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, header, 16);
+        encoder.copy_buffer_to_buffer(&half.queue_buffer, 0, &half.dispatch_buffer, 0, 16);
+        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &half.queue_buffer, header, 16);
         self.queue.submit(Some(encoder.finish()));
         let mut block = self.block.lock().unwrap();
         block.host_seconds += seconds;
@@ -725,16 +794,20 @@ impl GpuRenderer {
         assert!(lanes <= self.lanes, "a pass of {} samples a pixel, with lanes for {}", lanes, self.lanes);
         let pixels = self.params.dims.x * self.params.dims.y;
         self.params.seed.w = lanes as u32;
-        for side in 0..2 {
-            self.params.seed.z = side as u32;
-            self.queue.write_buffer(&self.params_buffers[side], 0, bytemuck::bytes_of(&self.params));
-        }
-        self.queue.write_buffer(&self.rays_buffer, 0, bytemuck::cast_slice(&rays.rays));
-        let live = rays.live;
         // Every queue starts empty: the kernel fills side 0, and the first round's dispatch is
         // copied from it.
         let empty: Vec<u32> = (0..3).flat_map(|_| pathtrace::EMPTY_QUEUE).collect();
-        self.queue.write_buffer(&self.queue_buffer, 0, bytemuck::cast_slice(&empty));
+        for half in &self.halves {
+            let mut own = self.params;
+            own.offs2.w |= half.rows;
+            for side in 0..2 {
+                own.seed.z = side as u32;
+                self.queue.write_buffer(&half.params_buffers[side], 0, bytemuck::bytes_of(&own));
+            }
+            self.queue.write_buffer(&half.queue_buffer, 0, bytemuck::cast_slice(&empty));
+        }
+        self.queue.write_buffer(&self.rays_buffer, 0, bytemuck::cast_slice(&rays.rays));
+        let live = rays.live;
         // The host's part ends here: the rays generated and uploaded. Encoding and submitting
         // the kernels is counted as the device's, since a driver may run them as they arrive.
         // Rays made while the block before ran are none of this block's time.
@@ -787,39 +860,41 @@ impl GpuRenderer {
     /// A path has at most `max_depth` + 1 vertices: that many rounds, each over the paths the
     /// last left alive, starting from side 0 of the queue. With a `slot`, each round's count
     /// is kept for the scheduler's measurements.
-    fn encode_rounds(&self, encoder: &mut wgpu::CommandEncoder, slot: Option<usize>) {
+    fn encode_rounds(&self, encoder: &mut wgpu::CommandEncoder, h: usize, slot: Option<usize>) {
+        let half = &self.halves[h];
         for round in 0..=self.params.dims.w {
             let side = (round % 2) as usize;
             // A compute pass a kernel, so that each can be timed (`Timers`).
             use crate::scheduler::Stage;
             for (stage, pipeline) in [(Stage::Intersect, &self.intersect_pipeline), (Stage::Shade, &self.bounce_pipeline), (Stage::Sky, &self.sky_pipeline)] {
                 let mut pass = self.timed_pass(encoder, stage);
-                pass.set_bind_group(0, &self.round_groups[side], &[]);
+                pass.set_bind_group(0, &half.round_groups[side], &[]);
                 pass.set_pipeline(pipeline);
-                pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
+                pass.dispatch_workgroups_indirect(&half.dispatch_buffer, 0);
             }
             // The next round reads the side this one filled, and fills the side it read.
-            encoder.copy_buffer_to_buffer(&self.queue_buffer, 16 * (1 - side as u64), &self.dispatch_buffer, 0, 16);
+            encoder.copy_buffer_to_buffer(&half.queue_buffer, 16 * (1 - side as u64), &half.dispatch_buffer, 0, 16);
             if let Some(slot) = slot.filter(|_| round < self.params.dims.w) {
                 // How many paths the next round starts with (the header's count).
-                encoder.copy_buffer_to_buffer(&self.queue_buffer, 16 * (1 - side as u64) + 12, &self.rounds_buffer, 4 * (slot + round as usize + 1) as u64, 4);
+                encoder.copy_buffer_to_buffer(&half.queue_buffer, 16 * (1 - side as u64) + 12, &self.rounds_buffer, 4 * (slot + round as usize + 1) as u64, 4);
             }
-            encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 16 * side as u64, 16);
+            encoder.copy_buffer_to_buffer(&self.empty_header, 0, &half.queue_buffer, 16 * side as u64, 16);
         }
     }
 
     /// The pass's paths started from their camera rays, and side 0 filled with the live ones
     /// (`pathtrace::start_paths`); the first round's dispatch is the count they leave.
-    fn encode_start(&self, encoder: &mut wgpu::CommandEncoder) {
+    fn encode_start(&self, encoder: &mut wgpu::CommandEncoder, h: usize) {
+        let half = &self.halves[h];
         let slots = self.params.dims.x * self.params.dims.y * self.params.seed.w;
         let groups = slots.div_ceil(pathtrace::WORKGROUP);
         {
             let mut pass = self.timed_pass(encoder, crate::scheduler::Stage::Generate);
-            pass.set_bind_group(0, &self.start_group, &[]);
+            pass.set_bind_group(0, &half.start_group, &[]);
             pass.set_pipeline(&self.start_pipeline);
             pass.dispatch_workgroups(groups.min(pathtrace::MAX_GROUPS), groups.div_ceil(pathtrace::MAX_GROUPS), 1);
         }
-        encoder.copy_buffer_to_buffer(&self.queue_buffer, 0, &self.dispatch_buffer, 0, 16);
+        encoder.copy_buffer_to_buffer(&half.queue_buffer, 0, &half.dispatch_buffer, 0, 16);
     }
 
     /// A compute pass for one kernel of `stage`, with the device's clock read at each end where
@@ -849,6 +924,12 @@ impl GpuRenderer {
     /// Map `buffer` for reading. Natively this waits for the GPU; in a browser it yields until
     /// the buffer can be read.
     async fn map(&self, buffer: &wgpu::Buffer, range: std::ops::Range<u64>) -> Result<(), String> {
+        self.map_after(buffer, range, None).await
+    }
+
+    /// `map`, natively waiting only for submission `after` (and those before it), if given,
+    /// not for everything queued since: the other half's rounds run on meanwhile.
+    async fn map_after(&self, buffer: &wgpu::Buffer, range: std::ops::Range<u64>, after: Option<wgpu::SubmissionIndex>) -> Result<(), String> {
         let mapped = Mapped::default();
         let slot = mapped.0.clone();
         buffer.map_async(wgpu::MapMode::Read, range, move |r| {
@@ -859,7 +940,7 @@ impl GpuRenderer {
             }
         });
         #[cfg(not(target_arch = "wasm32"))]
-        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU device lost ({})", e))?;
+        self.device.poll(wgpu::PollType::Wait { submission_index: after, timeout: None }).map_err(|e| format!("GPU device lost ({})", e))?;
         mapped.await.map_err(|e| format!("couldn't read from the GPU ({})", e))
     }
 
@@ -994,7 +1075,7 @@ impl GpuRenderer {
                 _ => Self::make_rays(s, &first, &count, &self.origin),
             };
             self.clear();
-            if self.host_queue.is_some() {
+            if self.host_kernels.is_some() {
                 pollster::block_on(self.block_with_host_rays(s, flat, &first, rays)).expect("GPU readback");
             } else {
                 self.dispatch_rays(rays);
@@ -1948,6 +2029,38 @@ mod tests {
     /// for the host, which shades them with the scene's own and sends them on. The picture is
     /// the wavefront integrator's, which shades the same vertices the same way, and the
     /// report counts them.
+    #[test]
+    fn test_halves_render_the_whole_blocks_picture() {
+        // A block in two halves (by row, so the host shades one's paths while the device runs
+        // the other's rounds) traces the same paths, in other queues: the same picture, bit for
+        // bit, the image's sums added once after both.
+        use crate::wavefront::integrator::tests::host_scene;
+        let mut s = host_scene();
+        s.render.supersamples = 16;
+        let flat = FlatScene::build(&s).unwrap();
+        let render = |halves: usize| -> Option<Vec<Color>> {
+            let mut gpu = match pollster::block_on(GpuRenderer::create_with(&s, &flat, halves)) {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("skipped: {}", e);
+                    return None;
+                },
+            };
+            assert_eq!(gpu.halves.len(), halves);
+            let (w, h) = (s.image.width, s.image.height);
+            let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
+            gpu.render(&s, &flat, &rc, |_| ());
+            let rc = rc.into_inner().unwrap();
+            Some((0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect())
+        };
+        let Some(whole) = render(1) else { return };
+        let halves = render(2).unwrap();
+        assert!(whole.iter().any(|c| c.rgb.max() > 0.), "a picture");
+        for (k, (a, b)) in whole.iter().zip(&halves).enumerate() {
+            assert_eq!(a.rgb, b.rgb, "pixel {}", k);
+        }
+    }
+
     #[test]
     fn test_host_shades_what_the_kernels_cant() {
         use crate::scheduler::Stage;

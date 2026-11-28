@@ -319,7 +319,13 @@ impl Tank {
         let m = self.surface.len();
         let mut s = vec![0.; m];
         for k in 1..m { s[k] = s[k - 1] + (self.surface[k] - self.surface[k - 1]).norm(); }
-        (0..m).any(|i| (i + 1..m).any(|j| s[j] - s[i] > 10. * gap && (self.surface[j] - self.surface[i]).norm() < gap))
+        let p = &self.surface;
+        // (Or passed through it within a step: two segments crossing.)
+        let cross = |o: Vector2<f64>, a: Vector2<f64>, b: Vector2<f64>| (a - o).perp(&(b - o));
+        let crossed = |i: usize, j: usize| {
+            cross(p[i], p[i + 1], p[j]) * cross(p[i], p[i + 1], p[j + 1]) < 0. && cross(p[j], p[j + 1], p[i]) * cross(p[j], p[j + 1], p[i + 1]) < 0.
+        };
+        (0..m).any(|i| (i + 1..m).any(|j| s[j] - s[i] > 10. * gap && ((p[j] - p[i]).norm() < gap || (j + 1 < m && i + 1 < j && crossed(i, j)))))
     }
 
     /// The water's energy: kinetic, ½ ∫ φ q ds over the surface (the bed and walls, where q is
@@ -357,6 +363,138 @@ impl Tank {
         }
         -self.bed.last().unwrap().y
     }
+
+    /// The two markers where the surface has come back on itself (the jet's tip and the water
+    /// it lands on): the closest pair more than `apart` from each other along the surface.
+    fn closure(&self, apart: f64) -> (usize, usize) {
+        let m = self.surface.len();
+        let mut s = vec![0.; m];
+        for k in 1..m { s[k] = s[k - 1] + (self.surface[k] - self.surface[k - 1]).norm(); }
+        let mut best = (f64::INFINITY, 0, 0);
+        for i in 0..m {
+            for j in i + 1..m {
+                let gap = (self.surface[j] - self.surface[i]).norm();
+                if s[j] - s[i] > apart && gap < best.0 { best = (gap, i, j); }
+            }
+        }
+        (best.1, best.2)
+    }
+
+    /// The tube a plunging jet has closed, once it has touched down: the air between the jet's
+    /// underside, the face and the water the tip lands on.
+    pub fn tube(&self) -> Tube {
+        let (i, j) = self.closure(0.1);
+        let ring: Vec<Vector2<f64>> = self.surface[i..=j].to_vec();
+        // Area, centroid and second moments of the enclosed region, by Green's theorem.
+        let (mut a, mut cx, mut cy, mut ixx, mut iyy, mut ixy) = (0., 0., 0., 0., 0., 0.);
+        for k in 0..ring.len() {
+            let (p, q) = (ring[k], ring[(k + 1) % ring.len()]);
+            let c = p.x * q.y - q.x * p.y;
+            a += c / 2.;
+            cx += (p.x + q.x) * c / 6.;
+            cy += (p.y + q.y) * c / 6.;
+            ixx += (p.y * p.y + p.y * q.y + q.y * q.y) * c / 12.;
+            iyy += (p.x * p.x + p.x * q.x + q.x * q.x) * c / 12.;
+            ixy += (p.x * q.y + 2. * p.x * p.y + 2. * q.x * q.y + q.x * p.y) * c / 24.;
+        }
+        let centre = Vector2::new(cx / a, cy / a);
+        let (ixx, iyy, ixy) = (ixx / a - centre.y * centre.y, iyy / a - centre.x * centre.x, ixy / a - centre.x * centre.y);
+        let mean = 0.5 * (ixx + iyy);
+        let spread = (0.25 * (ixx - iyy).powi(2) + ixy * ixy).sqrt();
+        // The long axis: the direction of the largest spread of x and y about the centroid.
+        let tilt = -0.5 * (2. * ixy).atan2(iyy - ixx);
+        let top = ring.iter().max_by(|p, q| p.y.total_cmp(&q.y)).unwrap();
+        // The water above the tube's top: up from it to the jet's upper surface (the markers
+        // before the tip's).
+        let roof = self.surface[..i].windows(2).filter_map(|w| {
+            let (lo, hi) = if w[0].x < w[1].x { (w[0], w[1]) } else { (w[1], w[0]) };
+            (top.x >= lo.x && top.x <= hi.x && hi.x > lo.x).then(|| lo.y + (hi.y - lo.y) * (top.x - lo.x) / (hi.x - lo.x) - top.y)
+        }).filter(|&d| d > 0.).fold(f64::INFINITY, f64::min);
+        // The jet's thickness halfway from the tube's top to the tip: from the underside there
+        // to the nearest point of its upper surface.
+        let t = ring.iter().position(|p| p == top).unwrap();
+        let mid = ring[t / 2];
+        let lip = self.surface[..i].iter().map(|p| (p - mid).norm()).fold(f64::INFINITY, f64::min);
+        Tube {
+            area: a.abs(), centre, aspect: ((mean + spread) / (mean - spread)).sqrt(), tilt,
+            width: ring.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max) - ring.iter().map(|p| p.x).fold(f64::INFINITY, f64::min),
+            height: top.y - ring.iter().map(|p| p.y).fold(f64::INFINITY, f64::min),
+            roof, lip,
+        }
+    }
+}
+
+/// The tube of air a plunging breaker's jet closes as it touches down, measured on the
+/// tank's section.
+#[derive(Clone, Debug)]
+pub struct Tube {
+    pub area: f64,
+    pub centre: Vector2<f64>,
+    /// The ratio of its long axis to its short one, by its second moments: what surfing
+    /// studies call the vortex ratio.
+    pub aspect: f64,
+    /// The long axis's angle above the horizontal, rising away from the shore, towards the
+    /// wave's back (radians).
+    pub tilt: f64,
+    pub width: f64,
+    pub height: f64,
+    /// The water above the tube's highest point, up to the jet's upper surface.
+    pub roof: f64,
+    /// The jet's thickness halfway from the tube's top to its tip.
+    pub lip: f64,
+}
+
+/// What a breaker did in the tank: when and where its face went vertical, the depth there and
+/// the crest's height above still water, and the tube it closed (None if it never touched
+/// down), with the surface at the end.
+#[derive(Clone, Debug)]
+pub struct Breaking {
+    pub overturned: f64,
+    pub crest: Vector2<f64>,
+    pub depth: f64,
+    pub tube: Option<Tube>,
+    pub time: f64,
+    pub tank: Tank,
+}
+
+/// A solitary wave `height` high in water 1 deep (g = 1) running up a slope of 1 in `slope`
+/// to a reef flat 0.1 deep, followed until its jet touches down. `spacing` is the markers'
+/// mean spacing along the surface.
+pub fn break_on_slope(height: f64, slope: f64, spacing: f64, mut each: impl FnMut(&Tank)) -> Breaking {
+    let (toe, reef) = (12., 0.1);
+    let top = toe + (1. - reef) * slope;
+    let length = top + 8.;
+    let bed = vec![Vector2::new(0., -1.), Vector2::new(toe, -1.), Vector2::new(top, -reef), Vector2::new(length, -reef)];
+    let (eta, phi) = solitary(height, 1., 5., 1.);
+    let mut tank = Tank::new(bed, 1., (length / spacing) as usize + 1, eta, phi);
+    let mut broke: Option<(f64, Vector2<f64>, f64)> = None;
+    let mut steps = 0;
+    let mut tube = None;
+    while steps < 40000 {
+        let dt = tank.time_step(0.3);
+        if dt < 5e-5 { break; }
+        tank.step(dt);
+        steps += 1;
+        if steps % 5 == 0 { tank.smooth(); }
+        // Markers redistributed to follow the jet, closer where it curves.
+        if steps % 10 == 0 { tank.regrid(3.); }
+        if broke.is_none() && tank.overturned() {
+            let c = tank.crest();
+            broke = Some((tank.time, c, tank.depth(c.x)));
+        }
+        each(&tank);
+        // (A run gone unstable: markers thrown out of the tank.)
+        if tank.surface.iter().any(|p| !(p.y.abs() < 2.) || !(p.x > -1. && p.x < length + 1.)) { break; }
+        if broke.is_some() && tank.touched_down(0.02) {
+            tube = Some(tank.tube());
+            break;
+        }
+        // A wave that has reached the reef flat's end without overturning has spilled or
+        // surged.
+        if broke.is_none() && tank.crest().x > length - 3. { break; }
+    }
+    let (overturned, crest, depth) = broke.unwrap_or((f64::NAN, tank.crest(), f64::NAN));
+    Breaking { overturned, crest, depth, tube, time: tank.time, tank }
 }
 
 /// A solitary wave of height `height` in water `depth` deep, its crest at `x0`, by first-order
@@ -472,49 +610,54 @@ mod tests {
 mod breaking {
     use super::*;
 
-    /// A solitary wave H/h = 0.45 shoaling up a 1:15 slope to a shelf, run until its face
-    /// overturns (or a step limit), writing profiles to RAYS_TANK_PROFILES (JSON) for drawing.
+    /// A solitary wave H/h = 0.45 shoaling up a 1:15 slope to a reef flat, run until its jet
+    /// touches down, writing profiles to RAYS_TANK_PROFILES (JSON) for drawing.
     #[test]
     #[ignore]
     fn measure_a_solitary_wave_breaking_on_a_slope() {
-        let (g, h, height) = (1., 1., 0.45);
-        let bed = vec![Vector2::new(0., -h), Vector2::new(12., -h), Vector2::new(25.5, -0.1), Vector2::new(32., -0.1)];
-        let (eta, phi) = solitary(height, h, 5., g);
-        let mut tank = Tank::new(bed, g, 401, eta, phi);
-        let mut profiles = vec![];
-        let mut steps = 0;
         let started = std::time::Instant::now();
-        // Until its face overturns, and then on as its jet plunges, until the steps grow too
-        // short (the jet's markers crowding) or the jet's tip comes down to the water before it.
-        let mut broke: Option<(f64, Vector2<f64>, f64)> = None;
-        let mut after = 0;
-        while steps < 20000 && after < 10000 {
-            let dt = tank.time_step(0.3);
-            tank.step(dt);
-            steps += 1;
-            if steps % 5 == 0 { tank.smooth(); }
-            // Markers redistributed to follow the jet, closer where it curves.
-            if steps % 10 == 0 { tank.regrid(3.); }
-            if tank.touched_down(0.01) { println!("touched down"); break; }
-            if broke.is_none() && tank.overturned() {
-                let c = tank.crest();
-                broke = Some((tank.time, c, tank.depth(c.x)));
-            }
-            if broke.is_some() { after += 1; }
-            if dt < 5e-5 { println!("steps too short"); break; }
-            if steps % 25 == 0 || (broke.is_some() && after % 20 == 0) {
-                let c = tank.crest();
-                println!("t {:.3} dt {:.5} crest [{:.3}, {:.3}] depth {:.3}", tank.time, dt, c.x, c.y, tank.depth(c.x));
+        let mut profiles = vec![];
+        let mut count = 0;
+        let slope = std::env::var("RAYS_TANK_SLOPE").ok().and_then(|v| v.parse().ok()).unwrap_or(15.);
+        let b = break_on_slope(0.45, slope, 0.08, |tank| {
+            count += 1;
+            if count % 25 == 0 || (tank.overturned() && count % 5 == 0) {
                 profiles.push(serde_json::json!({"t": tank.time, "points": tank.surface.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()}));
             }
-        }
-        let (tb, c, hb) = broke.expect("the wave never broke");
-        println!("{} steps in {:.1?}: face vertical at t {:.3}, crest [{:.3}, {:.3}] over depth {:.3}, crest / depth {:.2}; run on to t {:.3}",
-            steps, started.elapsed(), tb, c.x, c.y, hb, c.y / hb, tank.time);
-        profiles.push(serde_json::json!({"t": tank.time, "points": tank.surface.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()}));
+        });
+        println!("{} steps in {:.1?}: face vertical at t {:.3}, crest [{:.3}, {:.3}] over depth {:.3}, crest / depth {:.2}; to t {:.3}",
+            count, started.elapsed(), b.overturned, b.crest.x, b.crest.y, b.depth, b.crest.y / b.depth, b.time);
+        println!("{:?}", b.tube);
+        profiles.push(serde_json::json!({"t": b.time, "points": b.tank.surface.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()}));
         if let Ok(path) = std::env::var("RAYS_TANK_PROFILES") {
-            std::fs::write(path, serde_json::json!({"bed": tank.bed.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "profiles": profiles}).to_string()).unwrap();
+            std::fs::write(path, serde_json::json!({"bed": b.tank.bed.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "profiles": profiles}).to_string()).unwrap();
         }
-        assert!(tank.overturned());
+        assert!(b.tube.is_some());
+    }
+
+    /// The tubes of solitary waves breaking on slopes from 1:10 to 1:30, against Mead and
+    /// Black's fit to 28 surfing breaks, vortex ratio = 0.065 X + 0.821 for a seabed gradient
+    /// of 1 in X. Writes each breaker's final surface to RAYS_TANK_SWEEP (JSON).
+    #[test]
+    #[ignore]
+    fn measure_tubes_against_slope() {
+        use rayon::prelude::*;
+        let slopes = [10., 15., 20., 25., 30.];
+        let heights: Vec<f64> = std::env::var("RAYS_TANK_HEIGHT").ok().and_then(|v| v.parse().ok()).map(|h| vec![h]).unwrap_or(vec![0.45]);
+        let runs: Vec<(f64, f64)> = heights.iter().flat_map(|&h| slopes.iter().map(move |&s| (h, s))).collect();
+        let results: Vec<(f64, f64, Breaking)> = runs.par_iter().map(|&(h, s)| (h, s, break_on_slope(h, s, 0.08, |_| {}))).collect();
+        println!("H/h  slope  crest/depth  touchdown  tube w x h  vortex ratio (Mead & Black)  tilt  roof/crest  lip/crest");
+        let mut out = vec![];
+        for (h, s, b) in &results {
+            match &b.tube {
+                Some(t) => println!("{:.2}  1:{:<4} {:.2}  t {:.2}  {:.3} x {:.3}  {:.2} ({:.2})  {:.0}°  {:.2}  {:.2}",
+                    h, s, b.crest.y / b.depth, b.time, t.width, t.height, t.aspect, 0.065 * s + 0.821, t.tilt.to_degrees(), t.roof / b.crest.y, t.lip / b.crest.y),
+                None => println!("{:.2}  1:{:<4} no tube (to t {:.2})", h, s, b.time),
+            }
+            out.push(serde_json::json!({"height": h, "slope": s, "bed": b.tank.bed.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "points": b.tank.surface.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()}));
+        }
+        if let Ok(path) = std::env::var("RAYS_TANK_SWEEP") {
+            std::fs::write(path, serde_json::Value::Array(out).to_string()).unwrap();
+        }
     }
 }

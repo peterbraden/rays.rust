@@ -3041,3 +3041,14 @@ Left, by what they would recover:
 - Next measurement: how much of the 0.015 is the cover's grain, which a kernel could apply at
   each hit from `shared::noise` over the baked colour, and how much the library materials'
   patterns, which would need the graph evaluator in the kernels.
+- Where the rest comes from (terrain-alpine, 16 samples, mean FLIP against shading every hit;
+  baking up to 16 pixels): 0.0153 with everything; 0.0152 without the cover's grain; 0.0101
+  without the library materials; 0.0096 without both, and without snow too. A change of seed is
+  0.0080. With neither, by the baking limit: 0.0005 at 2 pixels, 0.0013 at 4, 0.0052 at 8. So it
+  is the cover's own colour, finer than the vertices, not a fault in the kernels' shading.
+- The whole scene by the limit: 0.0008 at 2 pixels, 0.0022 at 4, 0.0047 at 6; the host's
+  vertices 4.20, 3.78 and 3.02 million of 4.40, the renders 10.7, 10.8 and 12.2 s (the timings
+  noisy under memory pressure). Below 8 pixels too few triangles leave the host to show; at 8 to
+  16 the error is a bias, which more samples don't remove. The limit stays at 2 pixels.
+- So the ground leaves the host only with its colour evaluated at each hit: the cover's classes
+  and the library materials' patterns in the kernels (the graph evaluator in `shared`).

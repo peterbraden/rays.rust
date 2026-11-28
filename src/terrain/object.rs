@@ -808,7 +808,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let start = web_time::Instant::now();
     if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
     let layers = Arc::new(built);
-    let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
+    let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest).with_climate(climate.clone(), p.treeline);
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
     let (foot, height) = frame.on_planet(&view.location);
     let ground = relief.height(&foot, &relief.slope(&foot), 1.);

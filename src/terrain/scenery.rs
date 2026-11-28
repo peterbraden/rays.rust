@@ -377,6 +377,10 @@ pub struct Relief {
     finest: f64,
     roughness: f64,
     noise: SeededNoise,
+    /// The climate and a fixed treeline, if any, for where rock is bare above the trees
+    /// (`Relief::rocky`; as the ground cover's, `Ground::treeline`).
+    climate: Option<Arc<Climate>>,
+    treeline: Option<f64>,
 }
 
 /// The longest wavelength of synthetic detail is a power of two metres, so the octaves are the
@@ -389,6 +393,12 @@ const LONGEST_DETAIL: f64 = 65536.;
 /// detail then stood on as fins.)
 const RELIEF_FINEST: f64 = 12.;
 
+/// On bare steep rock (`Relief::rocky`): how much deeper the gullies are cut (as couloirs),
+/// the crags' height per unit of the detail's amplitude, and the longest crags, metres.
+const CRAG_GULLIES: f64 = 3.;
+const CRAG_HEIGHT: f64 = 0.25;
+const CRAG_LONGEST: f64 = 600.;
+
 impl Relief {
     /// `finest`: the spacing below which detail is synthetic; layers coarser than it have the
     /// planet's own relief down to it put back.
@@ -398,7 +408,23 @@ impl Relief {
             layers, radius, finest, roughness,
             planet: Planet::new(planet.params.clone()),
             noise: SeededNoise::new(seed.wrapping_add(0x5ce7e)),
+            climate: None,
+            treeline: None,
         }
+    }
+
+    /// With the `climate` and fixed `treeline` (if any) the ground cover has: where the rock is
+    /// bare above the trees, its crags are drawn on gentler slopes.
+    pub fn with_climate(mut self, climate: Option<Arc<Climate>>, treeline: Option<f64>) -> Relief {
+        self.climate = climate;
+        self.treeline = treeline;
+        self
+    }
+
+    /// The treeline at `d`, metres, as the ground cover's (`Ground::treeline`); None without a
+    /// climate or a fixed one.
+    fn treeline(&self, d: &Vector3<f64>) -> Option<f64> {
+        self.treeline.or_else(|| self.climate.as_ref().map(|c| c.local(d, 0.).treeline(0.)))
     }
 
     /// The large-scale height at `d`, before synthetic detail: each layer blending into the
@@ -453,6 +479,9 @@ impl Relief {
     pub fn detail(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
         let p = d * self.radius;
         let mut sum = 0.;
+        // How much of it is bare, steep rock (`rocky`): there the gullies are cut deeper into
+        // couloirs between sharp ribs, and the faces between are broken into crags.
+        let rocky = self.rocky(d, slope);
         // The slope as the gullies so far leave it: each octave's run down the sides of the
         // coarser ones, so they branch.
         let mut gradient = slope.gradient;
@@ -469,17 +498,50 @@ impl Relief {
                 let (g, dg) = self.gullies(&p, d, &gradient, wavelength, octave);
                 // As deep as their slope allows: on a slope s, gullies a wavelength apart are
                 // about a tenth of it deep per unit of slope; none on the flat.
-                let depth = 0.1 * amplitude * slope.steepness;
+                let depth = 0.1 * amplitude * slope.steepness * (1. + CRAG_GULLIES * rocky);
+                // On rock, V-shaped couloirs and knife-edged ribs rather than creep's rounded spurs.
+                let g = if rocky > 0. { g + rocky * (g.signum() * g.abs().sqrt() - g) } else { g };
                 sum += depth * g;
                 gradient += dg * depth;
                 // Noise everywhere, a little more on slopes, to break the gullies' lines.
                 let q = (p + Vector3::new(31.7, 17.3, 5.1) * (octave * wavelength)) / wavelength;
                 sum += 0.06 * amplitude * (0.15 + slope.steepness) * self.noise.noise(q * 1.3);
+                // Crags: ridged noise, sharp crests and cracks between, on bare rock at the
+                // scales of buttresses and towers (tens to hundreds of metres).
+                if rocky > 0. && wavelength <= CRAG_LONGEST {
+                    let n = self.noise.noise(q * 0.9 + Vector3::new(7.3, 1.1, 4.4));
+                    sum += CRAG_HEIGHT * amplitude * rocky * rocky * ((1. - n.abs()).powi(2) - 0.45);
+                }
             }
             wavelength /= 2.;
             octave += 1.;
         }
         sum
+    }
+
+    /// How much of the ground at `d` (of slope `slope`) is bare, steep rock, 0 to 1: steep for
+    /// the simulation's cells (which smooth the slopes they hold), or less steep well above the
+    /// treeline, its sediment thin and no ice on it, blended between the layers as their
+    /// surfaces are. (Without a climate or a fixed treeline, none counts as alpine.)
+    fn rocky(&self, d: &Vector3<f64>, slope: &Slope) -> f64 {
+        // Steep, or (above the trees, where frost shatters it and little holds a soil) less so.
+        if slope.steepness < 0.15 { return 0.; }
+        let (mut rest, mut sediment, mut ice, mut surface) = (1., 0., 0., 0.);
+        for l in self.layers.iter() {
+            let w = l.weight(d) * rest;
+            if w > 0. {
+                let at = |f: crate::graph::Field, h: f64| l.fields.at(&l.domain, f, d, h).unwrap_or(0.);
+                sediment += w * at(crate::graph::Field::Sediment, 0.);
+                ice += w * at(crate::graph::Field::Ice, 0.);
+                surface += w * l.simulated(d);
+                rest -= w;
+            }
+            if rest <= 0. { break; }
+        }
+        let above = self.treeline(d).map_or(f64::NEG_INFINITY, |t| surface - t);
+        let alpine = smoothstep(100., 700., above) * smoothstep(0.15, 0.45, slope.steepness);
+        let steep = smoothstep(0.45, 1.0, slope.steepness).max(alpine);
+        steep * (1. - smoothstep(0.5, 3., sediment)) * (1. - smoothstep(2., 20., ice))
     }
 
     /// Gullies `wavelength` apart running down a surface of slope `gradient` (uphill, metres per
@@ -1108,6 +1170,19 @@ fn lava_material(kind: Bare, seed: u64) -> serde_json::Value {
         }
     }
 }
+/// Open ground of albedo `g` (grass, meadow, tundra, steppe) on ground whose normal is `flat`
+/// (its cosine to the vertical) made patchy, by noise `n(scale, offset)` in [0, 1]: drier and
+/// paler on steep, well-drained ground and in patches hundreds of metres across, lusher in
+/// others, and lighter and darker from field to field.
+fn open_ground(g: Color, flat: f64, n: &dyn Fn(f64, f64) -> f64) -> Color {
+    let dry = smoothstep(0.45, 0.75, n(700., 0.61) + 0.4 * (1. - flat));
+    let lush = smoothstep(0.55, 0.75, n(350., 0.19)) * (1. - dry);
+    let straw = Color::new(g.rgb.x * 1.7 + 0.03, g.rgb.y * 1.35 + 0.02, g.rgb.z * 1.1 + 0.01);
+    let green = Color::new(g.rgb.x * 0.8, g.rgb.y * 1.05, g.rgb.z * 0.8);
+    let g = g * (1. - dry - lush) + straw * dry + green * lush;
+    g * (0.75 + 0.3 * n(220., 0.83) + 0.2 * n(60., 0.47))
+}
+
 /// Fresh lava's albedos, seen from afar: pāhoehoe, ʻaʻā, and old lava, weathered and lichened.
 const PAHOEHOE: [f64; 3] = [0.04, 0.04, 0.045];
 const AA: [f64; 3] = [0.05, 0.042, 0.036];
@@ -1410,6 +1485,11 @@ impl Ground {
                 if matches!(biome, Biome::HotDesert | Biome::ColdDesert) {
                     // Dunes, pans and darker stony desert.
                     g = g * (0.75 + 0.5 * n(3000., 0.8) + 0.15 * n(150., 0.3));
+                } else {
+                    // Open ground is patchy at every scale that shows from afar: drier, paler
+                    // grass on steeper and well-drained ground and in patches, lusher in others
+                    // (soil, aspect and grazing), and lighter and darker from field to field.
+                    g = open_ground(g, flat, &n);
                 }
                 // The woods of the communities that grow here (`flora`), as the trees about the
                 // camera are planted, thinner and thicker from place to place.
@@ -1424,8 +1504,10 @@ impl Ground {
                 (mix(colour(GRASS), colour(FOREST), forest), false, false, forest > 0.5, forest, 0.3)
             }
         };
-        // Alpine meadow from the treeline up.
-        ground = mix(ground, colour(MEADOW), smoothstep(tree - 100., tree + 200., h));
+        // Alpine meadow from the treeline up, patchy as the open ground below, and broken by
+        // stony ground where the soil thins.
+        let meadow = mix(open_ground(colour(MEADOW), flat, &n), colour(SCREE) * (0.8 + 0.4 * n(45., 0.13)), 0.6 * smoothstep(0.5, 0.75, n(180., 0.91) + 0.3 * (1. - flat)));
+        ground = mix(ground, meadow, smoothstep(tree - 100., tree + 200., h));
         // The kinds of bare ground, blended as their colours are: the woods' canopy first.
         let mut shares = Shares::of(Bare::Plain);
         let mut canopy = Shares::of(Bare::Woods);
@@ -1503,7 +1585,12 @@ impl Ground {
         let bare = self.bareness(&d, h);
         let rock = (1. - smoothstep(0.7 + bare, 0.85 + bare, flat)).max(high * (1. - 0.6 * smoothstep(0.92, 0.99, flat)));
         let loose = smoothstep(0.85, 0.95, flat);
-        let stone = mix(self.stone(&d, h), colour(SCREE), loose) * (0.7 + 0.6 * n(250., 0.7));
+        // Rock varies at the scales of crags, faces and whole mountainsides (weathering,
+        // lichen, the beds and intrusions that make them), warmer and cooler from face to face.
+        let warm = 0.25 * (2. * n(500., 0.27) - 1.);
+        let shade = 0.55 + 0.35 * n(250., 0.7) + 0.3 * n(60., 0.37) + 0.25 * n(1200., 0.53);
+        let stone = mix(self.stone(&d, h), colour(SCREE), loose);
+        let stone = Color::new(stone.rgb.x * (1. + warm), stone.rgb.y, stone.rgb.z * (1. - warm)) * shade;
         ground = mix(ground, stone, rock) * grain;
         if rock > 0. {
             let r = self.rock(&d, h).filter(|&r| r != Rock::Sediment).unwrap_or(Rock::Sediment);

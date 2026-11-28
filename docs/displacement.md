@@ -255,7 +255,9 @@ close-up scene keeps its camera on the ground however the simulation changes. Gi
 landscape a `"focus"`, so its patches don't move with the camera.
 `demo/scenes/landscape-closeup.json` stands 4 m up on a sandstone slope of a desert fold belt
 with nothing placed by hand: the world's close level under the camera (30 m cells inside its
-150 m patch, `world::close_level`), gullies below that (`Relief::gullies`), its own detail
+150 m patch, `world::close_level`), gullies below that (`Relief::gullies`; on bare rock, steep
+or above the treeline, cut into couloirs between sharp ribs and broken into crags tens to
+hundreds of metres across, `Relief::rocky`), its own detail
 and its own boulders: sandstone in thin ledges along its beds, cut by joints that die out and
 open in stretches (960 x 540 at 32 samples: 3 min to build from a cached world, about 35 to
 render). The landscape's own displacement dices quads two pixels across, at most seven levels

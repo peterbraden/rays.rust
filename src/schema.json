@@ -2241,7 +2241,7 @@
               "kind": "enum",
               "default": "mountains",
               "doc": "Patch without lat/lon: centre it on the most such place.",
-              "options": ["mountains", "volcanoes", "coast", "plateau", "rift"]
+              "options": ["mountains", "volcanoes", "coast", "plateau", "rift", "hotspot", "atoll"]
             }
           ]
         },
@@ -2327,6 +2327,7 @@
         },
         {"name": "rift_rate", "kind": "number", "default": 0.0004, "doc": "How fast tilted fault blocks' crests rise relative to their basins in stretched provinces (basin and range), m/yr."},
         {"name": "rift_relief", "kind": "number", "default": 1200, "doc": "How far the fault blocks' crests stand above their basins at time zero, m."},
+        {"name": "hotspot_volcanoes", "kind": "boolean", "default": true, "doc": "Whether hotspots build chains of shield volcanoes, ageing into eroded islands, atolls and seamounts along the plate's motion."},
         {"name": "rift_spacing", "kind": "number", "default": 25000, "doc": "Spacing of the normal faults, m: a range and a basin."},
         {
           "name": "tectonics",
@@ -2784,6 +2785,12 @@
           ]
         },
         {
+          "name": "eruption",
+          "kind": "boolean",
+          "default": false,
+          "doc": "Show the active volcanoes erupting: each young hotspot shield still building holds a lava lake at its summit, with glowing channels running down from it and a rift zone (best seen at dusk or night)."
+        },
+        {
           "name": "close_level",
           "kind": "boolean",
           "default": true,
@@ -2843,7 +2850,7 @@
           "name": "ground_materials",
           "kind": "boolean",
           "default": true,
-          "doc": "Full scale, with the default ground cover: shade bare rock (by its lithology), scree, sand and gravel with the library's natural materials; false for plain colours."
+          "doc": "Full scale, with the default ground cover: shade bare rock (by its lithology and the climate), scree, sand, gravel, shingle, till and bare soil with the library's natural materials, those fitted to photographs among them; false for plain colours."
         },
         {
           "name": "height_map",
@@ -6351,7 +6358,11 @@
                 "red_clover",
                 "heather",
                 "bracken",
-                "litter"
+                "litter",
+                "sedge",
+                "cottongrass",
+                "poppy",
+                "fireweed"
               ]
             },
             {"name": "weight", "kind": "number", "default": 1, "doc": "Relative abundance.", "min": 0},
@@ -7039,7 +7050,27 @@
             "barrel-cactus",
             "prickly-pear",
             "agave",
-            "ocotillo"
+            "ocotillo",
+            "silver-birch",
+            "european-beech",
+            "english-oak",
+            "sugar-maple",
+            "european-larch",
+            "grey-alder",
+            "mountain-pine",
+            "dwarf-birch",
+            "pinyon-pine",
+            "ponderosa-pine",
+            "olive",
+            "mesquite",
+            "acacia",
+            "baobab",
+            "eucalyptus",
+            "kapok",
+            "tree-fern",
+            "thornbush",
+            "dipterocarp",
+            "rain-tree"
           ]
         },
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Chooses this individual tree."},
@@ -7401,7 +7432,27 @@
                 "barrel-cactus",
                 "prickly-pear",
                 "agave",
-                "ocotillo"
+                "ocotillo",
+            "silver-birch",
+            "european-beech",
+            "english-oak",
+            "sugar-maple",
+            "european-larch",
+            "grey-alder",
+            "mountain-pine",
+            "dwarf-birch",
+            "pinyon-pine",
+            "ponderosa-pine",
+            "olive",
+            "mesquite",
+            "acacia",
+            "baobab",
+            "eucalyptus",
+            "kapok",
+            "tree-fern",
+            "thornbush",
+            "dipterocarp",
+            "rain-tree"
               ]
             },
             {"name": "weight", "kind": "number", "default": 1, "doc": "Relative abundance."},
@@ -7786,6 +7837,13 @@
           "kind": "number",
           "default": 0,
           "doc": "0 for trees spread evenly, up to 1 for clumps with open ground between."
+        },
+        {
+          "name": "placement",
+          "kind": "enum",
+          "default": "darts",
+          "options": ["darts", "grid"],
+          "doc": "darts: each tree kept its spacing from the rest; grid: one candidate per cell of the closest spacing, as thick but thirty times cheaper, for trees far off."
         },
         {
           "name": "max_slope",

@@ -812,12 +812,15 @@ pub fn params(species_name: &str, overrides: &Value) -> TreeParams {
     p
 }
 
-pub const SPECIES: [&str; 26] = [
+pub const SPECIES: [&str; 46] = [
     "quaking-aspen", "black-tupelo", "california-black-oak", "weeping-willow",
     "lombardy-poplar", "balsam-fir", "palm", "shrub", "hazel", "hawthorn", "juniper",
     "scots-pine", "stone-pine", "norway-spruce", "italian-cypress", "cedar-of-lebanon",
     "creosote-bush", "sagebrush", "joshua-tree", "utah-juniper", "rabbitbrush",
     "saguaro", "barrel-cactus", "prickly-pear", "agave", "ocotillo",
+    "silver-birch", "european-beech", "english-oak", "sugar-maple", "european-larch", "grey-alder",
+    "mountain-pine", "dwarf-birch", "pinyon-pine", "ponderosa-pine", "olive", "mesquite",
+    "acacia", "baobab", "eucalyptus", "kapok", "tree-fern", "thornbush", "dipterocarp", "rain-tree",
 ];
 
 /// A succulent's parameters (see `crate::procedural::succulent` for what each field means to
@@ -1161,6 +1164,292 @@ pub fn species(name: &str) -> Option<TreeParams> {
         "ocotillo" => TreeParams {
             lean: 22., lean_v: 6., wander: 0.03,
             ..succulent(PlantForm::Ocotillo, 4.5, 1.2, 0.006, 22., 50., 0.035, 0.55)
+        },
+
+        // Silver birch: a slender white trunk, a narrow open crown, and fine twigs that hang
+        // from ascending branches.
+        "silver-birch" => TreeParams {
+            shape: 7, base_size: 0.3, scale: 18., scale_v: 4., levels: 3,
+            ratio: 0.013, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.5,
+            leaves: 30., leaf_scale: 0.18, leaf_scale_x: 0.8, attraction_up: -0.4, wander: 0.03,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 20.),
+                level(45., -15., 137.5, 30., 45., 0.35, 0.05, 1., 6, -25., 0., 40.),
+                level(40., 10., 137.5, 30., 30., 0.6, 0.1, 1., 4, 50., 0., 60.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // European beech: tall, a smooth grey trunk, and a broad, dense dome of ascending limbs
+        // holding their leaves in level sprays.
+        "european-beech" => TreeParams {
+            shape: 1, base_size: 0.25, scale: 28., scale_v: 5., levels: 3,
+            ratio: 0.017, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.8,
+            leaves: 45., leaf_scale: 0.33, leaf_scale_x: 0.6, attraction_up: 0.5, wander: 0.02,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 10, 0., 0., 20.),
+                split(level(55., -25., 137.5, 30., 40., 0.45, 0.1, 1., 8, -20., 0., 60.), 0.1, 20., 10.),
+                level(45., 10., 137.5, 30., 40., 0.5, 0.1, 1., 4, 0., 0., 40.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // English oak: a short, stout trunk forking low into massive, crooked limbs that spread
+        // wide, under a broad, uneven crown.
+        "english-oak" => TreeParams {
+            shape: 1, base_size: 0.12, scale: 20., scale_v: 4., levels: 3,
+            ratio: 0.024, ratio_power: 1.4, lobes: 5, lobe_depth: 0.12, flare: 1.2,
+            base_splits: 2, leaves: 45., leaf_scale: 0.24, leaf_scale_x: 0.6, attraction_up: 0.4,
+            wander: 0.08, branch_loss: 0.06,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 0.95, 8, 0., 0., 50.), 0.25, 30., 10.),
+                split(level(55., -20., 137.5, 40., 35., 0.7, 0.15, 1., 10, 10., -20., 90.), 0.2, 20., 10.),
+                split(level(45., 15., 137.5, 30., 45., 0.3, 0.1, 1., 4, 0., 0., 60.), 0.1, 15., 10.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Sugar maple: a dense, rounded oval crown on a straight trunk, its broad leaves in
+        // close layers.
+        "sugar-maple" => TreeParams {
+            shape: 1, base_size: 0.25, scale: 22., scale_v: 4., levels: 3,
+            ratio: 0.016, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.7,
+            leaves: 30., leaf_scale: 0.27, leaf_scale_x: 0.9, attraction_up: 0.6,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 20.),
+                split(level(50., -20., 137.5, 30., 35., 0.45, 0.08, 1., 6, -10., 0., 50.), 0.1, 20., 10.),
+                level(40., 10., 137.5, 30., 35., 0.5, 0.1, 1., 4, 0., 0., 40.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // European larch: a deciduous conifer, a slender, open cone of level branches with
+        // drooping branchlets of soft, pale needles.
+        "european-larch" => TreeParams {
+            shape: 0, base_size: 0.15, scale: 28., scale_v: 5., levels: 3,
+            ratio: 0.015, ratio_power: 1.4, flare: 0.5, lobes: 0, lobe_depth: 0.,
+            leaves: 40., leaf_scale: 0.3, leaf_scale_x: 0.2, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: -0.5, wander: 0.02, branch_loss: 0.08,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 8.),
+                level(80., 15., 137.5, 30., 70., 0.3, 0.05, 1., 5, -15., 0., 25.),
+                level(70., 15., -180., 25., 20., 0.4, 0.1, 1., 3, 45., 0., 25.),
+                level(50., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Grey alder: a small tree of wet ground, often several stems, with a narrow, conical
+        // crown of rounded leaves.
+        "grey-alder" => TreeParams {
+            shape: 5, base_size: 0.2, scale: 12., scale_v: 3., levels: 3,
+            ratio: 0.015, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.5,
+            base_splits: 2, leaves: 30., leaf_scale: 0.15, leaf_scale_x: 0.9, attraction_up: 0.5, wander: 0.04,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 25.), 0.05, 15., 5.),
+                level(50., -10., 137.5, 30., 35., 0.35, 0.05, 1., 5, -10., 0., 40.),
+                level(45., 10., 137.5, 30., 25., 0.5, 0.1, 1., 3, 0., 0., 40.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Mountain pine (krummholz): a low, sprawling pine of many stems, bent up from the
+        // ground, at the treeline.
+        "mountain-pine" => TreeParams {
+            shape: 2, base_size: 0., scale: 2.5, scale_v: 0.8, levels: 3,
+            ratio: 0.03, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.2,
+            base_splits: 5, leaves: 50., leaf_scale: 0.13, leaf_scale_x: 0.15, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 0.8, wander: 0.08, branch_loss: 0.05,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 30.), 0.3, 50., 15.),
+                level(45., 15., 137.5, 40., 25., 0.45, 0.1, 1., 4, -20., 0., 30.),
+                level(40., 10., 137.5, 30., 14., 0.4, 0.15, 1., 2, 0., 0., 20.),
+                level(40., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Dwarf birch: a knee-high, tangled shrub of the tundra with small round leaves.
+        "dwarf-birch" => TreeParams {
+            shape: 2, base_size: 0., scale: 0.7, scale_v: 0.25, levels: 3,
+            ratio: 0.02, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.,
+            base_splits: 5, leaves: 30., leaf_scale: 0.025, leaf_scale_x: 1., attraction_up: 0.3, wander: 0.1,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0.1, 1., 5, 0., 0., 50.), 0.3, 45., 15.),
+                level(55., 15., 137.5, 30., 20., 0.5, 0.15, 1., 4, 0., 0., 50.),
+                level(45., 15., 137.5, 30., 10., 0.5, 0.15, 1., 2, 0., 0., 40.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Pinyon pine: a small, bushy, round-topped pine of dry hills, often forked low.
+        "pinyon-pine" => TreeParams {
+            shape: 1, base_size: 0.12, scale: 8., scale_v: 2., levels: 3,
+            ratio: 0.028, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.5,
+            base_splits: 2, leaves: 80., leaf_scale: 0.15, leaf_scale_x: 0.15, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 0.5, wander: 0.06, branch_loss: 0.08,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 40.), 0.2, 30., 10.),
+                level(60., 10., 137.5, 40., 30., 0.5, 0.1, 1., 5, -20., 0., 50.),
+                level(45., 15., 137.5, 30., 20., 0.45, 0.1, 1., 3, 0., 0., 40.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Ponderosa pine: tall and straight, an open, narrow crown high on a long bare trunk,
+        // its branch ends turned up, with long needles in tufts.
+        "ponderosa-pine" => TreeParams {
+            shape: 3, base_size: 0.4, scale: 30., scale_v: 6., levels: 3,
+            ratio: 0.02, ratio_power: 1.4, flare: 0.6, lobes: 0, lobe_depth: 0.,
+            leaves: 60., leaf_scale: 0.33, leaf_scale_x: 0.12, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 0.5, wander: 0.02, branch_loss: 0.08,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 10, 0., 0., 15.),
+                level(75., 10., 137.5, 30., 40., 0.3, 0.1, 1., 6, -40., 0., 40.),
+                level(50., 15., 137.5, 30., 20., 0.45, 0.1, 1., 3, -10., 0., 30.),
+                level(40., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Olive: a short, thick, gnarled and fluted trunk under a rounded crown of small,
+        // narrow, grey-green leaves.
+        "olive" => TreeParams {
+            shape: 1, base_size: 0.2, scale: 7., scale_v: 2., levels: 3,
+            ratio: 0.04, ratio_power: 1.5, lobes: 6, lobe_depth: 0.15, flare: 0.8,
+            base_splits: 2, leaves: 120., leaf_scale: 0.1, leaf_scale_x: 0.25, attraction_up: 0.3,
+            wander: 0.12, branch_loss: 0.05,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 60.), 0.3, 35., 10.),
+                split(level(50., 15., 137.5, 40., 25., 0.6, 0.15, 1., 6, -10., 0., 80.), 0.2, 25., 10.),
+                level(45., 15., 137.5, 30., 30., 0.5, 0.1, 1., 3, 0., 0., 50.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Mesquite: a small, spreading, many-stemmed tree of desert washes, its arching limbs
+        // feathery with small leaflets.
+        "mesquite" => TreeParams {
+            shape: 2, base_size: 0.05, scale: 5., scale_v: 1.5, levels: 3,
+            ratio: 0.02, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.3,
+            base_splits: 3, leaves: 50., leaf_scale: 0.08, leaf_scale_x: 0.4, attraction_up: 0.2,
+            wander: 0.1, branch_loss: 0.1,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 50.), 0.2, 40., 15.),
+                level(65., 15., 137.5, 40., 25., 0.6, 0.15, 1., 5, 20., 0., 60.),
+                level(45., 15., 137.5, 30., 25., 0.4, 0.1, 1., 3, 0., 0., 40.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Umbrella thorn acacia: a trunk forking into a few limbs that rise and spread under a
+        // wide, flat top of fine leaflets: the savanna's silhouette.
+        "acacia" => TreeParams {
+            shape: 2, base_size: 0.35, scale: 8., scale_v: 2., levels: 3,
+            ratio: 0.022, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.5,
+            leaves: 60., leaf_scale: 0.1, leaf_scale_x: 0.5, attraction_up: 2., wander: 0.06, branch_loss: 0.08,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 40.), 0.3, 35., 10.),
+                split(level(55., 15., 137.5, 40., 16., 0.7, 0.1, 1., 8, 50., 0., 40.), 0.3, 25., 10.),
+                level(70., 15., 137.5, 30., 40., 0.35, 0.1, 1., 3, -20., 0., 30.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Baobab: a massive, swollen trunk crowned by short, stubby, bare-looking branches.
+        "baobab" => TreeParams {
+            shape: 3, base_size: 0.72, scale: 18., scale_v: 3., levels: 3,
+            ratio: 0.1, ratio_power: 2., lobes: 4, lobe_depth: 0.1, flare: 1.2,
+            leaves: 15., leaf_scale: 0.25, leaf_scale_x: 0.6, attraction_up: 0.5, wander: 0.04,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 0.6, 8, 0., 0., 10.),
+                level(50., 15., 137.5, 40., 7., 0.9, 0.1, 1., 4, -30., 0., 40.),
+                level(40., 15., 137.5, 30., 8., 0.5, 0.1, 1., 3, 0., 0., 40.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Eucalyptus (a gum): tall, a smooth pale trunk, an open, irregular crown and narrow
+        // leaves hanging edge-on.
+        "eucalyptus" => TreeParams {
+            shape: 7, base_size: 0.4, scale: 25., scale_v: 6., levels: 3,
+            ratio: 0.015, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.7,
+            leaves: 35., leaf_scale: 0.3, leaf_scale_x: 0.2, leaf_bend: 0., attraction_up: -0.3,
+            wander: 0.05, branch_loss: 0.15,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 30.),
+                split(level(45., 15., 137.5, 40., 25., 0.5, 0.15, 1., 6, -20., 0., 60.), 0.15, 25., 10.),
+                level(45., 15., 137.5, 30., 25., 0.5, 0.1, 1., 4, 20., 0., 60.),
+                level(45., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Kapok: the rainforest's emergent, a tall, straight, buttressed trunk with a wide,
+        // flat crown of level limbs high above the canopy.
+        "kapok" => TreeParams {
+            shape: 3, base_size: 0.7, scale: 40., scale_v: 6., levels: 4,
+            ratio: 0.018, ratio_power: 1.3, lobes: 5, lobe_depth: 0.3, flare: 2.,
+            leaves: 30., leaf_scale: 0.45, leaf_scale_x: 0.8, attraction_up: 0.5,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 10, 0., 0., 15.),
+                level(80., 10., 137.5, 30., 20., 0.8, 0.1, 1., 6, -30., 0., 40.),
+                level(45., 10., 137.5, 30., 25., 0.4, 0.1, 1., 4, 0., 0., 40.),
+                level(45., 10., 137.5, 30., 10., 0.4, 0.1, 1., 2, 0., 0., 30.),
+            ],
+            ..d
+        },
+        // Tree fern: a slender, shaggy trunk a few metres tall under a crown of long fronds
+        // arching out and down.
+        "tree-fern" => TreeParams {
+            shape: 4, base_size: 0.95, scale: 5., scale_v: 1.5, levels: 2,
+            ratio: 0.025, ratio_power: 2., lobes: 0, lobe_depth: 0., flare: 0.3,
+            leaves: 90., leaf_scale: 0.35, leaf_scale_x: 0.15, leaf_bend: 0.1, attraction_up: 0.,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 0.6, 10, 0., 0., 15.),
+                level(50., -30., 137.5, 5., 24., 0.6, 0.05, 1., 10, 110., 0., 20.),
+                level(70., 10., -180., 10., 0., 0., 0., 1., 1, 0., 0., 0.),
+                level(70., 10., -180., 10., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Thornbush: a savanna shrub, many stems spreading into a flat-topped mound of small
+        // leaves.
+        "thornbush" => TreeParams {
+            shape: 2, base_size: 0., scale: 2.5, scale_v: 0.8, levels: 3,
+            ratio: 0.02, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.,
+            base_splits: 5, leaves: 40., leaf_scale: 0.06, leaf_scale_x: 0.6, attraction_up: 1.5, wander: 0.08,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0.1, 1., 5, 0., 0., 30.), 0.3, 35., 10.),
+                level(60., 10., 140., 20., 25., 0.5, 0.1, 1., 4, -10., 0., 40.),
+                level(45., 10., 140., 20., 12., 0.5, 0.1, 1., 2, 0., 0., 30.),
+                level(45., 10., 140., 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Dipterocarp: the rainforest's tall emergent, a straight, buttressed bole bare for most
+        // of its height, under a broad crown of rounded, cauliflower-like clumps.
+        "dipterocarp" => TreeParams {
+            shape: 2, base_size: 0.6, scale: 42., scale_v: 6., levels: 4,
+            ratio: 0.017, ratio_power: 1.3, lobes: 4, lobe_depth: 0.25, flare: 1.8,
+            leaves: 30., leaf_scale: 0.45, leaf_scale_x: 0.7, attraction_up: 0.8, wander: 0.03,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 10, 0., 0., 10.),
+                split(level(45., 15., 137.5, 40., 12., 0.55, 0.1, 1., 6, -10., 0., 40.), 0.2, 25., 10.),
+                level(40., 15., 137.5, 30., 30., 0.45, 0.1, 1., 4, 0., 0., 50.),
+                level(45., 10., 137.5, 30., 10., 0.4, 0.1, 1., 2, 0., 0., 30.),
+            ],
+            ..d
+        },
+        // Rain tree: a short, stout trunk dividing into wide, arching limbs under a broad,
+        // flat-topped umbrella of a crown, wider than it is tall.
+        "rain-tree" => TreeParams {
+            shape: 2, base_size: 0.25, scale: 22., scale_v: 4., levels: 4,
+            ratio: 0.028, ratio_power: 1.4, lobes: 4, lobe_depth: 0.1, flare: 1.,
+            base_splits: 2, leaves: 30., leaf_scale: 0.27, leaf_scale_x: 0.7, attraction_up: 1.5, wander: 0.05,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 40.), 0.25, 35., 10.),
+                split(level(60., 15., 137.5, 40., 14., 0.9, 0.1, 1., 8, 40., 0., 40.), 0.25, 25., 10.),
+                level(60., 15., 137.5, 30., 35., 0.4, 0.1, 1., 4, -20., 0., 40.),
+                level(45., 10., 137.5, 30., 10., 0.4, 0.1, 1., 2, 0., 0., 30.),
+            ],
+            ..d
         },
         _ => return None,
     };

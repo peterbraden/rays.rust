@@ -170,7 +170,8 @@ open-water evaporation (from 0.5 m/yr at 0 °C to 2 m/yr in a hot desert) less t
 A lake that would lose more than flows in never spills: its basin keeps its water and its
 sediment, the rivers below it lose its catchment, and its water stands where evaporation
 balances the inflow, as a shallow salt lake or none at all, leaving a flat playa of lake beds
-(the module docs of `terrain::simulation`, "Closed basins"; `evaporation` scales it, 0 for
+where a wet year's lake spreads (three times the mean inflow, `WET_YEAR`: the basin's lowest
+ground, not the slopes of the whole depression) (the module docs of `terrain::simulation`, "Closed basins"; `evaporation` scales it, 0 for
 none). Maps show salt lakes in green-blue and playas in white; rendered, playas are salt crust
 and clay pan cracked into polygons, and terminal lakes shallow brine, and graphs can read a
 `playa` field.
@@ -198,6 +199,79 @@ stretched province in the subtropics.
 In a dry climate the basins are closed (above): their floors fill with the ranges' alluvium,
 and their lowest ground, against the fault where the hanging wall is tilted down, is a playa,
 as Death Valley's is against the Black Mountains.
+
+## Hotspots: shield volcanoes and their chains
+
+Volcanoes erupt where the planet's volcanism is high (`terrain::volcano`: vents on a 30 km
+lattice, each erupting for its own tens of thousands of years, building a stratovolcano, concave
+with a summit crater, a fifth of them collapsing into a caldera as they die, with a field of
+cinder cones about it, and sending lava down the slopes, which stands as hard basalt). Hotspots do more (`terrain::hotspot`): plumes
+fixed beneath the moving plates (the tectonics' own, which now keeps the motion of the plate
+over each, or without tectonics eight drawn from the seed), each leaving a chain of **shield
+volcanoes** behind it along its plate's motion, a shield every 55 km or so, the oldest kept 70
+million years old. On ocean crust only: beneath continents plumes erupt as calderas and lava
+plains instead, not yet drawn.
+
+- **Young shields** grow over about a million years to stand 3.2 km above the sea (by the
+  square root of the hotspot's strength, which broadens them more than it raises them, so
+  that their summits stand 2 to 4 km up, as Hawaii's, Tenerife's and Réunion's do), whatever
+  the floor's depth: about 9 km above a deep sea floor, eight times as wide. Convex, level at
+  the summit, with a summit caldera, two or three rift zones stretching them into ridges, and
+  an apron at the foot. The youngest erupt through the landscape's run: lava many times as
+  fast as an arc volcano's, mostly as thin flows, half breaking out about the summit and half
+  anywhere along the rift zones' fissures (`Shield::rift_line`), each a
+  quarter of a cubic kilometre running tens of kilometres down the flanks as Mauna Loa's do,
+  laid a few metres thick across its width on any grid (`volcano::HOTSPOT_RATE`,
+  `SHIELD_FLOW_VOLUME`, `lateral`). Bare rock is only what has erupted in the landscape's time
+  (`Terrain::fresh_lava`); the old basalt of the shields weathers and grows over like any rock.
+- **Older shields** sink under their weight and as the plate cools (two kilometres in their
+  first few million years, five and a half in all), and their height above the sea wears down
+  with a time constant of six million years, so a chain steps down: Kauaʻi-like islands at
+  five million years, low islands at ten.
+- **Atolls**: in the tropics coral keeps pace with the sinking, so an island worn and sunk to
+  the sea leaves a reef about its old shoreline, standing in islets, around a lagoon 25 m deep.
+  Beyond 28° of latitude (the Darwin point), and for shields that never rose above the sea,
+  none: they drown as seamounts, and those planed off by the waves sink on as flat-topped
+  guyots.
+
+Patches `"near": "hotspot"` are centred on the young shield standing highest above the sea,
+in the tropics if any is; `"hotspot_volcanoes": false` leaves the chains out.
+
+## Lava
+
+Lava erupted in the landscape's time is kept as it flows (`volcano::erupt`): when it last
+covered each cell (`Terrain::lava_time`, a `lava_age` field in years) and of what kind
+(`Terrain::lava_aa`, an `aa` field). A shield's basalt pours as pāhoehoe near its vent, turning
+to ʻaʻā a few kilometres down its flows and on slopes over about 5°, as Kīlauea's do; the
+stiffer lavas of stratovolcanoes and cinder cones flow as ʻaʻā from the start.
+
+Close up (`scenery::Ground::lava`, `terrain::detail`), fresh pāhoehoe is black basaltic glass
+with a faint sheen, in lobes a few metres across swollen here and there into tumuli, its skin
+folded into ropes; ʻaʻā is a rubble of clinker, dull brown-black and rusty where it oxidised hot,
+heaped in pressure ridges. Within decades the glassy skin spalls and the rock weathers browner (over twenty to four hundred years, whatever the rain),
+and lichen settles where it is wet; then plants take it over, patchily, cracks and hollows first,
+at a pace set by the rain: in about 500 years at 2,000 mm a year, as the rain to the -1.5 (Hawaii's
+wet windward flows carry forest within 300-400 years, its dry leeward ones stand bare for
+millennia). The flows' relief outlasts the plants, worn back over tens of thousands of years.
+
+### An eruption in progress
+
+With `"eruption": true` a landscape's young shields still building (within 200 km of the
+scene) erupt as it is seen (`terrain::eruption`): a lava lake 300 m across in each summit's
+caldera, and channels of lava from there and from a rift zone, found down the steepest way
+over the landscape's own surface, spilling across hollows. The lava glows as a blackbody at
+1,100-1,200 °C, on the same scale as the sun and lightning (`eruption::luminance`,
+`radiance_per_nit`: about a thousand candela per square metre, so faint by day and lighting
+the ground about it at night): a lake's crust is dark plates with incandescent seams between
+them and open lava where it founders at the rim; a channel's crust is cracked, open in its
+core and hotter towards the vent.
+
+Over each lake rises its plume of steam and sulphate haze (`procedural::plume`): buoyant from
+the lake's heat (about 15 kW per square metre, a gigawatt for a lake Halemaʻumaʻu's size), it
+climbs and bends over in the climate's surface wind by Briggs' two-thirds law, levelling off
+some 500 m up in the trades' stable air, widening as it entrains the air about it and thinning
+downwind into a haze over 15 km, in billows that ride along it; lit by the sun, or at night
+by the lava beneath.
 
 ## Deposits: till, moraines and sand
 

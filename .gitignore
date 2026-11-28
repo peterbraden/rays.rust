@@ -37,6 +37,4 @@ Cargo.lock
 /src/gpu/pathtrace.spv
 /src/gpu/pathtrace.wgsl
 /src/gpu/pathtrace.spv.sources
-
-# Python bytecode, from scripts that import their neighbours
 __pycache__/

@@ -216,6 +216,12 @@ The landscape's own ground cover shades what lies bare with the library's natura
 `limestone_cliff`, `sandstone`, `quartzite`, `slate` for shale, `schist`, `gneiss`, `basalt`),
 scree, dune sand and river gravel, each chosen at a point by its share of the ground there
 (`scenery::Bare`) as snow and ice are; plants, salt crust, snow and ice keep their own. The
+presets fitted to photographs (`scripts/fit-material.py`) take the ground they were modelled
+on: `pebble_bed` in dry river beds, `shingle` along stretches of beach, `angular_rubble` on till
+and moraines, `laterite` for bare soil in the tropics and `trail_dirt` elsewhere,
+`bedded_sandstone` on sandstone's cliffs and `ochre_crust` on its gentler ground in deserts,
+`foliated_rock` in patches of schist and gneiss, and in wooded country `mossy_slab` on rock lying
+at a slant and `lichened_ironstone` on dark rock. The
 materials carry detail from centimetres up, filtered to the pixel, so close up the ground has
 grain, crystals, stains and lichen, and from afar their average colours. `"ground_materials":
 false` keeps plain colours.

@@ -100,7 +100,7 @@ fn cell_colour(t: &Terrain, i: usize, sea: &[bool], level: f64) -> [f64; 3] {
     if t.sediment[i] > ALLUVIUM {
         return mix(land_colour(t.bed[i]), ALLUVIUM_COLOUR, 0.6);
     }
-    if t.lava[i] > 1. {
+    if t.fresh_lava(i) > 1. {
         return mix(land_colour(t.bed[i]), LAVA_COLOUR, 0.7);
     }
     land_colour(t.bed[i])

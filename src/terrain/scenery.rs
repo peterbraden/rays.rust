@@ -252,7 +252,7 @@ impl Layer {
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
             else if t.bed[i] < 0. { SEA_FLOOR }
-            else if t.lava[i] > 1. && t.sediment[i] < map::ALLUVIUM { LAVA }
+            else if t.fresh_lava(i) > 1. && t.sediment[i] < map::ALLUVIUM { LAVA }
             else if map::is_till(&t, i) { TILL }
             else if t.sediment[i] > map::ALLUVIUM { ALLUVIUM }
             else { LAND }
@@ -310,11 +310,46 @@ impl Layer {
 
     fn class_at(&self, d: &Vector3<f64>) -> u8 { self.class[self.domain.cell_at(d)] }
 
+    /// The layers of a world's `patches` (finest first) and its `globe`; a close level
+    /// (`close`, the finest) drawn with the closed basins of the patch around it
+    /// (`SimFields::take_basins`).
+    pub fn of_world(patches: Vec<Terrain>, globe: Option<Terrain>, close: bool, min_river_width: f64) -> Vec<Layer> {
+        let n = patches.len();
+        let mut layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, min_river_width)).collect();
+        if close && n >= 2 {
+            let (fine, around) = layers.split_at_mut(1);
+            fine[0].fields.take_basins(&fine[0].domain, &around[0].fields, &around[0].domain);
+        }
+        layers
+    }
+
     fn wet(&self, d: &Vector3<f64>) -> bool {
         let (Some(water), Some((x, z))) = (&self.water, self.tangent(d)) else { return false };
         water.wet(point_cell(&self.domain, [x, z]), [x, z])
     }
 }
+
+/// A number from -1 to 1 for scene point `p`, as if random, but the same for the same point.
+fn point_dither(p: &Vector3<f64>) -> f64 {
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    for v in [p.x, p.y, p.z] {
+        x = (x ^ v.to_bits()).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        x ^= x >> 31;
+    }
+    x = (x ^ (x >> 29)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 32;
+    (x >> 11) as f64 / (1u64 << 53) as f64 * 2. - 1.
+}
+
+/// How far biomes' climates are blurred where they meet (`Ground::wandering_climate`): by
+/// up to this many degrees of temperature, and this share of the rain (as a logarithm), at
+/// the most; of which patchy noise makes this much, and each sample's dither this much.
+/// Rain falls over tens of kilometres, so its biomes' ecotones are kilometres wide; with
+/// height the air cools 6.5 degrees a kilometre, so those up a slope are a few hundred metres.
+const ECOTONE_DEGREES: f64 = 1.5;
+const ECOTONE_RAIN: f64 = 0.25;
+const ECOTONE_PATCHES: f64 = 0.6;
+const ECOTONE_DITHER: f64 = 0.4;
 
 /// Heights of the landscape, from its layers and the planet's own topography.
 /// The large-scale surface's slope at a point: its gradient (uphill, metres per metre, in the
@@ -364,8 +399,11 @@ impl Relief {
             if w > 0. {
                 let mut v = l.simulated(d);
                 if l.spacing > 1.01 * self.finest {
-                    // Relief between twice this layer's spacing and twice the finest's.
-                    v += self.planet.elevation(d, 2. * self.finest) - self.planet.elevation(d, 2. * l.spacing);
+                    // Relief between twice this layer's spacing and twice the finest's: none on
+                    // a closed basin's level floor (as the finest has none there).
+                    let floor = l.fields.at(&l.domain, crate::graph::Field::Playa, d, 0.).unwrap_or(0.);
+                    let relief = self.planet.elevation(d, 2. * self.finest) - self.planet.elevation(d, 2. * l.spacing);
+                    v += relief * (1. - smoothstep(0.02, 0.2, floor));
                 }
                 h += w * v;
                 rest -= w;
@@ -474,6 +512,21 @@ impl Relief {
         (shaped, dv * slope)
     }
 
+    /// How much of the ground at `d` is a closed basin's floor (`graph::Field::Playa`), 0 to 1,
+    /// blended between the layers as their surfaces are.
+    fn playa(&self, d: &Vector3<f64>) -> f64 {
+        let (mut rest, mut playa) = (1., 0.);
+        for l in self.layers.iter() {
+            let w = l.weight(d) * rest;
+            if w > 0. {
+                playa += w * l.fields.at(&l.domain, crate::graph::Field::Playa, d, 0.).unwrap_or(0.);
+                rest -= w;
+            }
+            if rest <= 0. { break; }
+        }
+        playa.clamp(0., 1.)
+    }
+
     /// The wind-blown sand at `d`, metres, blended between the layers as their surfaces are,
     /// and the wind of the layer that counts most there.
     fn sand(&self, d: &Vector3<f64>) -> (f64, Option<(Vector3<f64>, Vector3<f64>)>) {
@@ -541,9 +594,13 @@ impl Relief {
     /// slope there.
     pub fn height(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
         let (sand, wind) = self.sand(d);
-        // Drifting sand buries the ground's small relief.
-        let buried = 1. - 0.8 * smoothstep(0.5, 4., sand);
-        self.base(d) + buried * self.detail(d, slope, local) + self.dunes_on(d, local, sand, wind)
+        // Drifting sand buries the ground's small relief, and a closed basin's floor is level:
+        // the water spreads and dries over it, the sediment settling flat (no gullies, which
+        // its own cells are too coarse for the simulation to have filled).
+        let floor = 1. - smoothstep(0.02, 0.2, self.playa(d));
+        let buried = (1. - 0.8 * smoothstep(0.5, 4., sand)) * floor;
+        // (Nor do dunes cross it: its damp crust holds the sand, which heaps at its margins.)
+        self.base(d) + buried * self.detail(d, slope, local) + floor * self.dunes_on(d, local, sand, wind)
     }
 
     /// The surface's normal at `d` (outwards, in planet coordinates), by finite differences
@@ -834,34 +891,85 @@ pub struct Ground {
     ice: [Ice; 2],
     /// The library's materials for each kind of bare ground (`Bare::index`), if used.
     materials: Vec<Option<Box<dyn MaterialModel + Sync + Send>>>,
+    /// The crowns of the trees ecosystems planted on it: forest floor under them.
+    canopy: crate::terrain::canopy::Slot,
+    /// Where the flora's communities grow, for the woods beyond those trees.
+    regions: crate::terrain::flora::Regions,
 }
 
 /// What lies bare on the ground at a point, under any snow or ice: plants and soil (the
 /// cover's colour), or bare rock of a kind, or loose stones, sand or gravel.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Bare { Plain, Rock(Rock), Scree, Sand, Gravel }
+pub enum Bare {
+    Plain, Scree, Sand, Gravel,
+    /// A dry river bed's packed, rounded pebbles.
+    Pebbles,
+    /// Beach shingle: small flat stones and grit.
+    Shingle,
+    /// Till's unsorted angular rubble, soil in its gaps.
+    Rubble,
+    /// Bare soil: the tropics' red laterite, and brown earth with stones elsewhere.
+    Laterite, Dirt,
+    /// Sandstone weathered in a desert to an ochre crust with dark varnish.
+    Crust,
+    /// Sandstone's cliffs, thin-bedded.
+    Bedded,
+    /// Foliated schist and gneiss in faces.
+    Foliated,
+    /// Rock in humid, wooded country: slabs grown over with moss and lichen, and dark rock
+    /// speckled with lichen.
+    Mossy, Lichened,
+    /// Forest floor under trees (`terrain::canopy`): humus, fallen leaves and needles, moss.
+    Floor,
+    /// Woods seen from afar, beyond the trees planted about the camera: a canopy of crowns,
+    /// broadleaved and conifers (`flora::Regions::woods`).
+    Woods, Conifers,
+    /// Lava flowed in the landscape's time (`lava_material`): fresh pāhoehoe, black with a
+    /// glassy skin, in lobes with ropy folds; fresh ʻaʻā, rubble of clinker, rusty where it
+    /// oxidised; and old lava of either, its skin weathered off, browner, spotted with lichen.
+    Pahoehoe, Aa, OldLava,
+    Rock(Rock),
+}
 
 impl Bare {
-    const COUNT: usize = 4 + 9;
+    /// The kinds that aren't a rock of their own, in the order of their indices.
+    const LOOSE: [Bare; 20] = [
+        Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel, Bare::Pebbles, Bare::Shingle, Bare::Rubble,
+        Bare::Laterite, Bare::Dirt, Bare::Crust, Bare::Bedded, Bare::Foliated, Bare::Mossy, Bare::Lichened,
+        Bare::Floor, Bare::Woods, Bare::Conifers, Bare::Pahoehoe, Bare::Aa, Bare::OldLava,
+    ];
+    const COUNT: usize = Bare::LOOSE.len() + 9;
 
     fn index(self) -> usize {
         match self {
-            Bare::Plain => 0,
-            Bare::Scree => 1,
-            Bare::Sand => 2,
-            Bare::Gravel => 3,
-            Bare::Rock(r) => 4 + r.index(),
+            Bare::Rock(r) => Bare::LOOSE.len() + r.index(),
+            s => Bare::LOOSE.iter().position(|&l| l == s).expect("a loose kind"),
         }
     }
 
-    /// The library's material for it, and its seed's salt: rocks by their lithology (slate
-    /// for shale), loose ground by what it is.
+    fn from_index(k: usize) -> Bare {
+        if k < Bare::LOOSE.len() { Bare::LOOSE[k] } else { Bare::Rock(Rock::from_index(k - Bare::LOOSE.len())) }
+    }
+
+    /// The library's material for it: rocks by their lithology (slate for shale), the rest by
+    /// what they are, many of them presets fitted to photographs (`scripts/fit-material.py`).
     fn library(self) -> Option<&'static str> {
         Some(match self {
             Bare::Plain => return None,
             Bare::Scree => "scree",
             Bare::Sand => "dune_sand",
             Bare::Gravel => "river_gravel",
+            Bare::Pebbles => "pebble_bed",
+            Bare::Shingle => "shingle",
+            Bare::Rubble => "angular_rubble",
+            Bare::Laterite => "laterite",
+            Bare::Dirt => "trail_dirt",
+            Bare::Crust => "ochre_crust",
+            Bare::Bedded => "bedded_sandstone",
+            Bare::Foliated => "foliated_rock",
+            Bare::Mossy => "mossy_slab",
+            Bare::Lichened => "lichened_ironstone",
+            Bare::Floor | Bare::Woods | Bare::Conifers | Bare::Pahoehoe | Bare::Aa | Bare::OldLava => return None,
             Bare::Rock(r) => match r {
                 Rock::Sediment => "scree",
                 Rock::Shale => "slate",
@@ -899,10 +1007,7 @@ impl Shares {
         let mut x = rand() * self.0.iter().sum::<f64>();
         for (k, &w) in self.0.iter().enumerate() {
             if x < w || k == Bare::COUNT - 1 {
-                return match k {
-                    0 => Bare::Plain, 1 => Bare::Scree, 2 => Bare::Sand, 3 => Bare::Gravel,
-                    k => Bare::Rock(Rock::from_index(k - 4)),
-                };
+                return Bare::from_index(k);
             }
             x -= w;
         }
@@ -931,6 +1036,71 @@ const SCREE: [f64; 3] = [0.26, 0.25, 0.23];
 const FOREST: [f64; 3] = [0.028, 0.042, 0.022];
 const GRASS: [f64; 3] = [0.07, 0.10, 0.04];
 const MEADOW: [f64; 3] = [0.11, 0.11, 0.06];
+/// The forest floor's litter: fallen leaves, browner, and needles, redder; and its moss.
+const LEAF_LITTER: [f64; 3] = [0.16, 0.11, 0.06];
+const NEEDLE_LITTER: [f64; 3] = [0.14, 0.08, 0.045];
+const MOSS: [f64; 3] = [0.05, 0.08, 0.025];
+/// Woods from afar, broadleaved and conifers: their canopy materials' mean albedos, as the
+/// instanced trees nearer look from far off (their leaves lit, their gaps shadowed).
+const BROADLEAF_CANOPY: [f64; 3] = [0.056, 0.09, 0.035];
+const CONIFER_CANOPY: [f64; 3] = [0.035, 0.056, 0.028];
+
+/// A canopy seen from afar (`Bare::Woods`): crowns `spacing` metres apart, each a dome of
+/// leaves (the `cells` node's `stones`: random heights, rounded, gaps between), lit on the side
+/// facing the sun by its relief (4 m tall), its colour from `gap` deep between crowns through
+/// `mid` to `top` on their tops.
+fn canopy_material(spacing: f64, gap: [f64; 3], mid: [f64; 3], top: [f64; 3], seed: u64) -> serde_json::Value {
+    let crowns = serde_json::json!({"node": "cells", "style": "stones", "plan": true, "scale": spacing, "seed": seed % 100_000});
+    serde_json::json!({"type": "lambertian",
+        "albedo": {"pattern": crowns, "color_map": [[0, gap], [0.3, mid], [1, top]], "interpolation": "smooth"},
+        "normal": {"graph": crowns, "amount": 4}})
+}
+/// Lava's materials, close up (`Bare::Pahoehoe`, `Aa`, `OldLava`).
+///
+/// - Pāhoehoe: flowed in lobes a few metres across that swell and stack, its skin black
+///   basaltic glass with a faint silvery sheen, folded into ropes a decimetre apart where the
+///   crust was dragged by the lava beneath; plastic, for the glass's gloss.
+/// - ʻAʻā: a rubble of clinker, angular, spiny fragments from centimetres to a metre, dull
+///   dark brown-black, rusty red where it oxidised hot.
+/// - Old lava: its glassy skin spalled off within decades and the rock weathered brown-grey,
+///   spotted with pale lichen (Stereocaulon, the first to settle on Hawaii's flows).
+fn lava_material(kind: Bare, seed: u64) -> serde_json::Value {
+    let seed = seed % 100_000;
+    match kind {
+        Bare::Pahoehoe => {
+            let lobes = serde_json::json!({"node": "cells", "style": "stones", "plan": true, "scale": 5, "seed": seed});
+            let ropes = serde_json::json!({"node": "phasor", "wavelength": 0.12, "plan": true, "seed": seed + 1});
+            let grain = serde_json::json!({"node": "fractal", "scale": 0.5, "smallest": 0.01, "seed": seed + 2});
+            serde_json::json!({"type": "plastic", "refractive_index": 1.55, "roughness": 0.5,
+                "albedo": {"pattern": {"node": "fractal", "scale": 3, "smallest": 0.05, "seed": seed + 3}, "interpolation": "smooth",
+                    "color_map": [[0, [0.028, 0.028, 0.032]], [0.5, [0.04, 0.04, 0.045]], [1, [0.07, 0.07, 0.08]]]},
+                "normal": {"graph": {"node": "add", "inputs": [
+                    {"node": "multiply", "inputs": [0.6, lobes]},
+                    {"node": "multiply", "inputs": [0.03, ropes]},
+                    {"node": "multiply", "inputs": [0.015, grain]}]}, "amount": 1}})
+        }
+        Bare::Aa => {
+            let clinker = serde_json::json!({"node": "cells", "style": "stones", "scale": 0.35, "seed": seed});
+            serde_json::json!({"type": "lambertian",
+                "albedo": {"pattern": {"node": "fractal", "scale": 1.5, "smallest": 0.03, "seed": seed + 1}, "interpolation": "smooth",
+                    "color_map": [[0, [0.028, 0.026, 0.025]], [0.55, [0.045, 0.039, 0.034]], [0.8, [0.07, 0.045, 0.034]], [1, [0.1, 0.05, 0.03]]]},
+                "normal": {"graph": {"node": "add", "inputs": [
+                    {"node": "multiply", "inputs": [0.3, clinker]},
+                    {"node": "multiply", "inputs": [0.05, {"node": "fractal", "scale": 0.1, "smallest": 0.005, "seed": seed + 2}]}]}, "amount": 1}})
+        }
+        _ => {
+            serde_json::json!({"type": "lambertian",
+                "albedo": {"pattern": {"node": "fractal", "scale": 0.8, "smallest": 0.02, "seed": seed}, "interpolation": "smooth",
+                    "color_map": [[0, [0.06, 0.052, 0.045]], [0.5, [0.09, 0.078, 0.066]], [0.7, [0.1, 0.092, 0.082]], [0.78, [0.17, 0.17, 0.16]], [1, [0.22, 0.22, 0.2]]]},
+                "normal": {"graph": {"node": "cells", "style": "stones", "plan": true, "scale": 2, "seed": seed + 1}, "amount": 0.3}})
+        }
+    }
+}
+/// Fresh lava's albedos, seen from afar: pāhoehoe, ʻaʻā, and old lava, weathered and lichened.
+const PAHOEHOE: [f64; 3] = [0.04, 0.04, 0.045];
+const AA: [f64; 3] = [0.05, 0.042, 0.036];
+const OLD_LAVA: [f64; 3] = [0.08, 0.074, 0.067];
+
 const FIELDS: [f64; 3] = [0.13, 0.13, 0.07];
 const GRAVEL: [f64; 3] = [0.24, 0.23, 0.21];
 const SAND: [f64; 3] = [0.32, 0.28, 0.21];
@@ -945,6 +1115,8 @@ const RED_SAND: [f64; 3] = [0.45, 0.25, 0.12];
 
 fn colour(c: [f64; 3]) -> Color { Color::new(c[0], c[1], c[2]) }
 
+fn mix_colour(a: Color, b: Color, t: f64) -> Color { let t = t.clamp(0., 1.); a * (1. - t) + b * t }
+
 impl Ground {
     pub fn new(layers: Arc<Vec<Layer>>, climate: Option<Arc<Climate>>, glaciers: GlacierParams, time: f64, seed: u64, frame: Frame, p: &SceneryParams) -> Ground {
         Ground {
@@ -953,11 +1125,21 @@ impl Ground {
             snow: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("firn"), 1., seed)],
             ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
             materials: (0..Bare::COUNT).map(|k| {
-                let s = if k < 4 { [Bare::Plain, Bare::Scree, Bare::Sand, Bare::Gravel][k] } else { Bare::Rock(Rock::from_index(k - 4)) };
-                let name = s.library().filter(|_| p.ground_materials)?;
-                let definition = serde_json::json!({"type": "library", "name": name, "seed": seed.wrapping_mul(31).wrapping_add(k as u64)});
+                let s = Bare::from_index(k);
+                if !p.ground_materials { return None; }
+                let salt = seed.wrapping_mul(31).wrapping_add(k as u64);
+                // Forest floor is the soil material's (`material::soil`); the rest the library's.
+                let (definition, name) = match s {
+                    Bare::Floor => (serde_json::json!({"type": "soil", "preset": "forest_floor", "seed": salt}), "forest_floor"),
+                    Bare::Woods => (canopy_material(8., [0.017, 0.028, 0.011], [0.042, 0.07, 0.028], [0.105, 0.17, 0.056], salt), "woods"),
+                    Bare::Conifers => (canopy_material(5., [0.011, 0.017, 0.01], [0.028, 0.045, 0.022], [0.063, 0.1, 0.05], salt), "conifers"),
+                    Bare::Pahoehoe | Bare::Aa | Bare::OldLava => (lava_material(s, salt), "lava"),
+                    s => { let name = s.library()?; (serde_json::json!({"type": "library", "name": name, "seed": salt}), name) },
+                };
                 Some(crate::scenefile::SceneFile::parse_material_definition(&definition, name, &serde_json::Map::new()))
             }).collect(),
+            canopy: Default::default(),
+            regions: Default::default(),
         }
     }
 
@@ -1059,9 +1241,20 @@ impl Ground {
 
     /// Whether scene point `p` is under a closed basin's terminal lake: brine, shallow over a
     /// pale floor of salt and clay.
+    ///
+    /// Read, as the playa about it is (`cover`), at a point warped by noise (and jittered a
+    /// little for each sample): the lake's depth is a field at the cells' corners, so its shore
+    /// read straight would trace their outline, a rounded rectangle a few cells across.
     pub fn salt_lake(&self, p: &Vector3<f64>) -> bool {
         let (d, _) = self.frame.on_planet(p);
-        self.layer_at(&d).is_some_and(|l| l.fields.salt_lake(&l.domain, &d) > crate::terrain::simulation::SALT_LAKE_DEPTH)
+        let Some(layer) = self.layer_at(&d) else { return false };
+        let cell = layer.spacing;
+        let q = d * self.frame.radius;
+        let n = |s: f64, o: f64| self.noise.fbm(q.x / s + o * 17., q.y / s, q.z / s, 4, 0.5, 2.);
+        // (Little jitter: a shore is sharp, if ragged.)
+        let warp = |o: f64| cell * (4. * (n(2. * cell, o) - 0.5) + 0.6 * (n(0.4 * cell, o + 0.37) - 0.5) + 0.15 * (n(0.08 * cell, o + 0.71) - 0.5) + 0.1 * (rand() - 0.5));
+        let (e, _) = self.frame.on_planet(&(p + Vector3::new(warp(0.61), 0., warp(0.83))));
+        self.layer_at(&e).is_some_and(|l| l.fields.salt_lake(&l.domain, &e) > crate::terrain::simulation::SALT_LAKE_DEPTH)
     }
 
     /// How much of the ground at scene point `p` is a playa (`graph::Field::Playa`), blended
@@ -1073,13 +1266,23 @@ impl Ground {
     /// The climate at `d`, `h` metres up, its edges wandering with the weather from year to
     /// year (noise in temperature and rain), as the ground cover and `biome` nodes see it. None
     /// without a climate.
-    fn wandering_climate(&self, d: &Vector3<f64>, h: f64) -> Option<crate::terrain::climate::Local> {
+    ///
+    /// And blurred, so that biomes meet in ecotones a few kilometres wide rather than along a
+    /// line: by patchy noise a few hundred metres across, so near the line each biome holds
+    /// ground in tongues and islands within the other, and by `dither` (-1 to 1), which the
+    /// ground cover draws afresh for each sample, so that over a pixel's samples it blends the
+    /// biomes in the proportions found there. (Placement and graphs read it dithered by a hash
+    /// of the point, `point_dither`: the same for a tree's candidate each time, and as varied
+    /// from one point to the next.)
+    fn wandering_climate(&self, d: &Vector3<f64>, h: f64, dither: f64) -> Option<crate::terrain::climate::Local> {
         let q = d * self.frame.radius;
         let n = |s: f64, o: f64| self.noise.fbm(q.x / s + o * 17., q.y / s, q.z / s, 4, 0.5, 2.);
         let mut local = self.climate.as_ref()?.local(d, h);
-        local.mean += 3. * (n(40000., 0.15) - 0.5);
-        local.summer += 3. * (n(40000., 0.15) - 0.5);
-        local.precipitation *= (1.2 * (n(25000., 0.45) - 0.5)).exp();
+        let blur = ECOTONE_PATCHES * 2. * (n(500., 0.29) - 0.5) + ECOTONE_DITHER * dither;
+        local.mean += 3. * (n(40000., 0.15) - 0.5) + ECOTONE_DEGREES * blur;
+        local.summer += 3. * (n(40000., 0.15) - 0.5) + ECOTONE_DEGREES * blur;
+        local.winter += ECOTONE_DEGREES * blur;
+        local.precipitation *= (1.2 * (n(25000., 0.45) - 0.5) + ECOTONE_RAIN * blur).exp();
         Some(local)
     }
 
@@ -1114,10 +1317,11 @@ impl Ground {
         let mix = |a: Color, b: Color, t: f64| { let t = t.clamp(0., 1.); a * (1. - t) + b * t };
         let snowline = self.snowline(&d);
         let treeline = self.treeline(&d);
-        let bare = |ground: Color| Cover { ground, snow: 0., snow_age: 0., ice: 0., blue: 0., surface: Bare::Plain };
         // Snow ages towards the snowline: coarser, dustier, turning to firn.
         let age = |h: f64| 1. - smoothstep(snowline, snowline + 800., h + (n(300., 0.35) - 0.5) * 300.);
-        if class == LAVA { return Cover { surface: Bare::Rock(Rock::Basalt), ..bare(colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain) }; }
+        // Lava flowed in the landscape's time: bare where it is young, weathering, and grown
+        // over in its turn (at the end).
+        let lava = self.lava(&d, h, &n);
         if class == ICE {
             // Snow over the glacier's accumulation zone, bare ice below the snowline.
             let snow = smoothstep(snowline - 300., snowline + 100., h + (n(700., 0.2) - 0.5) * 300.);
@@ -1155,37 +1359,47 @@ impl Ground {
         let tree = treeline + (n(1500., 0.3) - 0.5) * 400.;
         // What grows here: by the climate's biome, its edges wandering with the weather from
         // year to year (noise in temperature and rain); without a climate, forest and grass.
-        let (mut ground, dry) = match &self.climate {
+        // And whether it is dry, tropical, and wooded (moss and lichen on its rock); and the
+        // woods: how much of the ground their crowns cover, and how much of that conifers'.
+        // Where trees were planted about the camera (`canopy::Slot::planted`) they are the
+        // woods, and the ground between them is open.
+        let planted = self.canopy.planted(p.x, p.z);
+        let below = (1. - smoothstep(tree - 150., tree + 50., h)) * smoothstep(0.7, 0.8, flat);
+        let (mut ground, dry, tropical, wooded, trees, needles) = match &self.climate {
             Some(_) => {
-                let local = self.wandering_climate(&d, h).expect("a climate");
+                let local = self.wandering_climate(&d, h, 2. * rand() - 1.).expect("a climate");
                 let biome = Biome::of(&local);
-                let mut g = match biome {
-                    Biome::Ice => colour(SCREE),
-                    b => colour(b.albedo()),
-                };
-                if biome.forest() {
-                    // Clearings and meadows among the trees.
-                    let open = colour(if biome == Biome::Rainforest { Biome::Savanna.albedo() } else { GRASS });
-                    let cover = smoothstep(0.3, 0.45, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat));
-                    g = mix(open, g, cover);
-                } else if matches!(biome, Biome::HotDesert | Biome::ColdDesert) {
+                // The open ground: grass in clearings of the forests, the biome's own else.
+                let mut g = colour(match biome {
+                    Biome::Ice => SCREE,
+                    Biome::Rainforest => Biome::Savanna.albedo(),
+                    b if b.forest() => GRASS,
+                    b => b.albedo(),
+                });
+                if matches!(biome, Biome::HotDesert | Biome::ColdDesert) {
                     // Dunes, pans and darker stony desert.
                     g = g * (0.75 + 0.5 * n(3000., 0.8) + 0.15 * n(150., 0.3));
-                } else {
-                    // Grass, scrub and the odd copse.
-                    g = mix(g, colour(FOREST), 0.5 * smoothstep(0.6, 0.75, n(800., 0.5)));
                 }
-                (g, local.precipitation < local.dry_threshold())
+                // The woods of the communities that grow here (`flora`), as the trees about the
+                // camera are planted, thinner and thicker from place to place.
+                let at = crate::graph::Context::new(*p, *normal, 0.).with_fields(Some(self as &dyn crate::graph::Fields));
+                let (woods, needles) = self.regions.woods(biome, &at);
+                let trees = (woods * (0.6 + 0.8 * n(400., 0.5))).clamp(0., 1.) * below * (1. - planted);
+                g = mix(g, mix(colour(BROADLEAF_CANOPY), colour(CONIFER_CANOPY), needles), trees);
+                (g, local.precipitation < local.dry_threshold(), matches!(biome, Biome::Rainforest | Biome::Savanna), biome.forest(), trees, needles)
             }
             None => {
-                let forest = smoothstep(0.38, 0.55, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat)) * (1. - smoothstep(tree - 150., tree + 50., h));
-                (mix(colour(GRASS), colour(FOREST), forest), false)
+                let forest = smoothstep(0.38, 0.55, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat)) * below * (1. - planted);
+                (mix(colour(GRASS), colour(FOREST), forest), false, false, forest > 0.5, forest, 0.3)
             }
         };
         // Alpine meadow from the treeline up.
         ground = mix(ground, colour(MEADOW), smoothstep(tree - 100., tree + 200., h));
-        // The kinds of bare ground, blended as their colours are.
+        // The kinds of bare ground, blended as their colours are: the woods' canopy first.
         let mut shares = Shares::of(Bare::Plain);
+        let mut canopy = Shares::of(Bare::Woods);
+        canopy.mix(Shares::of(Bare::Conifers), needles);
+        shares.mix(canopy, trees);
         if class == TILL {
             // Till and moraines: unsorted rubble, boulders in a grey matrix of rock flour,
             // thinly grown over where it is warm enough (moraines left by the last glaciers
@@ -1194,7 +1408,7 @@ impl Ground {
             let grown = if dry { 0.15 } else { 0.6 * (1. - smoothstep(tree - 200., tree + 100., h)) };
             let g = grown * smoothstep(0.3, 0.6, n(200., 0.45));
             ground = mix(rubble, ground, g);
-            shares = Shares::of(Bare::Scree);
+            shares = Shares::of(Bare::Rubble);
             shares.mix(Shares::of(Bare::Plain), g);
         }
         if class == ALLUVIUM {
@@ -1203,16 +1417,27 @@ impl Ground {
             let fields = mix(colour(GRASS), colour(FIELDS), smoothstep(0.4, 0.6, n(350., 0.8)));
             let barren = if dry { 1. } else { smoothstep(tree, tree + 300., h) };
             ground = mix(fields, colour(GRAVEL), barren);
-            shares.mix(Shares::of(Bare::Gravel), barren);
+            // Where it is dry, the beds the floods last ran in: packed, rounded pebbles.
+            shares.mix(Shares::of(if dry { Bare::Pebbles } else { Bare::Gravel }), barren);
         }
         // Playas: the flat floors of closed basins, white with salt where the water last
         // evaporated, cracked into polygons a few metres across, darker and browner where the
         // clay is damp or dust has blown over it.
-        let playa = self.playa(p);
+        // The simulation's playas and sand are fields at its cells' corners, so their edges
+        // would be round blobs a cell across: read them at a point warped by noise (ragged
+        // shores and tongues of sand) and jittered within a cell for each sample, so that
+        // they fade into the ground around over a cell.
+        let cell = self.layer_at(&d).map_or(100., |l| l.spacing);
+        let warp = |o: f64| cell * (1.6 * (n(2. * cell, o) - 0.5) + 0.25 * (n(0.4 * cell, o + 0.37) - 0.5) + (rand() - 0.5));
+        let edge = p + Vector3::new(warp(0.61), 0., warp(0.83));
+        let playa = self.playa(&edge);
         if playa > 0. {
-            // (A playa is level by nature: only its shores and the sides of its own cracks are
-            // steep, and the crust covers those.)
-            let extent = smoothstep(0.35, 0.65, playa + 0.3 * (n(600., 0.25) - 0.5)) * smoothstep(0.5, 0.7, flat);
+            // A playa is level by nature: the crust forms where the water stood and dried, on
+            // ground within ten degrees or so of level, and none on slopes steeper than twenty
+            // within the basin (the hummocks and gullies of the ground's own relief, finer than
+            // the simulation's cells), which keep the ground around. (The sides of the crust's
+            // own cracks show darker, as the cracks do.)
+            let extent = smoothstep(0.35, 0.65, playa + 0.3 * (n(600., 0.25) - 0.5)) * smoothstep(0.94, 0.985, flat);
             if extent > 0. {
                 let salt = smoothstep(0.35, 0.6, n(900., 0.75) + 0.3 * playa);
                 let crust = mix(colour(CLAY_PAN), colour(SALT), salt);
@@ -1226,7 +1451,7 @@ impl Ground {
         // Wind-blown sand, over all but steep rock (slip faces stand at about 33°), its colour
         // varying between dune fields: redder where it is older and its grains are coated in
         // iron oxide.
-        let sand = crate::graph::Fields::field(self, crate::graph::Field::Sand, p).unwrap_or(0.);
+        let sand = crate::graph::Fields::field(self, crate::graph::Field::Sand, &edge).unwrap_or(0.);
         if sand > 0.5 {
             let extent = smoothstep(0.5, 2.5, sand + 2. * (n(300., 0.85) - 0.5)) * smoothstep(0.75, 0.85, flat);
             let dune = mix(colour(DUNE_SAND), colour(RED_SAND), smoothstep(0.3, 0.7, n(8000., 0.55)));
@@ -1236,7 +1461,10 @@ impl Ground {
         // Beaches.
         let beach = 1. - smoothstep(2., 12., h + 8. * n(150., 0.4));
         ground = mix(ground, colour(SAND), beach);
-        shares.mix(Shares::of(Bare::Sand), beach);
+        // Sand, and shingle along stretches of the shore.
+        let mut shore = Shares::of(Bare::Sand);
+        shore.mix(Shares::of(Bare::Shingle), smoothstep(0.5, 0.6, n(400., 0.15)));
+        shares.mix(shore, beach);
         // Bare rock on steep slopes (about 40°), and scree and rock above the meadows.
         let high = smoothstep(tree + 300., tree + 900., h + (n(600., 0.6) - 0.5) * 300.);
         // (Bare at gentler slopes on rock that keeps thin soils, steeper on rock that weathers to
@@ -1247,15 +1475,116 @@ impl Ground {
         let stone = mix(self.stone(&d, h), colour(SCREE), loose) * (0.7 + 0.6 * n(250., 0.7));
         ground = mix(ground, stone, rock) * grain;
         if rock > 0. {
-            let mut bare = Shares::of(Bare::Rock(self.rock(&d, h).filter(|&r| r != Rock::Sediment).unwrap_or(Rock::Sediment)));
+            let r = self.rock(&d, h).filter(|&r| r != Rock::Sediment).unwrap_or(Rock::Sediment);
+            let mut bare = Shares::of(Bare::Rock(r));
+            if r == Rock::Sediment && !dry {
+                // Bare sediment is scree on steep ground and high up, and soil below the
+                // treeline where it lies at a slant: red earth in the tropics, brown with
+                // stones elsewhere.
+                let soil = (1. - smoothstep(tree - 300., tree, h)) * smoothstep(0.6, 0.8, flat);
+                bare.mix(Shares::of(if tropical { Bare::Laterite } else { Bare::Dirt }), soil);
+            }
+            let cliff = 1. - smoothstep(0.35, 0.6, flat);
+            match r {
+                // Sandstone's cliffs show its thin beds; elsewhere in a desert it weathers to an
+                // ochre crust under dark varnish.
+                Rock::Sandstone => {
+                    if dry { bare.mix(Shares::of(Bare::Crust), 0.7 * (1. - cliff)); }
+                    bare.mix(Shares::of(Bare::Bedded), cliff);
+                }
+                // Schist's and gneiss's foliation, in faces here and there.
+                Rock::Schist | Rock::Gneiss => bare.mix(Shares::of(Bare::Foliated), smoothstep(0.45, 0.6, n(60., 0.33))),
+                _ => {}
+            }
+            if wooded && r != Rock::Sediment {
+                // In woods, rock grows lichen and, where it lies at a slant rather than stands
+                // as a cliff, moss.
+                let below = 1. - smoothstep(tree - 200., tree + 100., h);
+                let patches = smoothstep(0.4, 0.6, n(40., 0.71));
+                if matches!(r, Rock::Basalt | Rock::Shale | Rock::Schist | Rock::Gneiss) {
+                    bare.mix(Shares::of(Bare::Lichened), 0.4 * below * (1. - patches));
+                }
+                bare.mix(Shares::of(Bare::Mossy), 0.7 * below * patches * smoothstep(0.45, 0.8, flat));
+            }
             bare.mix(Shares::of(Bare::Scree), loose);
             shares.mix(bare, rock);
+        }
+        // Forest floor under the trees planted on it (`terrain::canopy`): humus and litter,
+        // red-brown needles under conifers, browner leaves under broadleaves, and moss where it
+        // isn't dry; soil holds under trees on all but cliffs, which stay bare.
+        let (under, needles) = self.canopy.under(p.x, p.z);
+        if under > 0. {
+            let litter = mix(colour(LEAF_LITTER), colour(NEEDLE_LITTER), needles) * (0.8 + 0.4 * n(2., 0.6));
+            let moss = if dry { 0. } else { 0.6 * smoothstep(0.5, 0.7, n(5., 0.8)) };
+            // (Where it is dry, little: a desert's shrubs drop few leaves, and they blow away.)
+            let hold = under * smoothstep(0.3, 0.5, flat) * if dry { 0.25 } else { 1. };
+            ground = mix(ground, mix(litter, colour(MOSS), moss) * grain, hold);
+            shares.mix(Shares::of(Bare::Floor), hold);
         }
         // Snow lies above the snowline where slopes are gentle enough to hold it, and drifts
         // lower in sheltered places.
         let line = snowline + (n(900., 0.1) - 0.5) * 500.;
         let snow = smoothstep(line - 150., line + 150., h) * smoothstep(0.72, 0.88, flat + 0.15 * (n(120., 0.3) - 0.5));
+        if let Some((colour, kinds, bare)) = lava {
+            ground = mix(ground, colour * grain, bare);
+            shares.mix(kinds, bare);
+        }
         Cover { ground, snow, snow_age: age(h), ice: 0., blue: 0., surface: shares.pick() }
+    }
+
+    /// Lava at direction `d`, `h` metres up: its colour from afar, its kinds close up, and how
+    /// much of the ground it holds bare, 0 to 1. Fresh pāhoehoe or ʻaʻā (`Field::Aa`) loses its
+    /// glassy skin and weathers browner over decades, lichen settling on it where it is wet;
+    /// then plants take it over, in a few centuries in a rain forest (Hawaii's wet windward
+    /// flows carry forest within 300-400 years) and over tens of thousands where it is dry (its
+    /// dry leeward flows stand bare for millennia): about 500 years at 2,000 mm of rain a year,
+    /// as the rain to the -1.5. Each layer's lava blended into the coarser ones' as their
+    /// surfaces are (their flows took their own ways), read at a point jittered within a cell
+    /// and warped, so the flows' edges are ragged. None where no lava has flowed.
+    fn lava(&self, d: &Vector3<f64>, h: f64, n: &dyn Fn(f64, f64) -> f64) -> Option<(Color, Shares, f64)> {
+        use crate::graph::{Field, LAVA_NEVER};
+        let rain = self.wandering_climate(d, h, 0.).map_or(1000., |c| c.precipitation).max(50.);
+        let regrowth = (500. * (2000. / rain).powf(1.5)).clamp(200., 50_000.);
+        // Patchy: plants take the cracks and the hollows first.
+        let patches = n(30., 0.47) - 0.5;
+        let lichen = smoothstep(500., 2000., rain) * smoothstep(0.6, 0.75, n(4., 0.91));
+        let (t1, t2) = Relief::tangents(d);
+        let r = self.frame.radius;
+        let (mut bare, mut sum, mut most) = (0., Color::new(0., 0., 0.), (0., None));
+        let mut rest = 1.;
+        for l in self.layers.iter() {
+            let w = l.weight(d) * rest;
+            if w <= 0. { continue; }
+            rest -= w;
+            let cell = l.spacing;
+            let warp = |o: f64| cell * (1.6 * (n(2. * cell, o) - 0.5) + (rand() - 0.5));
+            let j = (d + (t1 * warp(0.29) + t2 * warp(0.53)) / r).normalize();
+            // (By its age, interpolated between the cells' corners, not the cells' classes,
+            // whose squares show from afar: past the flows' edges it rises steeply to never.)
+            let age = l.fields.at(&l.domain, Field::LavaAge, &j, h).unwrap_or(LAVA_NEVER);
+            if age >= LAVA_NEVER { continue; }
+            let aa = l.fields.at(&l.domain, Field::Aa, &j, h).unwrap_or(1.);
+            let grown = smoothstep(0.3, 1.2, age / regrowth + 0.5 * patches);
+            if grown >= 1. { continue; }
+            // Its glassy skin spalls and the rock oxidises browner over decades to centuries,
+            // whatever the rain (Hawaii's 1859 flow is brown where 1984's is still black).
+            let weathered = smoothstep(20., 400., age * (1. + 0.6 * patches));
+            let fresh = mix_colour(colour(PAHOEHOE), colour(AA), aa);
+            let old = mix_colour(colour(OLD_LAVA), Color::new(0.26, 0.26, 0.24), 0.3 * lichen);
+            let c = mix_colour(fresh, old, weathered) * (0.85 + 0.3 * n(80., 0.13));
+            let b = w * (1. - grown);
+            bare += b;
+            sum = sum + c * b;
+            if b > most.0 {
+                let mut kinds = Shares::of(Bare::Pahoehoe);
+                kinds.mix(Shares::of(Bare::Aa), aa);
+                kinds.mix(Shares::of(Bare::OldLava), weathered);
+                most = (b, Some(kinds));
+            }
+            if rest <= 0. { break; }
+        }
+        let kinds = most.1?;
+        Some((sum * (1. / bare), kinds, bare))
     }
 }
 
@@ -1271,8 +1600,10 @@ impl crate::graph::Fields for Ground {
     /// surfaces are; the climate's, and the snowline and treeline as the ground cover has them.
     fn biome(&self, p: &Vector3<f64>) -> Option<Biome> {
         let (d, h) = self.frame.on_planet(p);
-        self.wandering_climate(&d, h).map(|l| Biome::of(&l))
+        self.wandering_climate(&d, h, point_dither(p)).map(|l| Biome::of(&l))
     }
+
+    fn canopy(&self) -> Option<&crate::terrain::canopy::Slot> { Some(&self.canopy) }
 
     fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
         use crate::graph::Field;
@@ -1290,6 +1621,7 @@ impl crate::graph::Fields for Ground {
             Field::Bedrock => return self.layers.iter().find(|l| l.weight(&d) > 0.5).or(self.layers.last())
                 .map(|l| l.fields.bedrock(&l.domain, &d, h).index() as f64),
             Field::Hardness => return self.rock(&d, h).map(|r| -r.scores().0),
+            Field::Canopy => return Some(self.canopy.under(p.x, p.z).0),
             _ => {},
         }
         let (mut sum, mut left) = (0., 1.);
@@ -1335,6 +1667,8 @@ impl MaterialModel for Land {
 pub struct LandscapeMedium {
     ground: Arc<Ground>,
     land: Box<dyn MaterialModel + Sync + Send>,
+    /// An eruption in progress, its lava glowing (`terrain::eruption`).
+    active: Option<crate::terrain::eruption::ActiveLava>,
     water: PhysicalOcean,
     /// Terminal lakes: shallow brine over a pale floor, greener and brighter than rivers.
     brine: PhysicalOcean,
@@ -1354,13 +1688,26 @@ impl LandscapeMedium {
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
             water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None },
             brine: PhysicalOcean { water: Color::new(0.03, 0.07, 0.065), roughness: 0.003, center: Some(centre), foam: None, absorption: None },
+            active: None,
             ground,
         }
+    }
+
+    /// With `eruption`'s lava glowing on the ground cover.
+    pub fn with_eruption(mut self, eruption: Arc<crate::terrain::eruption::Eruption>, seed: u64, sun_intensity: f64) -> LandscapeMedium {
+        self.active = Some(crate::terrain::eruption::ActiveLava {
+            eruption, crust: Box::new(Land { ground: self.ground.clone() }), noise: PerlinNoise::shuffled(seed.wrapping_add(919)),
+            per_nit: crate::terrain::eruption::radiance_per_nit(sun_intensity),
+        });
+        self
     }
 }
 
 impl Medium for LandscapeMedium {
+    fn eruption(&self) -> Option<&Arc<crate::terrain::eruption::Eruption>> { self.active.as_ref().map(|a| &a.eruption) }
+
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
+        if let Some(a) = &self.active && a.eruption.heat(&pt).is_some() { return a; }
         if self.ground.wet(&pt) { &self.water }
         else if self.ground.salt_lake(&pt) { &self.brine }
         else { &*self.land }
@@ -1372,6 +1719,19 @@ impl Medium for LandscapeMedium {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every kind of bare ground is its own index, and names a material the library has.
+    #[test]
+    fn test_every_kind_of_bare_ground_is_in_the_library() {
+        let names = crate::material::library::names();
+        for k in 0..Bare::COUNT {
+            let b = Bare::from_index(k);
+            assert_eq!(b.index(), k);
+            if let Some(name) = b.library() {
+                assert!(names.contains(&name), "{:?}: no preset {}", b, name);
+            }
+        }
+    }
     use crate::terrain::simulation::TerrainParams;
 
     fn frame() -> Frame { Frame::new(45., 7., 6.36e6, 1.) }

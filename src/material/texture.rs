@@ -21,6 +21,8 @@ pub trait Medium : Sync{
     /// What the surface knows about itself at its points, for function graphs' `field` nodes
     /// (`graph::Fields`): a landscape's simulation.
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { None }
+    /// The eruption in progress on the surface, if any (a landscape's, `terrain::eruption`).
+    fn eruption(&self) -> Option<&std::sync::Arc<crate::terrain::eruption::Eruption>> { None }
 }
 
 /// The media of an object whose parts have their own: `base` for the object itself (and parts
@@ -48,6 +50,7 @@ impl Medium for PartMedia {
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { self.base.fields() }
+    fn eruption(&self) -> Option<&std::sync::Arc<crate::terrain::eruption::Eruption>> { self.base.eruption() }
 }
 
 /// A medium whose surface is normal mapped (`textures::NormalMap`).
@@ -71,6 +74,7 @@ impl Medium for NormalMapped {
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { self.inner.fields() }
+    fn eruption(&self) -> Option<&std::sync::Arc<crate::terrain::eruption::Eruption>> { self.inner.eruption() }
 }
 
 pub struct Solid {

@@ -342,6 +342,11 @@ pub struct ForestLayout {
     /// to a size of its own (as rockfall leaves its blocks, and seedlings gather round their
     /// parents: a Neyman-Scott cluster process, thinned by the spacing).
     pub clustering: f64,
+    /// Placed on a jittered grid rather than by dart throwing: one candidate in each cell of
+    /// the closest spacing, kept by the favour and by how much room its species needs, with no
+    /// test against its neighbours. Thirty times fewer candidates, for trees far off, where no
+    /// one sees two of them stand a metre too close (`place_on_grid`).
+    pub grid: bool,
 }
 
 /// One tree of the forest.
@@ -470,6 +475,56 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
         (clearing, weights)
     };
 
+    if layout.grid {
+        // One candidate in each cell of the closest spacing, jittered within it, its draws
+        // hashed from the cell (so the same trees however the area is cut). Dart throwing fills
+        // the ground until its trees' discs, spacing apart, cover about 55% of it (random
+        // sequential adsorption's jamming limit): 0.7 trees per square of a tree's spacing. So
+        // each candidate is kept with that over the cells per such square, and by the favour.
+        let (gx, gz) = ((size.x.abs() / closest).ceil() as i64, (size.y.abs() / closest).ceil() as i64);
+        let draw = |i: i64, j: i64, k: u64| -> f64 {
+            let mut h = seed ^ (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (j as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f) ^ k.wrapping_mul(0x1656_67b1_9e37_79f9);
+            h ^= h >> 31;
+            h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            h ^= h >> 29;
+            h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
+            h ^= h >> 32;
+            (h >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for j in 0 .. gz {
+            for i in 0 .. gx {
+                let (x, z) = (lo.x + (i as f64 + draw(i, j, 0)) * closest, lo.y + (j as f64 + draw(i, j, 1)) * closest);
+                let (clearing, weights) = fields(x, z);
+                if clearing < threshold { continue; }
+                let total: f64 = weights.iter().sum();
+                if total <= 0. { continue; }
+                let (mut k, mut acc, pick) = (0, weights[0] / total, draw(i, j, 2));
+                while acc < pick && k + 1 < weights.len() {
+                    k += 1;
+                    acc += weights[k] / total;
+                }
+                let s = &species[k];
+                let scale = 1. + (draw(i, j, 3) * 2. - 1.) * s.scale_v;
+                let keep = 0.7 * (closest / (layout.spacing * s.spacing * scale)).powi(2);
+                let u = draw(i, j, 4);
+                if u >= keep || u >= keep * favour(x, z).clamp(0., 1.) { continue; }
+                let down = Ray { ro: Vector3::new(x, start, z), rd: Vector3::new(0., -1., 0.) };
+                let Some(hit) = surfaces.iter().filter_map(|s| s.intersects(&down)).min_by(|a, b| a.dist.total_cmp(&b.dist)) else { continue };
+                let up = if hit.normal.y < 0. { -hit.normal } else { hit.normal };
+                let slope = up.normalize().y.clamp(-1., 1.).acos().to_degrees();
+                if slope > layout.max_slope { continue; }
+                let which = draw(i, j, 5);
+                placed.push(Placement {
+                    species: k,
+                    variant: ((which * layout.variants.max(1) as f64) as usize).min(layout.variants.max(1) - 1),
+                    position: Vector3::new(x, hit.point.y, z),
+                    yaw: draw(i, j, 6) * 360., scale, mirror: draw(i, j, 7) < 0.5, slope,
+                });
+            }
+        }
+        return placed;
+    }
+
     // Darts are thrown in turn, each against the trees before it, so the forest is the same
     // however it's computed. But the noise fields of a chunk of darts are found in parallel
     // first, for every dart not already too near a tree placed before the chunk: those include
@@ -566,6 +621,13 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
             }
 
             grid[at(cell(x, z)).expect("a tree within the area")].push([x, z, r]);
+            // Room alone thins the trees down to a favour of a quarter (twice the radius:
+            // more would widen every search). Below that, a tree takes its room but stands
+            // only with the favour's share of a quarter, so that the gaps it leaves aren't
+            // filled by later darts, and they stand as thinly as the favour says (as on a grid).
+            if favoured < 0.25 && favoured < 0.25 * (yaw * 97.).fract() {
+                continue;
+            }
             if clustering > 0. {
                 let c = parent.unwrap_or_else(|| {
                     // A new clump, growing to between 1 and about 25 copies, mostly few.
@@ -597,7 +659,7 @@ mod tests {
     fn layout() -> ForestLayout {
         ForestLayout {
             min: Vector2::new(-50., -50.), max: Vector2::new(50., 50.),
-            spacing: 5., clearings: 0., patch_size: 30., patchiness: 0., max_slope: 30., variants: 3, clustering: 0.,
+            spacing: 5., clearings: 0., patch_size: 30., patchiness: 0., max_slope: 30., variants: 3, clustering: 0., grid: false,
         }
     }
 
@@ -624,6 +686,39 @@ mod tests {
             let p = place(&l, &[one(1., 0.3)], 3, &[&ground]);
             println!("clustering {}: {} copies, dispersion {:.2}", c, p.len(), dispersion(&p, &l));
         }
+    }
+
+    /// A grid places about as many trees as dart throwing, of each species as many, and as
+    /// many fewer where the favour is less.
+    #[test]
+    fn test_a_grid_places_as_thickly_as_darts() {
+        let ground = Plane { y: 0. };
+        let darts = ForestLayout { spacing: 2., ..layout() };
+        let grid = ForestLayout { grid: true, ..darts.clone() };
+        let count = |l: &ForestLayout, sp: &[ForestSpecies], favour: &dyn Fn(f64, f64) -> f64, k: usize| {
+            place_favouring(l, sp, 3, &[&ground], favour).iter().filter(|p| p.species == k).count() as f64
+        };
+        let all = |_: f64, _: f64| 1.;
+        for sp in [vec![one(1., 0.2)], vec![one(1., 0.1), one(2., 0.1)]] {
+            for k in 0..sp.len() {
+                // (In a mix, darts favour the smaller species, whose discs fit the gaps the
+                // larger leave: the larger come out a fifth or so more on a grid.)
+                let (a, b) = (count(&darts, &sp, &all, k), count(&grid, &sp, &all, k));
+                assert!((b / a - 1.).abs() < 0.3, "species {} of {}: darts {}, grid {}", k, sp.len(), a, b);
+            }
+        }
+        // And as thinly where they are little favoured: darts fill every gap, so it isn't
+        // room alone that thins them.
+        for f in [0.5, 0.1, 0.03] {
+            let thin = move |_: f64, _: f64| f;
+            let (a, b) = (count(&darts, &[one(1., 0.2)], &thin, 0), count(&grid, &[one(1., 0.2)], &thin, 0));
+            assert!((b / a - 1.).abs() < 0.3, "favour {}: darts {}, grid {}", f, a, b);
+        }
+        let half = |x: f64, _: f64| if x < 0. { 1. } else { 0.5 };
+        let (west, east) = (|p: &&Placement| p.position.x < 0., |p: &&Placement| p.position.x >= 0.);
+        let on = place_favouring(&grid, &[one(1., 0.)], 3, &[&ground], &half);
+        let (w, e) = (on.iter().filter(west).count() as f64, on.iter().filter(east).count() as f64);
+        assert!((e / w - 0.5).abs() < 0.1, "{} west, {} east", w, e);
     }
 
     #[test]

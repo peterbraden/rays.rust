@@ -1,0 +1,200 @@
+{
+ "width": 640,
+ "height": 427,
+ "supersamples": 128,
+ "max_depth": 12,
+ "path_termination": "russian_roulette",
+ "output": {
+  "tonemap": "filmic",
+  "exposure": 1.2
+ },
+ "variables": {
+  "wave": {
+   "type": "breaker",
+   "center": [
+    0,
+    0,
+    0
+   ],
+   "height": 2,
+   "depth": 2,
+   "width": 60,
+   "stage": 1.0,
+   "peel": 1.5,
+   "seed": 3,
+   "lace": 0
+  }
+ },
+ "camera": {
+  "location": [
+   -4,
+   0.15,
+   0.5
+  ],
+  "lookat": [
+   -16,
+   0.2,
+   0.4
+  ],
+  "up": [
+   0,
+   1,
+   0
+  ],
+  "angle": 0.85,
+  "aperture": 0.003,
+  "focus_distance": 3
+ },
+ "sun": {
+  "intensity": 4.9
+ },
+ "materials": {
+  "SAND": {
+   "type": "library",
+   "name": "beach_sand",
+   "waterline": 1000000000.0
+  }
+ },
+ "objects": [
+  {
+   "type": "skysphere",
+   "sun_direction": [
+    0.2,
+    0.33,
+    0.92
+   ]
+  },
+  {
+   "type": "plane",
+   "y": -2,
+   "material": "SAND"
+  },
+  {
+   "type": "breaker",
+   "center": [
+    0,
+    0,
+    0
+   ],
+   "height": 2,
+   "depth": 2,
+   "width": 60,
+   "stage": 1.0,
+   "peel": 1.5,
+   "seed": 3,
+   "lace": 0
+  },
+  {
+   "type": "volume",
+   "shape": "$wave",
+   "sigma_a": [
+    0.45,
+    0.08,
+    0.14
+   ],
+   "sigma_s": [
+    0.6,
+    0.6,
+    0.6
+   ],
+   "g": 0.9
+  },
+  {
+   "type": "volume",
+   "shape": "$wave",
+   "density": {
+    "node": "expr",
+    "expr": "min(max((-0.5 - y) / 0.7 + 0.6 * n, 0), 1)",
+    "inputs": {
+     "n": {
+      "node": "fractal",
+      "scale": 0.7,
+      "seed": 5
+     }
+    },
+    "range": [
+     0,
+     1
+    ]
+   },
+   "sigma_a": [
+    0.25,
+    0.45,
+    0.9
+   ],
+   "sigma_s": [
+    3,
+    3,
+    3
+   ],
+   "g": 0.8
+  },
+  {
+   "type": "volume",
+   "shape": "$wave",
+   "aeration": "$wave",
+   "sigma_a": [
+    0,
+    0,
+    0
+   ],
+   "sigma_s": [
+    2.5,
+    2.5,
+    2.5
+   ],
+   "g": 0.6
+  },
+  {
+   "type": "volume",
+   "spray": "$wave",
+   "min": [
+    -30,
+    0.5,
+    -2
+   ],
+   "max": [
+    30,
+    2.8,
+    3
+   ],
+   "sigma_a": [
+    0,
+    0,
+    0
+   ],
+   "sigma_s": [
+    1.2,
+    1.2,
+    1.2
+   ],
+   "g": 0.85
+  },
+  {
+   "type": "volume",
+   "whitewater": "$wave",
+   "min": [
+    -30,
+    -2.0,
+    -4
+   ],
+   "max": [
+    30,
+    5,
+    6
+   ],
+   "sigma_a": [
+    0,
+    0,
+    0
+   ],
+   "sigma_s": [
+    12,
+    12,
+    12
+   ],
+   "g": 0.5,
+   "oz": true
+  }
+ ]
+}

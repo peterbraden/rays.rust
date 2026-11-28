@@ -920,6 +920,10 @@ impl SceneFile {
             if let (Some(ocean), true) = (&ocean, obj["type"] == "iceberg" || obj["type"] == "ice_floes") {
                 if obj.get("ocean").is_none() { obj["ocean"] = ocean.clone(); }
             }
+            // A landscape's shores are washed by the scene's ocean's waves.
+            if let (Some(ocean), true) = (&ocean, obj["type"] == "landscape") {
+                if obj.get("ocean").is_none() { obj["ocean"] = ocean.clone(); }
+            }
             // (Nor what grows on, or reads, the landscape before it: forests, grass, ecosystems,
             // scatters and volumes over one.)
             let on_landscape = landscape.is_some() && matches!(obj["type"].as_str(), Some("forest" | "grass" | "ecosystem" | "scatter" | "volume"));
@@ -968,9 +972,13 @@ impl SceneFile {
             } else if obj["type"] == "volume" && matches!(obj.get("density"), Some(Value::Object(_) | Value::String(_))) {
                 let fields = landscape.clone().map(|l| Arc::new(ObjectFields(l)) as Arc<dyn crate::graph::Fields>);
                 vec![Arc::new(SceneFile::parse_volume_over(&obj, geometries, fields))]
+            } else if obj["type"] == "ocean" && landscape.is_some() {
+                // Over the landscape: its waves break in the shallows.
+                vec![Arc::new(crate::ocean::create_ocean_over(&obj, landscape.clone()))]
             } else if obj["type"] == "landscape" {
                 // Kept, as a surface for scatters after it.
-                let mut x: Vec<Arc<SceneObject>> = SceneFile::parse_object(obj.clone(), materials, media, geometries).into_iter().collect();
+                // With its rivers' water and falls (`create_landscape`).
+                let mut x: Vec<Arc<SceneObject>> = crate::terrain::object::create_landscape(&obj, materials).into_iter().map(Arc::new).collect();
                 if let Some(first) = x.first().cloned() {
                     landscape = Some(first.clone());
                     // The gas plumes over its lava lakes, if it is erupting.
@@ -1219,6 +1227,18 @@ impl SceneFile {
                 Box::new(GrassMedium::new(geometry.field.clone(), &conditions))
             };
             return Some(Arc::new(SceneObject { geometry: Box::new(geometry), medium }));
+        }
+        if t == "breaker" {
+            // A plunging wave close up (`procedural::breaker`): its surface lets shadow rays
+            // through; by default water's own dielectric. Give a volume the same shape for the
+            // water inside.
+            let breaker = crate::procedural::breaker::Breaker::parse(&o);
+            let medium: Box<dyn Medium + Sync + Send> = if o.get("material").is_some() || o.get("medium").is_some() {
+                SceneFile::parse_object_medium(&o, materials, media)
+            } else {
+                Box::new(Solid { m: Box::new(crate::procedural::breaker::BreakerWater::new(&breaker)) })
+            };
+            return Some(Arc::new(SceneObject { geometry: Box::new(crate::procedural::breaker::BreakerSurface { mesh: breaker.geometry() }), medium }));
         }
         if t == "iceberg" || t == "ice_floes" {
             return Some(Arc::new(SceneFile::parse_ice_object(&o, materials, media)));
@@ -2234,6 +2254,12 @@ impl SceneFile {
             _ => BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"])),
         };
         let density: Arc<dyn DensityField> = match (grid, o.get("noise")) {
+            // The white water a breaker's landing lip throws up (`procedural::breaker`).
+            _ if o["whitewater"].is_object() => Arc::new(crate::procedural::breaker::Whitewater::new(&crate::procedural::breaker::Breaker::parse(&o["whitewater"]))),
+            // The air a breaker's lip carries.
+            _ if o["aeration"].is_object() => Arc::new(crate::procedural::breaker::Aeration::new(&crate::procedural::breaker::Breaker::parse(&o["aeration"]))),
+            // The spray a breaker throws off its crest.
+            _ if o["spray"].is_object() => Arc::new(crate::procedural::breaker::Spray::new(&crate::procedural::breaker::Breaker::parse(&o["spray"]))),
             _ if graphed => {
                 assert!(o.get("grid").is_none() && o.get("noise").is_none(), "Give a volume a density graph, or a grid or noise, not both");
                 let g = crate::graph::Graph::parse(&o["density"]).unwrap_or_else(|e| panic!("volume's density: {}", e));
@@ -4706,6 +4732,25 @@ impl SceneFile {
     }
 
     pub fn from_scenefile(mut s: SceneFile) -> Scene {
+        // A camera `"feature"` looks at one of a landscape's features, from the best view the
+        // survey found of it (`terrain::features`).
+        if let Some(choice) = crate::terrain::features::Choice::parse(&s.camera["feature"])
+            && let Some(k) = s.objects.iter().position(|o| o["type"].as_str() == Some("landscape")) {
+            let mut l = s.objects[k].clone();
+            l["camera"] = s.camera.clone();
+            l["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
+            l["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+            match crate::terrain::object::feature_camera(&l, &choice) {
+                Some((camera, focus, description)) => {
+                    println!("Camera: looking at the {}", description);
+                    println!("Camera: {}", camera);
+                    for (key, value) in camera.as_object().unwrap() { s.camera[key] = value.clone(); }
+                    // The landscape keeps its patches where the survey found the feature.
+                    if let Some(f) = focus { s.objects[k]["focus"] = serde_json::json!([f.x, f.y, f.z]); }
+                },
+                None => println!("Camera: the landscape has no feature {:?} to look at; the camera stays where it is", choice),
+            }
+        }
         // A camera `"above_ground"` stands, and looks, at heights above a landscape's ground.
         if s.camera["above_ground"].as_bool() == Some(true)
             && let Some(l) = s.objects.iter().find(|o| o["type"].as_str() == Some("landscape")) {

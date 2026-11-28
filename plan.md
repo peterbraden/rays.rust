@@ -5,8 +5,9 @@ from what we are assuming, and the questions that need answering before work sta
 
 Status: a working document. Sections 1 to 8 are the original workstreams, several since
 built (the wavefront integrator, flare, spectral rendering and more: `CLAUDE.md` lists what
-exists); sections 12 to 14 are current (the GPU path, the scheduler, the world from one
-seed), each saying what is done, with measurements, and what is next.
+exists); sections 12 to 16 are current (the GPU path, the scheduler, the world from one
+seed, one renderer on either device, water), each saying what is done, with measurements,
+and what is next.
 
 
 ## Process
@@ -2156,6 +2157,18 @@ chose is then an ordinary scene file, to be tweaked (the scene builder is the ed
    in view and how varied; the sun's angle on what is seen (the time of day is chosen with
    it); nothing blocking the lens. One of the best few, by the seed. Reading to do first, and
    to verify before citing: viewpoint entropy and terrain viewpoint selection.
+   Begun (November 2026): `src/terrain/features.rs` finds the candidates' subjects (peaks and
+   volcanoes by prominence, their key cols as passes, cliffs, glaciers, terminal lakes,
+   confluences, gorges, headlands) on the simulations' cells, tries cameras on a ring about
+   each (12 directions, three distances about the one framing it for the lens, 2 m and 30 m
+   up), and measures them by rays marched over the large-scale ground: visibility of five
+   points on the feature, clearance, skyline, pitch, framing, and for the four most promising a
+   12 x 7 depth image (sky, near, middle, far, their spread, what blocks the lens). A `Judge`
+   scores those terms (`Heuristic`, rules of thumb); `"features"` on a landscape reports them,
+   `"feature"` on a camera takes one. Not done: the sun's angle on what is seen and the time
+   of day; rendered drafts (`trace::draft`) instead of the marched depth image; the seeded
+   choice among the best few; the reading above; candidates from shoulders and shores rather
+   than rings; features of the close level and of the ground's own detail.
 4. One seed to a scene file: `{"world": {"seed": n}}` expands, as `weather` does, into the
    landscape, weather, sun, camera and output it chose; `--dump-scene` writes that, and it is
    what the editor opens.
@@ -2653,3 +2666,411 @@ paths that only it uses (step 5). What stays, on purpose: `MaterialModel`, `Geom
   frame comes first.
 - Whether `trace` is kept, frozen, as the tests' reference after step 5, or the references
   become stored images.
+
+## 16. Water: rivers, waterfalls and coasts from hydraulics
+
+Status: steps 1 to 3 built, step 4 in part (November 2026: `src/terrain/hydraulics.rs`,
+`rivers.rs`, `river_water.rs`; see "Done" below); the rest is a plan. Goal: water on a landscape whose look follows from its physics.
+How much water a river carries, how deep and fast it runs, whether it is glassy or white, where
+it falls and how the fall breaks into spray, how waves slow, turn, steepen and break on a
+coast: each from the quantities that decide it in hydraulics and coastal engineering, computed
+from what the landscape already knows (rain, drainage, slope, bed, rock, depth), and checked
+against the closed forms and measurements those fields test their own models with.
+
+### Known: what exists (from the code)
+
+- The open sea (`src/ocean.rs`): Tessendorf's FFT waves for deep water (ω² = gk), Phillips,
+  Pierson-Moskowitz or JONSWAP with fetch, choppy crests by the Lagrangian displacement,
+  breaking where its Jacobian folds, foam calibrated to Monahan's coverage, Cox and Munk's
+  slopes, transparent water with Pope and Fry's absorption and Lee's shallow-water colour. It
+  is a sphere of the planet's radius or a plane, with no idea of the ground under it: waves
+  have the same height and length a metre off a beach as in mid-ocean, and stop at the land
+  where the land pokes through. The GPU has a kernel for it.
+- Rivers on a landscape (`terrain::map::water_lines`, `channel::WaterLines`,
+  `scenery::LandscapeMedium`): a mask. A point is wet within half a river's width of its
+  centreline (width c√A, Leopold and Maddock's exponent, from drainage area A, not discharge),
+  and wet points are shaded as a flat `PhysicalOcean` of fixed colour and roughness. No depth,
+  no surface of its own (the water is the ground's surface, so a river runs uphill wherever the
+  ground does), no speed, no difference between a lowland river and a mountain torrent. Lakes
+  are the same mask; ox-bows too.
+- What the landscape knows that the water needs: per cell, bed elevation, sediment and lava
+  thickness, ice, drainage area and receiver (`Terrain`), rock erodibility, precipitation and
+  temperature from the climate (`climate::Local`), sea cells and bathymetry below sea level
+  (`Terrain::sea`, `bed < 0`), meander centrelines with widths (`channel.rs`). The glacier
+  model carves troughs, so hanging valleys exist in the relief but nothing marks them.
+- What the renderer has that falling water needs: Mie phase functions for droplets and the
+  exact Mie series (`material/mie.rs`), rainbows by Airy's theory (`rainbow.rs`), media of
+  constant or graph density, foam shading (`ocean::Foam`), refraction through `"transparent"`
+  water to what is below, wet-looking materials only by hand.
+- No waterfalls, rapids, whitewater, spray, coastline surf, beaches or wet sand.
+
+### The physics, by regime
+
+Water on land is one flow at three scales, joined by conservation of mass: rain becomes runoff,
+runoff gathers into channels and flows down them steadily (gradually varied flow), steep or
+abrupt reaches turn it rapid (supercritical flow, jumps, free jets), and it reaches a sea whose
+waves were raised far away and are reshaped by the depth as they arrive. The renderer needs, at
+any point of water: the surface's height and normal, its velocity, the spectrum of its small
+waves, how much air is in it (foam and whitewater), its depth (for its colour over the bed),
+and, where it has broken up, spray as a medium. The steps below compute those, in that order of
+dependence.
+
+**How much water.** Mean discharge Q = R·A, runoff R over the drainage area. Runoff is rain less
+evaporation; the long-term split is Budyko's curve, the evaporative index E/P a function of the
+aridity index PET/P (Fu's one-parameter form), with PET from the climate's temperature. A scene
+chooses the flow it shows as a multiple of the mean (bankfull, a flood, a dry season), as
+hydrologists describe a flow by its exceedance.
+
+**How deep and fast.** For a channel of width w, bed slope S and roughness n, uniform flow
+satisfies Manning's equation V = R_h^(2/3) S^(1/2) / n with Q = V·A_x. Solving it for depth
+gives d and V from Q; n follows the bed's grain size by Strickler (n ≈ d₅₀^(1/6)/21.1), and the
+grain size is coarse on steep, sediment-starved reaches and fine on alluvial ones. Leopold and
+Maddock's at-a-station and downstream exponents (w ∝ Q^0.5, d ∝ Q^0.4, V ∝ Q^0.1) are what this
+should reproduce, not inputs. The Froude number Fr = V/√(gd) divides tranquil flow (Fr < 1:
+smooth, mirror-like, waves travel upstream) from rapid flow (Fr > 1: standing waves, a surface
+that can't communicate upstream); where rapid flow meets tranquil it jumps (Bélanger: d₂/d₁ =
+½(√(1 + 8Fr₁²) - 1)). Montgomery and Buffington's reach types (cascade, step-pool, plane-bed,
+pool-riffle, dune-ripple) follow slope and sediment supply and are what a mountain stream looks
+like at each gradient.
+
+**The surface.** Along a reach the water surface follows the gradually varied flow equation
+dd/dx = (S₀ - S_f)/(1 - Fr²), integrated upstream from a control (a lake, the sea, a fall's
+critical section) by the standard step method; so a river backs up behind a constriction and
+draws down towards a fall, and its surface is flat across and below its banks rather than
+painted on the ground. Near the camera, where the flow's own detail shows (round boulders, in
+bends, through jumps), the 2D shallow water equations, solved by a well-balanced,
+positivity-preserving finite-volume scheme (Kurganov and Petrova), give the depth and velocity
+field with jumps as shocks and dry banks handled exactly; their inflow is the discharge above.
+The surface's small waves come from the turbulence (friction velocity u* = √(gR_hS)), carried
+by the velocity field (advected textures, as Neyret; Yu et al. for rivers).
+
+**Air.** Water turns white when turbulence at the surface overcomes surface tension and gravity
+and entrains air: self-aerated flow on steep chutes and cascades, the roller of a hydraulic jump,
+a plunging jet. Chanson's measurements give where aeration begins and how the air concentration
+grows (his 1997 book on air entrainment, to verify; the 2004 text covers jumps and stepped
+cascades); foam is then shaded as the sea's is (`ocean::Foam`'s albedo), and bubbles pale the water
+beneath.
+
+**Falls.** A river drops freely where its bed falls faster than it can follow: knickpoints in
+the long profile, hard caprock over soft rock, and hanging valleys where a tributary's glacial
+trough meets the main trough high above its floor (the glacier model makes these; they need
+finding). At the lip the flow passes through critical depth y_c = (q²/g)^(1/3), q = Q/w, and the
+brink is at about 0.715·y_c (Rouse). From there the jet is ballistic (x = Vt, y = ½gt²), thinning
+by continuity as it accelerates; turbulence roughens and spreads it, and after a break-up length it
+is drops (Ervine and Falvey measured how free jets spread; the break-up length's source is
+still to find), which slow to their terminal velocity, so a tall fall arrives
+as a column of spray rather than a sheet. Rendered as a sheet surface (aerated, so mostly white)
+that hands over to a medium of droplets with the Mie phase function the renderer has, so the
+spray carries rainbows and a glory in the right places; a plunge pool of foam, and mist that
+rises and drifts downwind.
+
+**Coasts.** Near shore the ground is part of the wave model. Linear theory's dispersion relation
+becomes ω² = gk·tanh(kh): waves slow and shorten in shallow water, refract so their crests turn
+parallel to the depth contours (Snell's law with the local phase speed), and grow by shoaling as
+their energy flux, carried at the group velocity, is squeezed (H/H₀ = √(c_g0/c_g) on straight
+contours). They break when too high for the depth (H/h ≈ 0.78, McCowan), spilling, plunging or
+surging by the surf similarity (Iribarren) number ξ = tan β / √(H/L₀) (Battjes); random waves
+across a surf zone lose energy as Battjes and Janssen's bore model or Thornton and Guza's
+distribution describe, leaving bands of foam, a run-up and backwash over the beach face, and sand
+dark where it is wet (water filling the pores cuts the light's escape: Twomey et al.; Lekner and
+Dorf). Below the simulation's grid the nearshore needs its own relief: Dean's equilibrium
+profile h = A·x^(2/3), A from grain size, for beaches; cliffs where the rock is hard and the
+waves strong. The wave field over that ground is the wave action equation (as SWAN integrates
+it), steady for a given offshore sea: on a nearshore grid, each cell's spectrum transported from
+offshore with refraction and shoaling and depth-limited breaking, then synthesised locally as a
+sum of waves at the local wavenumber (Gerstner's orbits flatten and tilt in shallow water, as
+Fournier and Reeves drew them; Jeschke and Wojtan 2023 carry dispersive waves of any depth in
+one height field over a shallow water simulation, and their 2018 water surface wavelets
+transport amplitudes in position and wavevector, though for deep water).
+
+### Decisions to make (recommendations given)
+
+- Heightfields, jets and media, not a 3D fluid. A FLIP or SPH simulation would give plunging
+  breakers and splashes, but its cost is per frame and per scene, its scale is metres, and its
+  look depends on resolution more than on physics. Every quantity above is computed from the
+  hydraulics that set it, at the scales the renderer draws (kilometres of river, a whole
+  coast), and a heightfield with a ballistic jet and a spray medium covers what is seen from
+  more than a few metres. Recommended; a local 3D simulation can come later for close-ups of
+  breaking crests, seeded from this.
+- Steady flow plus animated detail. A river's flow changes over hours, its surface over seconds:
+  the hydraulics are solved once per scene (steady), and `time` moves waves, advected detail,
+  foam and jets, as the ocean's `time` does. The sea's offshore spectrum stays Tessendorf's.
+- Where the water lives. River hydraulics read the simulation, so they belong beside it
+  (`src/terrain/hydraulics.rs`), as fields a world stage computes and caches; the surfaces,
+  jets and wave transformation are renderable objects (`src/water/`), usable on a heightmap
+  terrain too, with the landscape's version reading the stage.
+
+### Steps (each a PR, tested against closed forms before it renders)
+
+1. Done. River hydraulics: discharge from the climate's rain by Budyko's curve over the drainage
+   area; depth and velocity by Manning with Strickler's roughness from a grain size by slope
+   and sediment; Froude number, reach type (Montgomery and Buffington), stream power, per cell
+   (`Hydraulics::new`), and as `graph::Field`s (`discharge`, `water_depth`, `flow_speed`,
+   `froude`). Still to do: in the maps, and as a world stage.
+   Tests: Manning's closed form for a wide channel, continuity, the downstream hydraulic-geometry
+   exponents emerging near Leopold and Maddock's, Budyko's limits (energy- and water-limited).
+2. Done (as below, without the standard step). River surfaces: the water's level along each
+   reach, the channel's cross-section carved into the ground beneath it, and the water a
+   surface of its own, transparent over its bed. Still to do: the gradually varied flow's
+   backwater and drawdown near controls (by the standard step; tests against the M1 and M2
+   profiles), which falls (step 4) need at their lips; displaced landscapes (the displacement
+   graph still roughens the carved bed).
+3. Done (as below). Surface character: the water's colour and clarity from its suspended
+   sediment, roughness from the turbulence, whitewater where the flow is rapid or the bed's
+   stones reach the surface. Still to do: ripples advected by the flow and animated with
+   `time`; foam that is more than a threshold on noise (cascades are white sheets at 90%
+   cover, with no boulders or dark water between); stones emerging where the water is
+   shallower than its grains; a mountain-to-lowland demo.
+4. In part (see Done). Waterfalls: knickpoints and hanging valleys found in the relief; brink
+   hydraulics; the jet as sheet and spray medium (Mie droplets, rainbows); plunge pool and
+   mist. Built: gradually varied flow (`Channel::profile`, M1/M2 by the direct step method),
+   the jet (`hydraulics::Jet`: critical and brink depth, ballistic, continuity, Horeni's
+   break-up length), falls at knickpoints and at confluences, their alcoves and curtains.
+   Still to do: falls in the finest patches (below), spray as a medium (Mie droplets, so
+   rainbows and the glory), mist over the pool, a textured curtain with ragged edges, the
+   alcove's walls joined cleanly to the banks, and drawdown at the lip (centimetres, unseen).
+5. A local shallow water solver about the camera (Kurganov-Petrova), its inflow from step 1,
+   replacing step 3's one-dimensional velocity where it runs. Tests: the lake at rest stays at
+   rest over uneven ground (well-balanced), Ritter's dam break, Bélanger's sequent depths for a
+   jump, wet-dry fronts stay positive.
+6. Nearshore relief and the beach: Dean profiles below the grid, beaches or cliffs by rock and
+   exposure, a wet-sand and swash material. Tests: profile against Dean's A(d₅₀) table.
+7. Waves over depth: first finite-depth dispersion in the ocean for a uniform depth (tanh; a
+   few lines, testable against linear theory), then the steady wave action solve over the
+   nearshore grid (refraction, shoaling, Battjes-Janssen breaking), the local synthesis, breaker
+   type by Iribarren, surf foam and run-up. Tests: Snell refraction over straight parallel
+   contours, shoaling against linear theory, the breaking index, setup against Longuet-Higgins
+   and Stewart. A coast demo from `terrain-coast.json`'s world.
+8. Lakes: still water with fetch-limited waves (the ocean's JONSWAP by the lake's fetch along
+   the wind). Their extent and level are found in the drawn ground (`terrain::basins`, see
+   Done).
+9. Later: GPU kernels for the new water (until then, host materials and shapes, as the sea was
+   before its kernel); waterfalls retreating and plunge pools deepening in the terrain
+   simulation (Scheingross and Lamb); a local 3D simulation for close-up breakers.
+
+### Done
+
+- Step 1 (`terrain::hydraulics`): runoff by Thornthwaite and Budyko-Fu, discharge gathered down
+  the receiver tree, the channel a parabola of the simulation's width whose bankfull depth
+  carries `bankfull_ratio` (10, a model choice) times the mean flow, Manning-Strickler with a
+  threshold-channel grain, Froude, reach types; fields `discharge`, `water_depth`, `flow_speed`,
+  `froude`. The parabola gives Leopold and Maddock's at-a-station exponents (tested), where a
+  rectangle had put the mean flow a few centimetres deep across the whole bankfull width.
+- Step 2 (`terrain::rivers`, full-scale landscapes): courses between junctions, smoothed
+  (Chaikin) and bent into meanders of 11 widths' wavelength (Leopold and Wolman) with a
+  sinuosity falling with slope (a model choice), tapering to the junctions; levels that never
+  rise downstream, below the banks by the freeboard and below the simulation's own bed (see
+  below); channels carved where the mesh resolves them; a transparent surface of their own
+  there (`WaterSurface`, which lets light up through it as the sea does); beds of wet sand or
+  gravel by grain size (Ångström's wetting, after Lekner and Dorf); the mask as before far
+  away and on lakes. `river_flow` sets the flow shown. The landscape reports the nearest river.
+- Found on the way:
+  - The drawn surface is a spline through cell corners, each the mean of the cells there, so
+    in narrow valleys it stands tens to hundreds of metres above the simulation's bed, unevenly
+    along the river. Levels follow the bed; channels are cut down to it with 1:1 banks.
+  - The synthetic relief below the cells (`Relief::detail`) laid hills across valley floors;
+    each octave now fades out within half its wavelength of the water (rivers clear their
+    floors).
+  - Rivers pass through basins (glacial overdeepenings): those stretches are lakes (filling
+    to the spill level would stand over 5 m deep), drawn by the mask until step 8.
+  - The sea's material sent rays into transparent water 1 mm under the hit, less than the
+    trace's own offset far from the origin (1e-7 of the coordinates: over a millimetre at
+    13 km), so they found the surface again and saw nothing beneath; now
+    `functions::surface_offset`.
+- Step 3 (`terrain::river_water`): suspended sediment from the simulation's sediment flux over
+  the discharge; the water's reflectance 0.33 b_b / (a + b_b) and attenuation a + b from
+  mineral particles' mass-specific coefficients (b*_bp = 0.012 m²/g, Neukermans et al. 2012;
+  b*_p and a*_p from Babin et al., to check); roughness 0.004 + 1.5 S (a model choice);
+  whitewater from the Froude number and relative submergence (a model choice), in streaks along
+  the flow. `RiverWater` looks the flow up under each point (`Relief::river_at`); the surface
+  lets light down by the same attenuation.
+- Found in step 3: concentrations run from nothing (reaches the simulation deposits on: lake
+  flats, whose outflow is rightly clear) to tens of g/L, as the young landscapes (30 kyr) still
+  erode fast from their first relief; all the flux is taken as suspended. On steep ground,
+  cutting channels down to the simulation's bed made slot gorges with sheer walls: now the
+  drawn surface itself is blended to the simulation's bed within a cell of a river
+  (`Relief::base`), so valleys keep their V, and the relief is cleared only over the
+  floodplain (eight half widths and 30 m), not a kilometre.
+- Step 4 so far (`rivers::falls`, `knickpoints`; `river_water::FallingWater`, `Curtain`):
+  a run of river steeper than any alluvial channel holds (0.3, Montgomery and Buffington's
+  cascades) drops the excess over that slope at its head, a fall, and runs on below as a
+  cascade in a gorge that tapers out; a tributary arriving above the river it joins either runs
+  down to it as rapids (under 5 m) or falls from a lip on the bank. A fall is an alcove cut
+  below its lip to a pool, and a curtain along the jet's trajectory, white (aerated), whole to
+  its break-up length and thinning below it (each ray passes between the drops with the
+  chance it would; shadows likewise). The landscape reports its falls and finds a viewpoint
+  for the tallest and the nearest by testing the line of sight over the relief.
+- Found in step 4: confluence drops are absorbed before they arrive (both rivers' last points
+  are the junction's cell, so the tributary's level is already clamped to the ground there:
+  its step is spread over the last cell as a steep run); knickpoints catch them as runs.
+  But the finest patches' rivers (500 m cells) are graded: in three worlds tried (warm, cold
+  through a glacial cycle) none of their runs is steeper than 0.3, so their falls are only in
+  the coarser patches, whose rivers aren't drawn where a finer patch covers them. Falls are a
+  feature below the grid: caprock (hard strata over soft, which the planet's geology has),
+  fractured rock (Lamb and Dietrich 2009) and hanging valleys' sharp lips; that is the next
+  thing, so that falls appear where the rock makes them. Rendered with the threshold lowered
+  by hand, a fall drops cleanly from its lip into the head of its gorge.
+- Lakes in the drawn ground (`terrain::basins`): lakes found only along each river's course
+  were drawn as slabs at the course's spill level, and the drawn surface (spline, detail,
+  carving) didn't agree with them: water hung over gorges and rays passed under its edges.
+  Now each patch's drawn ground is sampled on a grid an eighth of its cells, lowered along the
+  rivers' cut channels and the simulation's flow paths (breaching before filling, after
+  Lindsay 2016; unverified), and filled by Priority-Flood (Barnes et al. 2014), the patch's
+  edge (where it blends into the next) and the sea its outlets; lakes are what stands over a
+  metre deep in at least 16 samples, drawn flat over their samples and a ring about them, only
+  where the patch is the finest drawn (a coarse patch's samples see a gorge as a basin). Rivers
+  through lakes take the lake's level. First versions flooded a third of the patch: the wall
+  where a patch blends into the next held water, hence the outlets along its edge.
+- Worked in small steps from here, each checked on a fixed shot (a river's camera pinned 3 m
+  over the river point nearest an anchor, so changes to the ground don't move it):
+  - Lakes' waves (`ocean::WaveField::lake`): Tessendorf's, as the sea's, a young sea's by the
+    lake's fetch along the wind (`Basins::length`): JONSWAP's peak (`jonswap_peak`) and
+    height, slopes at most Cox and Munk's (JONSWAP's fits are for kilometres of fetch; over
+    a few hundred metres they give slopes steeper than the open sea's, a model choice to cap
+    them). They only tilt the normals (centimetres high). The sun's glitter on lakes became
+    sparkles instead of a smooth smear. The landscape's `wind`. Depth's effect on the waves'
+    speed was left out: in a still picture it changes nothing, and it matters only within
+    half a metre of the shore.
+  - Rivers leave lakes no higher than the lake (`levels`: a lake sets the running level; a
+    river into a lake is backed up to it): they had started 2-3 m above it, drawn in the air.
+  - Width from discharge: Parker et al.'s quasi-universal relation for single-thread gravel
+    rivers, B̃ = 4.63 Q̂^0.0667 (`hydraulics::parker_width`, `alluvial`; coefficients checked
+    in secondary sources, the paper unread), the bankfull width from the bankfull flow and
+    the grain, iterated. The test river went from 34 m and 12 cm to 9 m and 29 cm.
+  - The channel as the hydraulics have it: the parabola as wide as the river in flood, its
+    rim at the bankfull level, a floodplain flat there for three widths of the water (a
+    model choice), the valley's side rising 1 in 2 beyond (a model choice); the 1:1 bank,
+    which made a trench where the drawn floor stood above the river, is gone. The bed beside
+    the water is shaded as the material library's river gravel or sand (`RiverAt::Bar`).
+  - Fields: `river` measured along the drawn courses (`Carve::edge`; the skeleton's 50 m
+    segments cut across bends, so banks read as in the water and stayed bare of detail),
+    `grain` (the bed's median grain) and `channel` (beyond the channel's rim, for keeping
+    plants off the bars).
+  - Rivers' surfaces: the waves standing on the current, λ from tanh(kd) = kU²/g
+    (`river_water::stationary_wavelength`), crests across the flow, laid along and across the
+    river (`Carve::water_at`'s station) so they follow its bends, as rough as the Froude
+    number makes them; and the wind's waves summed with them, the fetch along a river five
+    of its widths (half a meander's wavelength, a model choice).
+  - The nearest lake's report searched every lake cell's shore: 12 of 14 minutes of a load.
+- Coasts (steps 6 and 7 begun, `ocean::Surf`, `terrain::scenery::shoreface`), each checked on
+  shots of `terrain-coast.json`'s world with its `focus` pinned (the patches follow the camera
+  otherwise, and the shore with them):
+  - The sea over a landscape before it finds the depth under each point by a ray cast down
+    onto the ground, and its waves break there: Battjes and Janssen's fraction of random waves
+    breaking, McCowan's γ = 0.78.
+  - The shoreface takes Dean's equilibrium profile, A y^(2/3), A = 0.21 D^0.48 (0.3 mm sand;
+    closure at 8 m, a model choice for Hallermeier's).
+  - Waves shoal (linear theory's energy flux) and refract (Snell's law, the refraction
+    coefficient on their height); in the surf zone the crests are laid out by phase across
+    Dean's profile, following the depth contours, each wave's height varying along its crest
+    and from wave to wave; a wave breaks where it reaches 0.78 of the depth, white on its front
+    and behind with the foam it leaves, fading with the whitecaps' 3.5 s (so the inner surf
+    zone is about half white, (τ/T)(1 - e^(-T/τ))).
+  - Trains: the wind's sea and an ocean's `"swell"`; waves heading out to sea make no surf.
+  - The swash: ground by the sea washed up to Stockdon et al.'s run-up (2006) on a 1:12 beach
+    face (a model choice), wet above it as far as water wicks; the swell on the sea's surface
+    too, a dozen long-crested waves from a narrow band (`WaveField::with_swell`).
+  - Found: from offshore the surf is a thin line, as it should be for a metre of waves on a
+    1:16 shore (a 30-40 m surf zone); a long swell's is wider. The swash is a wet sand without
+    a water film's sheen; the kernels
+    (GPU) know neither the surf nor the swell, so such a sea is the CPU's. A black speckle at
+    the shore was the sea's rays leaving from under it (its hit uncertain by centimetres, a
+    sphere the planet's size), now offset by the hit's error.
+  - Breakers in relief (`Surf::height`, `breaker`): within the sea's displaced region
+    (`detail_center`, `detail_distance`) the surf's state is found once on a 1 m grid
+    (`Surf::with_grid`, `"surf_grid"`; a ray cast down per point, 5 s for 600 m square), and the
+    surface there is the trains' waves in place of the open sea's below the closure depth: a
+    peaked crest over flat troughs as they shoal, the front steepening near breaking, and once
+    broken a bore (a front 3% of the wavelength, the back falling away), its height γ d at
+    most, the mean level kept. Seen from the beach the breakers stand as lines of dark faces
+    under white crests. Not yet: an overhanging lip (a height field can't), the faces'
+    translucence, the waves moving with `time`. Put `detail_center` over the surf zone.
+  - The shallows: from the waterline the foreground was the inner surf, not the swash, drawn
+    as a grey sheet because its foam (one bore's, fading over 11 s) was a coin flip against
+    its strength at every sample. The foam left behind a bore is now lace (`Surf::lace`, the
+    whitecaps' pattern at a third the size, edges sharpened), the roller on its front solid.
+    The swash: each uprush reaches between the setup (`ocean::setup`) and the run-up, in
+    tongues along the shore; below its edge a film of water over sand (pbrt's coated diffuse,
+    whose coat darkens the sand as being wet does), a ragged line of lace at the edge and
+    streaks behind; above it wet sand (`scenery::Swash`). Seen from 2 m the lace behind the
+    edge is too many round blobs.
+- Found after merging master (closed basins, geology): on the alpine test site (30°N, in the
+  subtropical dry belt) the closed basins cut nearly all of a patch's drainage (its largest
+  catchment fell from 1500 to 37 km²), so it has no rivers; with `"evaporation": 0` they come
+  back. That is right: the climate gives the site 92 mm of rain a year (hyper-arid, a cold
+  desert with glaciers), so the land's Budyko runoff is 4-8 mm a year against lakes losing
+  0.5-1.1 m, and nearly every lake is closed. The 2.5 m³/s river the earlier steps were tuned
+  on existed only because every lake spilled. River tests moved to wet mountains (a search of
+  the planet's orogeny and climate for strong relief with over 900 mm of rain).
+
+### Order
+
+1 first: everything else reads its discharge and depths. 2 and 3 make rivers look right; 4
+needs 2's surface for the lip. 5 refines 3 near the camera and can wait. 6 and 7 are the coast,
+independent of rivers after 1 (they need only the bed). 8 is small and can go any time after 2.
+
+### Reading
+
+Bibliographic details checked by search, from abstracts or secondary sources unless noted;
+"unverified" marks what couldn't be checked.
+
+- Meanders: Leopold and Wolman, "River meanders", GSA Bulletin 71, 1960 (λ ≈ 10.9 w^1.01;
+  unverified); Langbein and Leopold, USGS PP 422-H, 1966 (sine-generated curves; unverified);
+  Schumm, GSA Bulletin 74, 1963 (sinuosity and bank silt-clay; unverified).
+- Depressions: Barnes, Lehman and Mulla, "Priority-Flood", Computers & Geosciences 62, 2014,
+  doi:10.1016/j.cageo.2013.04.024; Lindsay, "Efficient hybrid breaching-filling sink removal
+  methods for flow path enforcement in digital elevation models", Hydrological Processes 30,
+  2016 (unverified).
+- Rivers and runoff: Budyko, "Climate and Life", Academic Press, 1974; Fu, Scientia
+  Atmospherica Sinica 5(1), 1981 (in Chinese); Zhang et al., WRR 40, W02502, 2004,
+  doi:10.1029/2003WR002710 (w = 2.6 reproduces Budyko's curve: a default, not a fit);
+  Thornthwaite, Geographical Review 38(1), 1948, doi:10.2307/210739 (DOI unverified);
+  Manning, Trans. ICE Ireland 20, 1891; Chow, "Open-Channel Hydraulics", 1959; Strickler 1923
+  (unverified; quoted forms of its constant differ by 15%); Parker et al., JGR 112, F04005,
+  2007, doi:10.1029/2006JF000549; Parker, J. Fluid Mech. 89, 1978,
+  doi:10.1017/S0022112078002499; Li et al., J. Hydraulic Research 53(1), 2015,
+  doi:10.1080/00221686.2014.939113; Leopold and Maddock, USGS PP 252, 1953,
+  doi:10.3133/pp252 (downstream b = 0.5, f = 0.4, m = 0.1); Montgomery and Buffington, GSA
+  Bulletin 109(5), 1997, doi:10.1130/0016-7606(1997)109<0596:CRMIMD>2.3.CO;2 (Table 1's slope
+  ranges unverified; Wohl and Merritt 2005 quote 0.065 / 0.03 / 0.015).
+- Shallow water and rivers in graphics: Kurganov and Petrova, Commun. Math. Sci. 5(1), 2007,
+  doi:10.4310/CMS.2007.v5.n1.a6; Bates, Horritt, Fewtrell, J. Hydrology 387, 2010,
+  doi:10.1016/j.jhydrol.2010.03.027 (local inertial flood routing); Kass and Miller, SIGGRAPH
+  1990, doi:10.1145/97880.97884; O'Brien and Hodgins, Computer Animation 1995,
+  doi:10.1109/CA.1995.393532; Mei, Decaudin, Hu, Pacific Graphics 2007,
+  doi:10.1109/PG.2007.15; Chentanez and Müller, SCA 2010, doi:10.2312/SCA/SCA10/197-206
+  (content unverified); Yu, Neyret, Bruneton, Holzschuch, CGF 28(2), 2009,
+  doi:10.1111/j.1467-8659.2009.01363.x; Peytavie et al., "Procedural Riverscapes", CGF 38(7),
+  2019, doi:10.1111/cgf.13814; Thürey et al., Pacific Graphics 2007, doi:10.1109/PG.2007.33
+  (breaking waves on shallow water).
+- Falls and whitewater: Horeni 1956 (jet break-up length L_b ≈ 6 q^0.32, as cited in the
+  plunge-pool literature; unverified); Rouse, Civil Engineering 6(4), 1936 (0.715 y_c, via Rajaratnam
+  1968); Ervine and Falvey, Proc. ICE 83(1), 1987, doi:10.1680/iicep.1987.353 (jet spread;
+  break-up length unconfirmed); Chanson, "The Hydraulics of Open Channel Flow: An
+  Introduction", 2nd ed., 2004; Scheingross and Lamb, JGR Earth Surface 122, 2017,
+  doi:10.1002/2017JF004195; Lamb and Dietrich, GSA Bulletin 121(7-8), 2009,
+  doi:10.1130/B26482.1; Whipple, Hancock, Anderson, GSA Bulletin 112(3), 2000 (DOI
+  unverified).
+- Coasts: Fournier and Reeves, SIGGRAPH 1986, doi:10.1145/15886.15894; Peachey, SIGGRAPH
+  1986, doi:10.1145/15886.15893; Jeschke et al., "Water Surface Wavelets", TOG 37(4), 2018,
+  doi:10.1145/3197517.3201336; Jeschke and Wojtan, "Water Wave Packets", TOG 36(4), 2017,
+  doi:10.1145/3072959.3073678, and "Generalizing Shallow Water Simulations with Dispersive
+  Surface Waves", TOG 42(4), 2023, doi:10.1145/3592098; Darles et al., CGF 30(1), 2011,
+  doi:10.1111/j.1467-8659.2010.01828.x; McCowan, Phil. Mag. 38, 1894 (H/h ≈ 0.78; DOI
+  unverified); Battjes, ICCE 14, 1974, doi:10.9753/icce.v14.26; Battjes and Janssen, ICCE 16,
+  1978, doi:10.9753/icce.v16.32; Thornton and Guza, JGR 88(C10), 1983,
+  doi:10.1029/JC088iC10p05925; Booij, Ris, Holthuijsen, JGR 104(C4), 1999,
+  doi:10.1029/98JC02622 (SWAN); Holthuijsen, "Waves in Oceanic and Coastal Waters", CUP, 2007,
+  doi:10.1017/CBO9780511618536; Longuet-Higgins and Stewart, Deep-Sea Research 11(4), 1964
+  (DOI unverified); Dean, J. Coastal Research 7(1), 1991; Komar and Inman, JGR 75(30), 1970,
+  doi:10.1029/JC075i030p05914; Wright and Short, Marine Geology 56, 1984,
+  doi:10.1016/0025-3227(84)90008-2.
+- River water's optics: Gordon, Brown, Jacobs, Applied Optics 14(2), 1975; Morel and Prieur,
+  Limnol. Oceanogr. 22(4), 1977; Neukermans et al., Limnol. Oceanogr. 57(1), 2012 (b*_bp of
+  mineral particles 0.012 m²/g, by search); Babin et al., Limnol. Oceanogr. 48(2), 2003; Babin
+  and Stramski, Limnol. Oceanogr. 49(3), 2004 (details from memory; to verify). Width from
+  discharge: Moody and Troutman, ESPL 27, 2002, doi:10.1002/esp.403 (found; its coefficients
+  not yet read).
+- Optics: Twomey, Bohren, Mergenthaler, Applied Optics 25(3), 1986, doi:10.1364/AO.25.000431;
+  Lekner and Dorf, Applied Optics 27(7), 1988, doi:10.1364/AO.27.001278; Frouin, Schwindling,
+  Deschamps, JGR 101(C6), 1996, doi:10.1029/96JC00629 (sea foam's reflectance).

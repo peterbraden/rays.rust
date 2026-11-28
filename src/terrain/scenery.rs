@@ -72,6 +72,7 @@ use crate::color::Color;
 use crate::geometry::rand;
 use crate::intersection::Intersection;
 use crate::material::bsdf::LambertianBSDF;
+use crate::material::lambertian::Lambertian;
 use crate::material::functions::scatter_bsdf;
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::snow::{Ice, IceStyle, Snow, SnowStyle};
@@ -157,8 +158,15 @@ pub struct SceneryParams {
     pub treeline: Option<f64>,
     /// Rivers are drawn at least this wide, metres.
     pub min_river_width: f64,
+    /// The rivers' hydraulics (the flow they show).
+    pub hydraulics: crate::terrain::hydraulics::HydraulicParams,
     /// Cells per face edge of the mesh over the whole planet.
     pub globe: usize,
+    /// The wind over the lakes (scene x and z, m/s), which raises their waves.
+    pub wind: [f64; 2],
+    /// The waves washing the shores: significant height out at sea (m) and period (s), from
+    /// the scene's ocean (`ocean::shore_waves`).
+    pub sea: Option<(f64, f64)>,
     /// Shade bare rock, scree, sand and gravel with the library's natural materials
     /// (`material::library`), each rock its own; else with plain colours.
     pub ground_materials: bool,
@@ -168,7 +176,9 @@ impl Default for SceneryParams {
     fn default() -> SceneryParams {
         SceneryParams {
             resolution: 384, min_spacing: 0.5, roughness: 1., exaggeration: 1.,
-            snowline: None, treeline: None, min_river_width: 0., globe: 192, ground_materials: true,
+            snowline: None, treeline: None, min_river_width: 0., hydraulics: Default::default(), globe: 192, ground_materials: true,
+            wind: [4., 0.],
+            sea: None,
         }
     }
 }
@@ -235,6 +245,9 @@ pub struct Layer {
     corners: Vec<f64>,
     class: Vec<u8>,
     water: Option<WaterLines>,
+    /// Its rivers as courses, levelled and carved once the relief is known.
+    pub rivers: Option<crate::terrain::rivers::Rivers>,
+    min_river_width: f64,
     /// Width of the band inside a patch's edge over which it blends into what is around it.
     blend: f64,
     /// What the simulation left, for graphs' `field` nodes.
@@ -245,9 +258,11 @@ pub struct Layer {
 }
 
 impl Layer {
-    pub fn new(t: Terrain, min_river_width: f64) -> Layer {
+    pub fn new(t: Terrain, min_river_width: f64, hydraulics: &crate::terrain::hydraulics::HydraulicParams) -> Layer {
         let corners = corner_heights(&t);
-        let fields = crate::terrain::fields::SimFields::new(&t);
+        let water = crate::terrain::hydraulics::Hydraulics::of(&t, hydraulics);
+        let fields = crate::terrain::fields::SimFields::with_hydraulics(&t, &water);
+        let rivers = matches!(t.domain.layout, Layout::Patch { .. }).then(|| crate::terrain::rivers::Rivers::new(&t, &water));
         let water = map::water_lines(&t, min_river_width);
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
@@ -272,7 +287,7 @@ impl Layer {
             }
             _ => None,
         };
-        Layer { spacing, corners, class, water, blend, fields, wind, domain: t.domain }
+        Layer { spacing, corners, class, water, rivers, min_river_width, blend, fields, wind, domain: t.domain }
     }
 
     /// Tangent coordinates of `d` on a patch, if it is on the patch's side of the planet.
@@ -310,12 +325,42 @@ impl Layer {
 
     fn class_at(&self, d: &Vector3<f64>) -> u8 { self.class[self.domain.cell_at(d)] }
 
+    /// What is at direction `d` and height `h`: the surface of water (a river drawn on the
+    /// ground, or an ox-bow lake), a river's bed under its own surface, or land. `surfaced`
+    /// says whether a river of the given half width has a surface of its own at `d` (near
+    /// the camera: `rivers::Carve::ribbon`), where the ground under it is never water.
+    fn river_at(&self, d: &Vector3<f64>, h: f64, surfaced: impl Fn(f64) -> bool) -> RiverAt {
+        let Some((x, z)) = self.tangent(d) else { return RiverAt::Land };
+        let (Some(water), q) = (&self.water, [x, z]) else { return RiverAt::Land };
+        let wet = |w: bool| if w { RiverAt::Water } else { RiverAt::Land };
+        match self.rivers.as_ref().and_then(|r| r.carve.get()) {
+            Some(carve) => match carve.level(q, self.min_river_width) {
+                Some((level, half, grain)) if h < level - 0.05 || surfaced(half) => if h < level + 0.05 { RiverAt::Bed(grain) } else { RiverAt::Land },
+                Some(_) => RiverAt::Water,
+                None => match self.rivers.as_ref().and_then(|r| r.basins.get()?.lake(q)) {
+                    // Under a lake's surface (`terrain::basins`), its bed.
+                    Some(level) if h < level + 0.05 => RiverAt::Bed(0.0005),
+                    // In a river's channel above its water, where the mesh draws the channel:
+                    // a bare bar, its edge ragged where plants take hold (up to 0.6 m either
+                    // way over a few metres, a model choice; the rim is a smooth curve).
+                    _ => match carve.channel(q) {
+                        // Wet up to where water wicks from the river (`capillary_rise`).
+                        Some((level, half, grain, out)) if out < ragged(q) && surfaced(half) =>
+                            if h < level + capillary_rise(grain) { RiverAt::Bed(grain) } else { RiverAt::Bar(grain) },
+                        _ => wet(water.wet_oxbow(point_cell(&self.domain, q), q)),
+                    },
+                },
+            },
+            None => wet(water.wet(point_cell(&self.domain, q), q)),
+        }
+    }
+
     /// The layers of a world's `patches` (finest first) and its `globe`; a close level
     /// (`close`, the finest) drawn with the closed basins of the patch around it
     /// (`SimFields::take_basins`).
-    pub fn of_world(patches: Vec<Terrain>, globe: Option<Terrain>, close: bool, min_river_width: f64) -> Vec<Layer> {
+    pub fn of_world(patches: Vec<Terrain>, globe: Option<Terrain>, close: bool, min_river_width: f64, hydraulics: &crate::terrain::hydraulics::HydraulicParams) -> Vec<Layer> {
         let n = patches.len();
-        let mut layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, min_river_width)).collect();
+        let mut layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, min_river_width, hydraulics)).collect();
         if close && n >= 2 {
             let (fine, around) = layers.split_at_mut(1);
             fine[0].fields.take_basins(&fine[0].domain, &around[0].fields, &around[0].domain);
@@ -323,10 +368,101 @@ impl Layer {
         layers
     }
 
-    fn wet(&self, d: &Vector3<f64>) -> bool {
-        let (Some(water), Some((x, z))) = (&self.water, self.tangent(d)) else { return false };
-        water.wet(point_cell(&self.domain, [x, z]), [x, z])
+    /// Whether `d` is by the sea: in a cell of sea floor or beside one.
+    fn by_the_sea(&self, d: &Vector3<f64>) -> bool {
+        let Some((x, z)) = self.tangent(d) else { return false };
+        let i = point_cell(&self.domain, [x, z]);
+        self.class[i] == SEA_FLOOR || self.domain.links(i).iter().any(|l| self.class[l.to] == SEA_FLOOR)
     }
+
+    /// The patch point of direction `d`, if it is on the patch's side of the planet.
+    fn carve_point(&self, d: &Vector3<f64>) -> Option<crate::terrain::channel::Point> {
+        self.tangent(d).map(|(x, z)| [x, z])
+    }
+
+    /// The carving of its rivers at direction `d`, if levelled: patch point and carve.
+    fn carve(&self, d: &Vector3<f64>) -> Option<(crate::terrain::channel::Point, &crate::terrain::rivers::Carve)> {
+        let carve = self.rivers.as_ref()?.carve.get()?;
+        let (x, z) = self.tangent(d)?;
+        Some(([x, z], carve))
+    }
+}
+
+/// Dean's scale parameter for a beach of median grain `d50` (mm), m^(1/3): A = 0.21 D^0.48
+/// (R. G. Dean, "Equilibrium beach profiles: characteristics and applications", J. Coastal
+/// Research 7(1), 1991, after Moore 1982; D in millimetres, which gives the tabulated 0.1 for
+/// 0.2 mm sand).
+pub fn dean_a(d50: f64) -> f64 { 0.21 * d50.max(0.01).powf(0.48) }
+
+/// The beach's median grain, mm: a medium sand (a model choice, until the coast's sediment is
+/// known).
+pub const BEACH_SAND: f64 = 0.3;
+
+/// The slope of a sandy beach's face, where the swash runs: set by the sand more than the
+/// land (coarser, steeper: Bascom, 1951), about 1 in 12 for a medium sand (a model choice; the
+/// simulation's slopes, over hundreds of metres, don't see it).
+const FORESHORE: f64 = 0.08;
+
+/// The depth below which waves no longer reshape the sea floor, metres: a typical depth of
+/// closure for moderate coasts (6-10 m; a model choice for Hallermeier's, which needs the
+/// waves of the year's storms).
+pub const CLOSURE_DEPTH: f64 = 8.;
+
+/// Ground at height `h` (metres above sea level) on a slope `steepness`, as the waves shape the
+/// shoreface below sea level: Dean's equilibrium profile, the depth A y^(2/3) at distance y
+/// from the shore (Dean 1977, 1991), y taken as the drawn depth over the slope (the drawn
+/// ground a ramp from the shoreline). It is shallower than a ramp, concave, the waves' energy
+/// spent evenly across it; beyond the depth of closure the drawn sea floor returns. Only ever
+/// shallower than drawn. (Ground below sea level inland, rare, is taken as sea floor too.)
+pub fn shoreface(h: f64, steepness: f64) -> f64 {
+    if h >= 0. || h <= -2. * CLOSURE_DEPTH { return h; }
+    let drawn = -h;
+    let y = drawn / steepness.max(1e-3);
+    let dean = dean_a(BEACH_SAND) * y.powf(2. / 3.);
+    let shaped = 1. - smoothstep(CLOSURE_DEPTH, 2. * CLOSURE_DEPTH, drawn);
+    -(drawn - shaped * (drawn - dean).max(0.))
+}
+
+/// How high water wicks up a bed of median grain `grain` (m) above the river beside it, metres:
+/// Jurin's height h = 2γ / (ρ g r) for water's surface tension γ = 0.073 N/m, its pores'
+/// radius r taken as a fifth of the grain (a common approximation): 15 cm in fine sand,
+/// millimetres in gravel. Below it the bed is wet, and dark.
+pub fn capillary_rise(grain: f64) -> f64 {
+    2. * 0.073 / (1000. * 9.81 * 0.2 * grain.max(1e-5))
+}
+
+/// How far a river's bare bar reaches beyond its channel's rim at patch point `q`, metres:
+/// smooth noise, up to 0.6 either way at a few metres' scale.
+fn ragged(q: crate::terrain::channel::Point) -> f64 {
+    static NOISE: std::sync::OnceLock<crate::noise::PerlinNoise> = std::sync::OnceLock::new();
+    let n = NOISE.get_or_init(|| crate::noise::PerlinNoise::shuffled(0xba25));
+    0.6 * (2. * n.noise(q[0] / 3., q[1] / 3., 0.5) - 1.)
+}
+
+/// What the ground is at a point, as far as water goes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RiverAt {
+    Land,
+    /// The surface of water drawn on the ground (a river from afar, a lake).
+    Water,
+    /// A river's bed, under its own surface; with the median grain, metres.
+    Bed(f64),
+    /// A river's bed bare beside its water, in its channel below the bankfull level: the bars
+    /// floods scour too often for plants to hold; with the median grain, metres.
+    Bar(f64),
+    /// The sea's swash running up a shore (`Ground::shore`).
+    Swash(Swash),
+}
+
+/// What the swash leaves at a point of the shore.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Swash {
+    /// Sand under a film of water, glassy, reflecting the sky.
+    Film,
+    /// Foam's lace on the film: along the uprush's leading edge, and streaks behind it.
+    Lace,
+    /// Wet sand above where this uprush reached.
+    Wet,
 }
 
 /// A number from -1 to 1 for scene point `p`, as if random, but the same for the same point.
@@ -382,16 +518,36 @@ impl Relief {
     /// planet's own relief down to it put back.
     pub fn new(layers: Arc<Vec<Layer>>, planet: &Planet, radius: f64, roughness: f64, finest: f64) -> Relief {
         let seed = planet.params.seed;
-        Relief {
+        let relief = Relief {
             layers, radius, finest, roughness,
             planet: Planet::new(planet.params.clone()),
             noise: SeededNoise::new(seed.wrapping_add(0x5ce7e)),
+        };
+        // The rivers' levels follow the uncarved ground (`rivers`).
+        for l in relief.layers.iter() {
+            if let Some(r) = &l.rivers {
+                r.level(|q, local| {
+                    let d = crate::terrain::rivers::patch_dir(&l.domain, q);
+                    relief.uncarved(&d, &relief.slope(&d), local)
+                });
+            }
         }
+        relief
     }
 
     /// The large-scale height at `d`, before synthetic detail: each layer blending into the
     /// next, coarser layers with the planet's own relief finer than their cells put back.
     pub fn base(&self, d: &Vector3<f64>) -> f64 {
+        let h = self.splined(d);
+        // Valley floors at the simulation's beds, where its rivers run (`terrain::rivers`).
+        let Some(l) = self.layers.iter().find(|l| l.contains(d)) else { return h };
+        let Some(n) = l.rivers.as_ref().zip(l.carve_point(d)).and_then(|(r, q)| r.skeleton.nearest(q)) else { return h };
+        let w = l.weight(d) * (1. - smoothstep(n.half, n.half + l.spacing, n.centre));
+        h + w * (n.bed - h)
+    }
+
+    /// The large-scale height from the layers' splines and the planet's relief.
+    fn splined(&self, d: &Vector3<f64>) -> f64 {
         let mut rest = 1.;
         let mut h = 0.;
         for l in self.layers.iter() {
@@ -440,6 +596,9 @@ impl Relief {
     /// noise to break them up.
     pub fn detail(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
         let p = d * self.radius;
+        // Rivers clear their floodplains of relief at every scale (`terrain::rivers`).
+        let river = self.layers.iter().find(|l| l.contains(d))
+            .and_then(|l| l.rivers.as_ref()?.skeleton.nearest(l.carve_point(d)?));
         let mut sum = 0.;
         // The slope as the gullies so far leave it: each octave's run down the sides of the
         // coarser ones, so they branch.
@@ -451,7 +610,8 @@ impl Relief {
             // cells its slopes are smoothed by its own diffusion.
             let resolved = smoothstep(4. * self.finest, 8. * self.finest, wavelength);
             let carried = 1. - smoothstep(wavelength / 4., wavelength / 2., local);
-            let w = (1. - resolved) * carried;
+            let cleared = river.map_or(1., |n| smoothstep(0., (wavelength / 2.).min(crate::terrain::rivers::cleared(n.half)), n.edge));
+            let w = (1. - resolved) * carried * cleared;
             if w > 0. {
                 let amplitude = w * self.roughness * wavelength;
                 let (g, dg) = self.gullies(&p, d, &gradient, wavelength, octave);
@@ -593,6 +753,27 @@ impl Relief {
     /// The surface's height at `d` with detail down to spacing `local`, given its large-scale
     /// slope there.
     pub fn height(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
+        let g = self.uncarved(d, slope, local);
+        let g = shoreface(g, slope.steepness);
+        let Some(l) = self.layers.iter().find(|l| l.contains(d)) else { return g };
+        let Some((q, carve)) = l.carve(d) else { return g };
+        carve.carved(q, g, local)
+    }
+
+    /// The river at direction `d`, if `d` is on a river's surface: the flow there, and its
+    /// direction (a unit vector in the planet's frame).
+    pub fn river_at(&self, d: &Vector3<f64>) -> Option<(crate::terrain::rivers::Node, Vector3<f64>, [f64; 2])> {
+        let l = self.layers.iter().find(|l| l.contains(d))?;
+        let (q, carve) = l.carve(d)?;
+        let (node, along, station) = carve.water_at(q)?;
+        match &l.domain.layout {
+            Layout::Patch { east, north, .. } => Some((node, east * along[0] + north * along[1], station)),
+            Layout::Sphere { .. } => None,
+        }
+    }
+
+    /// The height before rivers cut their channels.
+    pub fn uncarved(&self, d: &Vector3<f64>, slope: &Slope, local: f64) -> f64 {
         let (sand, wind) = self.sand(d);
         // Drifting sand buries the ground's small relief, and a closed basin's floor is level:
         // the water spreads and dries over it, the sediment settling flat (no gullies, which
@@ -889,8 +1070,13 @@ pub struct Ground {
     /// the bluer ice beneath.
     snow: [Snow; 2],
     ice: [Ice; 2],
+    /// The mesh's spacing about the camera, once known: where rivers have surfaces of their
+    /// own.
+    pub clipmap: std::sync::OnceLock<Clipmap>,
     /// The library's materials for each kind of bare ground (`Bare::index`), if used.
     materials: Vec<Option<Box<dyn MaterialModel + Sync + Send>>>,
+    /// The waves washing the shores (`SceneryParams::sea`).
+    sea: Option<(f64, f64)>,
     /// The crowns of the trees ecosystems planted on it: forest floor under them.
     canopy: crate::terrain::canopy::Slot,
     /// Where the flora's communities grow, for the woods beyond those trees.
@@ -1124,6 +1310,8 @@ impl Ground {
             noise: PerlinNoise::shuffled(seed.wrapping_add(77)),
             snow: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("firn"), 1., seed)],
             ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
+            clipmap: std::sync::OnceLock::new(),
+            sea: p.sea,
             materials: (0..Bare::COUNT).map(|k| {
                 let s = Bare::from_index(k);
                 if !p.ground_materials { return None; }
@@ -1235,8 +1423,68 @@ impl Ground {
 
     /// Whether scene point `p` is in a river or lake.
     pub fn wet(&self, p: &Vector3<f64>) -> bool {
-        let (d, _) = self.frame.on_planet(p);
-        self.layer_at(&d).is_some_and(|l| l.wet(&d))
+        self.river_at(p) == RiverAt::Water
+    }
+
+    /// What `p` is as far as water goes (`Layer::river_at`).
+    pub fn river_at(&self, p: &Vector3<f64>) -> RiverAt {
+        let (d, h) = self.frame.on_planet(p);
+        if let Some(shore) = self.shore(p, h).filter(|_| self.layer_at(&d).is_some_and(|l| l.by_the_sea(&d))) { return shore; }
+        let surfaced = |half: f64| self.clipmap.get().is_some_and(|c| {
+            let (x, z) = self.frame.tangent(&d);
+            c.local(x, z).is_some_and(|s| s < half)
+        });
+        self.layer_at(&d).map_or(RiverAt::Land, |l| l.river_at(&d, h, surfaced))
+    }
+
+    /// The shore at `p` (`h` metres above sea level), where the sea's waves wash it, up to the
+    /// height they run up (`ocean::runup`, Stockdon's, on a beach face of `FORESHORE`). At any
+    /// moment each uprush has reached somewhere between the setup (`ocean::setup`, the waves'
+    /// mean level at the shore) and that, varying along the shore in tongues tens of metres
+    /// long: below its edge a film of water over the sand, with lace of foam in a ragged line
+    /// at the edge and in streaks behind it; above, wet sand; and above the run-up, wet as far
+    /// again as water wicks up the sand (`capillary_rise`). None above, or without a sea.
+    fn shore(&self, p: &Vector3<f64>, h: f64) -> Option<RiverAt> {
+        let (h0, period) = self.sea?;
+
+        let wet = capillary_rise(BEACH_SAND / 1000.);
+        let reach = crate::ocean::runup(h0, period, FORESHORE);
+        if h < -0.05 || h > reach + wet { return None; }
+        if h > reach { return Some(RiverAt::Swash(Swash::Wet)); }
+        let setup = crate::ocean::setup(h0, period, FORESHORE);
+        // Where this uprush has reached, its edge ragged by a finer noise.
+        let tongue = (0.5 + 0.7 * self.noise.noise(p.x / 15., p.z / 15., 3.7)).clamp(0., 1.);
+        let ragged = 0.015 * self.noise.noise(p.x / 0.4, p.z / 0.4, 9.1);
+        let edge = setup + (reach - setup) * tongue + ragged;
+        // The lace at the edge, a few centimetres of height (a few decimetres up the beach),
+        // broken in places; and streaks of it left behind on the film.
+        const LACE: f64 = 0.02;
+        if h > edge + LACE { return Some(RiverAt::Swash(Swash::Wet)); }
+        let lace = if h > edge - LACE {
+            self.noise.noise(p.x / 0.7, p.z / 0.7, 1.3) > -0.3
+        } else {
+            // Behind the edge, as the backwash drains, the lace left in thin streaks down the
+            // beach, fewer the further below the edge (the longer ago the water passed).
+            let down = self.downhill(p);
+            let (along, across) = (p.x * -down.y + p.z * down.x, p.x * down.x + p.z * down.y);
+            let below = ((edge - h) / (edge + 0.05).max(1e-3)).clamp(0., 1.);
+            self.noise.noise(along / 0.12, across / 1.5, 5.3) > 0.45 + 0.35 * below
+        };
+        Some(RiverAt::Swash(if lace { Swash::Lace } else { Swash::Film }))
+    }
+
+    /// Which way is down the ground's large-scale slope at scene point `p` (scene x and z,
+    /// unit), from the finest simulation's heights twenty metres about it; along x where it is
+    /// flat or outside them.
+    fn downhill(&self, p: &Vector3<f64>) -> crate::na::Vector2<f64> {
+        let e = 20.;
+        let at = |dx: f64, dz: f64| {
+            let (d, _) = self.frame.on_planet(&(p + Vector3::new(dx, 0., dz)));
+            self.layer_at(&d).map(|l| l.simulated(&d))
+        };
+        let (Some(xp), Some(xm), Some(zp), Some(zm)) = (at(e, 0.), at(-e, 0.), at(0., e), at(0., -e)) else { return crate::na::Vector2::x() };
+        let g = -crate::na::Vector2::new(xp - xm, zp - zm);
+        if g.norm() > 1e-9 { g.normalize() } else { crate::na::Vector2::x() }
     }
 
     /// Whether scene point `p` is under a closed basin's terminal lake: brine, shallow over a
@@ -1612,6 +1860,35 @@ impl crate::graph::Fields for Ground {
             Field::Elevation => return Some(h),
             Field::Snowline => return Some(h - self.snowline(&d)),
             Field::Treeline => return Some(h - self.treeline(&d)),
+            Field::River => {
+                // From the rivers as drawn, near them (the skeleton's straight segments cut
+                // across their bends by metres); from the skeleton farther out.
+                let far = crate::terrain::rivers::CLEAR;
+                return Some(self.layer_at(&d)
+                    .and_then(|l| {
+                        let q = l.carve_point(&d)?;
+                        let rivers = l.rivers.as_ref()?;
+                        rivers.carve.get().and_then(|c| c.edge(q)).or_else(|| Some(rivers.skeleton.nearest(q)?.edge))
+                    })
+                    .map_or(far, |e| e.min(far)));
+            },
+            Field::Channel => {
+                // Beyond the channel's rim near a river drawn at full scale; else from its water.
+                let far = crate::terrain::rivers::CLEAR;
+                return Some(self.layer_at(&d)
+                    .and_then(|l| {
+                        let q = l.carve_point(&d)?;
+                        let rivers = l.rivers.as_ref()?;
+                        rivers.carve.get().and_then(|c| c.channel(q)).map(|c| c.3.max(0.)).or_else(|| Some(rivers.skeleton.nearest(q)?.edge))
+                    })
+                    .map_or(far, |e| e.min(far)));
+            },
+            Field::Grain => {
+                // Near a river drawn at full scale, its bed's; else the simulation's.
+                if let Some(g) = self.layer_at(&d).and_then(|l| l.rivers.as_ref()?.carve.get()?.nearest_bed(l.carve_point(&d)?)) {
+                    return Some(g.1);
+                }
+            },
             Field::Temperature | Field::Precipitation => {
                 let local = self.climate.as_ref()?.local(&d, h);
                 return Some(if f == Field::Temperature { local.mean } else { local.precipitation });
@@ -1664,12 +1941,42 @@ impl MaterialModel for Land {
 
 /// The landscape's materials: water in its rivers and lakes, land elsewhere (the ground cover,
 /// or the scene's own material).
+/// Water drawn on the ground (rivers too narrow for the mesh to carve, from afar; ox-bows):
+/// shaded as level water, its normal the local vertical rather than the ground's, so it
+/// mirrors what is across it as the water would. (On the ground's own slopes the reflections
+/// went into the hillside, and the water looked dark.)
+pub struct FlatWater {
+    pub water: PhysicalOcean,
+    pub centre: Vector3<f64>,
+}
+
+impl MaterialModel for FlatWater {
+    fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {
+        self.water.scatter(r, &Intersection { normal: (i.point - self.centre).normalize(), ..*i }, s)
+    }
+    fn sun_glint(&self, r: &Ray, i: &Intersection, s: &Scene) -> Option<Color> {
+        self.water.sun_glint(r, &Intersection { normal: (i.point - self.centre).normalize(), ..*i }, s)
+    }
+}
+
 pub struct LandscapeMedium {
     ground: Arc<Ground>,
     land: Box<dyn MaterialModel + Sync + Send>,
     /// An eruption in progress, its lava glowing (`terrain::eruption`).
     active: Option<crate::terrain::eruption::ActiveLava>,
-    water: PhysicalOcean,
+    water: FlatWater,
+    /// Rivers' beds, under water: sand, and gravel and coarser.
+    beds: [Lambertian; 2],
+    /// Foam on the swash.
+    foam: Lambertian,
+    /// The shore's sand, the library's beach sand, wet (dark and glossy, with ripples) where
+    /// the swash has drained, and under its film of water, glassier still (the library's `wet`
+    /// overlay).
+    wet_sand: Box<dyn MaterialModel + Sync + Send>,
+    film: Box<dyn MaterialModel + Sync + Send>,
+    /// Their bars, bare beside the water: sand, and gravel and coarser (the material
+    /// library's).
+    bars: [Box<dyn MaterialModel + Sync + Send>; 2],
     /// Terminal lakes: shallow brine over a pale floor, greener and brighter than rivers.
     brine: PhysicalOcean,
 }
@@ -1686,10 +1993,16 @@ impl LandscapeMedium {
         LandscapeMedium {
             land: material.unwrap_or_else(|| Box::new(Land { ground: ground.clone() })),
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
-            water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None },
-            brine: PhysicalOcean { water: Color::new(0.03, 0.07, 0.065), roughness: 0.003, center: Some(centre), foam: None, absorption: None },
+            water: FlatWater { water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None, surf: None }, centre },
+            brine: PhysicalOcean { water: Color::new(0.03, 0.07, 0.065), roughness: 0.003, center: Some(centre), foam: None, absorption: None, surf: None },
             active: None,
             ground,
+            beds: [Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(SAND_ALBEDO)) }, Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(GRAVEL_ALBEDO)) }],
+            foam: Lambertian { albedo: crate::textures::ColorTexture::Constant(Color::new(0.6, 0.6, 0.6)) },
+            wet_sand: crate::scenefile::SceneFile::parse_material_definition(&wet_sand(), "wet_sand", &serde_json::Map::new()),
+            film: crate::scenefile::SceneFile::parse_material_definition(
+                &serde_json::json!({"type": "library", "name": "wet", "amount": 0.35, "over": wet_sand()}), "swash_film", &serde_json::Map::new()),
+            bars: ["beach_sand", "river_gravel"].map(|name| crate::scenefile::SceneFile::parse_material_definition(&serde_json::json!({"type": "library", "name": name}), name, &serde_json::Map::new())),
         }
     }
 
@@ -1703,14 +2016,45 @@ impl LandscapeMedium {
     }
 }
 
+/// The library's beach sand, all of it wet (its waterline, a scene height, far above).
+fn wet_sand() -> serde_json::Value {
+    serde_json::json!({"type": "library", "name": "beach_sand", "waterline": 1e9})
+}
+
+/// Dry sand and river gravel (cobbles of mixed rock), as albedos.
+const SAND_ALBEDO: [f64; 3] = [0.55, 0.50, 0.40];
+const GRAVEL_ALBEDO: [f64; 3] = [0.30, 0.28, 0.25];
+
+/// A dry albedo wetted. A film of water over the grains turns back, by total internal
+/// reflection at its surface, much of the light the grains scatter up, so it meets the grains
+/// again and more of it is absorbed (Ångström's model, which Lekner and Dorf, "Why some things
+/// are darker when wet", Applied Optics 27(7), 1988, doi:10.1364/AO.27.001278, extend). With x
+/// the fraction of diffuse light the water's surface turns back (about 0.6 for water) and a the
+/// grains' albedo, the light that escapes after any number of returns is a (1 - x) / (1 - a x).
+/// Here the dry albedo stands in for a (to check against their paper, which also accounts for
+/// the water changing the grains' own scattering); bright sand darkens by a third, dark gravel
+/// by half, as wet sand and stones do.
+fn bed_albedo(dry: [f64; 3]) -> Color {
+    const X: f64 = 0.6;
+    let wet = |a: f64| a * (1. - X) / (1. - a * X);
+    Color::new(wet(dry[0]), wet(dry[1]), wet(dry[2]))
+}
+
 impl Medium for LandscapeMedium {
     fn eruption(&self) -> Option<&Arc<crate::terrain::eruption::Eruption>> { self.active.as_ref().map(|a| &a.eruption) }
 
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
         if let Some(a) = &self.active && a.eruption.heat(&pt).is_some() { return a; }
-        if self.ground.wet(&pt) { &self.water }
-        else if self.ground.salt_lake(&pt) { &self.brine }
-        else { &*self.land }
+        match self.ground.river_at(&pt) {
+            RiverAt::Water => &self.water,
+            RiverAt::Bed(grain) => &self.beds[(grain > 0.002) as usize],
+            RiverAt::Bar(grain) => &*self.bars[(grain > 0.002) as usize],
+            RiverAt::Swash(Swash::Lace) => &self.foam,
+            RiverAt::Swash(Swash::Film) => &*self.film,
+            RiverAt::Swash(Swash::Wet) => &*self.wet_sand,
+            RiverAt::Land if self.ground.salt_lake(&pt) => &self.brine,
+            RiverAt::Land => &*self.land,
+        }
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(&*self.ground) }
@@ -1735,6 +2079,32 @@ mod tests {
     use crate::terrain::simulation::TerrainParams;
 
     fn frame() -> Frame { Frame::new(45., 7., 6.36e6, 1.) }
+
+    #[test]
+    fn test_the_shoreface_takes_deans_profile() {
+        // Dean's A for 0.2 mm sand is the tabulated 0.1 m^(1/3); coarser sand, steeper.
+        assert!((dean_a(0.2) - 0.097).abs() < 0.002, "{}", dean_a(0.2));
+        assert!(dean_a(1.) > dean_a(0.3));
+        // On a 1:16 ramp, drawn 1 m deep 16 m out: Dean's 0.118 × 16^(2/3) = 0.75 m.
+        let s = 1. / 16.;
+        assert!((shoreface(-1., s) + 0.749).abs() < 0.01, "{}", shoreface(-1., s));
+        // The shoreline stays, the land is untouched, and the profile deepens offshore, back to
+        // the drawn floor beyond twice the depth of closure.
+        assert_eq!(shoreface(0., s), 0.);
+        assert_eq!(shoreface(5., s), 5.);
+        let profile: Vec<f64> = (1..40).map(|k| shoreface(-0.5 * k as f64, s)).collect();
+        assert!(profile.windows(2).all(|w| w[1] < w[0]), "{:?}", profile);
+        assert_eq!(shoreface(-17., s), -17.);
+        // Never deeper than drawn: a gentle drawn floor stays as it is.
+        assert_eq!(shoreface(-0.2, 0.001), -0.2);
+    }
+
+    #[test]
+    fn test_water_wicks_higher_in_finer_beds() {
+        // Jurin's law over 0.5 mm sand (pores 0.1 mm): about 15 cm; over 5 cm gravel, 1.5 mm.
+        assert!((capillary_rise(0.0005) - 0.149).abs() < 0.002, "{}", capillary_rise(0.0005));
+        assert!(capillary_rise(0.05) < 0.002);
+    }
 
     #[test]
     fn test_site_is_the_scene_origin_and_the_planet_curves_away() {
@@ -1777,7 +2147,7 @@ mod tests {
         let fine = Terrain::new(Domain::patch(lat, lon, 16, 1000., params.planet.radius), params.clone());
         let coarse = Terrain::new(Domain::patch(lat + 0.01, lon, 16, 4000., params.planet.radius), params.clone());
         let globe = Terrain::new(Domain::sphere(16, params.planet.radius), params);
-        (planet, Arc::new(vec![Layer::new(fine, 0.), Layer::new(coarse, 0.), Layer::new(globe, 0.)]), (lat, lon))
+        (planet, Arc::new(vec![Layer::new(fine, 0., &Default::default()), Layer::new(coarse, 0., &Default::default()), Layer::new(globe, 0., &Default::default())]), (lat, lon))
     }
 
     #[test]
@@ -1794,7 +2164,7 @@ mod tests {
         t.sediment = east.iter().map(|x| (x - 6.).max(0.) * 0.5).collect();
         t.sand = t.sediment.clone();
         t.wind = (0., 1.);
-        let relief = Relief::new(Arc::new(vec![Layer::new(t, 0.)]), &planet, params.planet.radius, 0., 1000.);
+        let relief = Relief::new(Arc::new(vec![Layer::new(t, 0., &Default::default())]), &planet, params.planet.radius, 0., 1000.);
         let frame = Frame::new(lat, lon, params.planet.radius, 1.);
         // Across the wind (which blows north), from no sand to several metres.
         for row in 0..8 {
@@ -1818,7 +2188,7 @@ mod tests {
         t.sediment = vec![30.; n];
         t.sand = vec![30.; n];
         t.wind = (1., 0.);
-        let relief = Relief::new(Arc::new(vec![Layer::new(t, 0.)]), &planet, params.planet.radius, 0., 1000.);
+        let relief = Relief::new(Arc::new(vec![Layer::new(t, 0., &Default::default())]), &planet, params.planet.radius, 0., 1000.);
         let frame = Frame::new(lat, lon, params.planet.radius, 1.);
         // Lines along the wind, some through dunes and some between crescents.
         let mut lines = 0;
@@ -1968,3 +2338,4 @@ mod tests {
         }
     }
 }
+

@@ -61,7 +61,9 @@
 //! - `field`: what the surface knows about itself, given by the object hit (`Fields`): for a
 //!   landscape, what its simulation left there (see `Field`: `sediment`, `ice`, `lava`, `flow`,
 //!   `wetness`, `convexity`, `elevation`, `snowline`, `treeline`, `temperature`,
-//!   `precipitation`), `default` (0) on surfaces without it. With `from` and `to`, smoothly from
+//!   `precipitation`, and the rivers' `discharge`, `water_depth`, `flow_speed`, `froude`, `grain`,
+//!   `river`, the distance to the nearest river's water, and `channel`, to its channel's rim),
+//!   `default` (0) on surfaces without it. With `from` and `to`, smoothly from
 //!   0 to 1 between them; without, the value itself; either way with `breakup` added first.
 //! - `strata`: ledges: beds `step` metres thick (default 1), each eroded back from the one
 //!   above it and ending in a riser `sharpness` of the way to vertical (default 0.8), as the
@@ -141,6 +143,26 @@ pub enum Field {
     Temperature,
     /// Precipitation, mm a year (from the climate model).
     Precipitation,
+    /// How much water a river near the point carries: log10 of its mean discharge, m³/s
+    /// (`terrain::hydraulics`: the climate's runoff gathered over the area draining there).
+    Discharge,
+    /// How deep that water runs, metres (Manning's normal depth).
+    WaterDepth,
+    /// How fast, m/s.
+    FlowSpeed,
+    /// Its Froude number: below 1 tranquil, above 1 rapid.
+    Froude,
+    /// The median grain of its bed, metres: sand to boulders, as the flow can move them
+    /// (`hydraulics::grain_size`); near a river drawn at full scale, that river's.
+    Grain,
+    /// How far the point is from the nearest river's water, metres (0 in it): the river
+    /// courses a full-scale landscape draws (`terrain::rivers`), to 1 km; beyond, 1 km.
+    River,
+    /// How far the point is beyond the nearest river's channel, metres (0 in it): the channel
+    /// is as wide as the river in flood, its bed bare beside the water at the mean flow, where
+    /// floods scour too often for plants to hold (`Carve::channel`); far from rivers, as
+    /// `river`.
+    Channel,
     /// The rock exposed (`terrain::geology::Rock`), by number: 0 sediment, 1 shale,
     /// 2 sandstone, 3 limestone, 4 quartzite, 5 schist, 6 gneiss, 7 granite, 8 basalt. The
     /// bedrock is that at the point's own height, so beds show as bands across slopes.
@@ -191,6 +213,13 @@ impl Field {
             "treeline" => Field::Treeline,
             "temperature" => Field::Temperature,
             "precipitation" => Field::Precipitation,
+            "discharge" => Field::Discharge,
+            "water_depth" => Field::WaterDepth,
+            "flow_speed" => Field::FlowSpeed,
+            "froude" => Field::Froude,
+            "grain" => Field::Grain,
+            "river" => Field::River,
+            "channel" => Field::Channel,
             "rock" => Field::Rock,
             "hardness" => Field::Hardness,
             "playa" => Field::Playa,
@@ -200,7 +229,7 @@ impl Field {
             "canopy" => Field::Canopy,
             "lava_age" => Field::LavaAge,
             "aa" => Field::Aa,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, lava_age, aa, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, bedrock, hardness, playa, till, sand or canopy", s)),
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, lava_age, aa, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, discharge, water_depth, flow_speed, froude, grain, river, channel, rock, bedrock, hardness, playa, till, sand or canopy", s)),
         })
     }
 }

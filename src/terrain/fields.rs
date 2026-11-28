@@ -14,6 +14,7 @@
 use crate::graph::{Field, LAVA_NEVER};
 use crate::na::Vector3;
 use crate::terrain::domain::Domain;
+use crate::terrain::hydraulics::{HydraulicParams, Hydraulics};
 use crate::terrain::glacier::{slope_squared, GlacierParams};
 use crate::terrain::scenery::sample;
 use crate::terrain::geology::{Column, Rock, Structure};
@@ -33,6 +34,12 @@ pub struct SimFields {
     wetness: Vec<f64>,
     convexity: Vec<f64>,
     snowline: Vec<f64>,
+    /// The rivers' hydraulics (`terrain::hydraulics`): log10 discharge, depth, speed, Froude.
+    discharge: Vec<f64>,
+    water_depth: Vec<f64>,
+    flow_speed: Vec<f64>,
+    froude: Vec<f64>,
+    grain: Vec<f64>,
     /// The simulation's rain, mm/yr.
     precipitation: Vec<f64>,
     /// Closed basins: playas (1 on their floors) and the depth of their terminal lakes, m.
@@ -61,6 +68,11 @@ fn bounds(v: &[f64]) -> (f64, f64) {
 
 impl SimFields {
     pub fn new(t: &Terrain) -> SimFields {
+        SimFields::with_hydraulics(t, &Hydraulics::of(t, &HydraulicParams::default()))
+    }
+
+    /// As `new`, with the rivers' hydraulics already found.
+    pub fn with_hydraulics(t: &Terrain, water: &Hydraulics) -> SimFields {
         let d = &t.domain;
         let n = d.len();
         let slope2 = slope_squared(d, &t.bed);
@@ -83,6 +95,11 @@ impl SimFields {
                     t.bed[i] - mean
                 },
                 Field::Snowline => snowline(t, &glaciers, i),
+                Field::Discharge => water.reaches[i].discharge.max(1e-6).log10(),
+                Field::WaterDepth => water.reaches[i].depth,
+                Field::FlowSpeed => water.reaches[i].speed,
+                Field::Froude => water.reaches[i].froude,
+                Field::Grain => water.reaches[i].grain,
                 _ => 0.,
             }
         };
@@ -106,6 +123,11 @@ impl SimFields {
             wetness,
             convexity: corners(Field::Convexity),
             snowline: corners(Field::Snowline),
+            discharge: corners(Field::Discharge),
+            water_depth: corners(Field::WaterDepth),
+            flow_speed: corners(Field::FlowSpeed),
+            froude: corners(Field::Froude),
+            grain: corners(Field::Grain),
             structure,
             precipitation: average(&|c| t.precipitation[c]),
             playa: average(&|c| if basins.playa(t, c) { 1. } else { 0. }),
@@ -179,6 +201,11 @@ impl SimFields {
             Field::Elevation => h,
             Field::Snowline => h - s(&self.snowline),
             Field::Treeline => h - (s(&self.snowline) - TREELINE_BELOW_SNOWLINE),
+            Field::Discharge => s(&self.discharge),
+            Field::WaterDepth => s(&self.water_depth).max(0.),
+            Field::FlowSpeed => s(&self.flow_speed).max(0.),
+            Field::Froude => s(&self.froude).max(0.),
+            Field::Grain => s(&self.grain).max(0.),
             Field::Rock => self.rock(domain, d, h).index() as f64,
             Field::Bedrock => self.bedrock(domain, d, h).index() as f64,
             Field::Hardness => -self.rock(domain, d, h).scores().0,
@@ -188,7 +215,7 @@ impl SimFields {
             Field::Sand => s(&self.sand).max(0.),
             Field::LavaAge => s(&self.lava_age).clamp(0., LAVA_NEVER),
             Field::Aa => s(&self.aa).clamp(0., 1.),
-            Field::Temperature | Field::Canopy => return None,
+            Field::Temperature | Field::Canopy | Field::River | Field::Channel => return None,
         })
     }
 }
@@ -235,6 +262,12 @@ mod tests {
             assert!((f.at(&t.domain, Field::Snowline, d, 1000.).unwrap() - (1000. - line)).abs() < 1e-9);
         }
         assert_eq!(f.at(&t.domain, Field::Temperature, &t.domain.dirs[0], 0.), None);
+        // More water flows where more drains, and depths and speeds are never negative.
+        let discharge = |i: usize| f.at(&t.domain, Field::Discharge, &t.domain.dirs[i], 0.).unwrap();
+        assert!(discharge(wettest) > discharge(driest) + 1., "{} vs {}", discharge(wettest), discharge(driest));
+        for d in &t.domain.dirs {
+            for g in [Field::WaterDepth, Field::FlowSpeed, Field::Froude, Field::Grain] { assert!(f.at(&t.domain, g, d, 0.).unwrap() >= 0.); }
+        }
         assert!(f.at(&t.domain, Field::Precipitation, &t.domain.dirs[100], 0.).unwrap() > 0.);
         // At a cell's centre on bare rock, the rock is the simulation's own there.
         let bare: Vec<usize> = (0..t.domain.len()).filter(|&i| !t.domain.boundary[i] && t.sediment[i] == 0. && t.lava[i] == 0.).collect();

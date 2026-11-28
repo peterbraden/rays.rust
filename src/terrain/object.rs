@@ -92,6 +92,7 @@ use crate::shapes::geometry::Geometry;
 use crate::shapes::mesh::vertex_normals;
 use crate::shapes::triangle::{SmoothTriangle, Triangle};
 use crate::terrain::domain::{Domain, Layout};
+use crate::terrain::features;
 use crate::terrain::geology::Rock;
 use crate::terrain::glacier::{slope_squared, GlacierParams};
 use crate::terrain::map::{self, is_river, land_colour, write_map};
@@ -597,8 +598,15 @@ fn ground_material(o: &Value, materials: &serde_json::Map<String, Value>) -> Opt
 }
 
 pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> SceneObject {
+    create_landscape(o, materials).swap_remove(0)
+}
+
+/// The landscape, and at full scale the water in its rivers near the camera (a surface of its
+/// own, which transparent water needs to see the ground beneath it), in that order.
+pub fn create_landscape(o: &Value, materials: &serde_json::Map<String, Value>) -> Vec<SceneObject> {
     if let Some(params) = full_scale_params(o) {
-        return full_scale_landscape(o, params, ground_material(o, materials));
+        let (land, water) = full_scale_landscape(o, params, ground_material(o, materials));
+        return std::iter::once(land).chain(water).collect();
     }
     let params = terrain_params(o);
     let t = evolved(o, params);
@@ -613,8 +621,9 @@ pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> 
         exaggeration: number(o, "exaggeration", 1.),
         centre: SceneFile::parse_vec3_def(o, "centre", Vector3::zeros()),
     };
+    if o.get("features").is_some_and(|v| !matches!(v, Value::Bool(false))) { report_features(o, &scaled_survey(&t, &place, lens(o))); }
     let geometry = mesh(&t, &place);
-    SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.), ground_material(o, materials))) }
+    vec![SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.), ground_material(o, materials))) }]
 }
 
 pub use crate::world::Level;
@@ -721,13 +730,153 @@ pub fn above_ground(o: &Value, points: &[Vector3<f64>]) -> Option<Vec<Vector3<f6
     let frame = world.frame.clone();
     let World { planet, globe, patches, close: close_level, .. } = world;
     let finest = finest_spacing(o, &patches);
-    let layers = Layer::of_world(patches, globe, close_level, p.min_river_width);
+    let layers = Layer::of_world(patches, globe, close_level, p.min_river_width, &p.hydraulics);
     let relief = Relief::new(Arc::new(layers), &planet, radius, p.roughness, finest);
     Some(points.iter().map(|q| {
         let (d, _) = frame.on_planet(&Vector3::new(q.x, 0., q.z));
         let h = relief.height(&d, &relief.slope(&d), 1.);
         frame.to_scene(&d, h + q.y)
     }).collect())
+}
+
+/// How many of each kind of feature are given views, and how many views of each are written.
+const SURVEYED_PER_KIND: usize = 4;
+const REPORTED_VIEWS: usize = 3;
+
+/// A landscape's features, found in its simulations, with views of them (`terrain::features`).
+pub struct Survey {
+    pub found: Vec<features::Found>,
+    /// A direction on the planet and a height (m) to the scene.
+    pub to_scene: Box<dyn Fn(&Vector3<f64>, f64) -> Vector3<f64>>,
+    /// Whether its cameras are given with heights above the ground (a full-scale landscape's).
+    pub above_ground: bool,
+    /// For a full-scale landscape whose scene gives no `"focus"`: the scene point its patches
+    /// were centred on for the survey, to keep them there when its camera moves to a view.
+    pub focus: Option<Vector3<f64>>,
+}
+
+impl Survey {
+    pub fn json(&self) -> Value { features::to_json(&self.found, &*self.to_scene, self.above_ground, REPORTED_VIEWS) }
+}
+
+/// The lens views are framed for: the landscape's camera's (passed in as `camera`).
+fn lens(o: &Value) -> features::Lens {
+    let c = &o["camera"];
+    let default = features::Lens::default();
+    let aspect = match (c["image_width"].as_f64(), c["image_height"].as_f64()) {
+        (Some(w), Some(h)) if h > 0. => w / h,
+        _ => default.aspect,
+    };
+    features::Lens { angle: c["angle"].as_f64().unwrap_or(default.angle), aspect }
+}
+
+/// The features of a full-scale landscape's patches (finest first, without a close level),
+/// each searched where it is the finest.
+fn features_of(patches: &[Terrain]) -> Vec<features::Feature> {
+    let radius = patches.first().map_or(1., |t| t.domain.radius);
+    let lists = (0..patches.len()).map(|k| {
+        let finer: Vec<&Terrain> = patches[..k].iter().collect();
+        features::find(&patches[k], &features::Mask::of(&patches[k], &finer))
+    }).collect();
+    features::merge(lists, radius)
+}
+
+/// Views of `found` over a full-scale landscape's `relief`, marched in steps of half its
+/// `finest` spacing.
+fn view_features(found: &[features::Feature], relief: &Relief, radius: f64, finest: f64, lens: features::Lens) -> Vec<features::Found> {
+    let height = |d: &Vector3<f64>| relief.base(d);
+    let viewer = features::Viewer {
+        surface: features::Surface { height: &height, radius, step: (finest / 2.).max(5.) },
+        lens, judge: &features::Heuristic,
+    };
+    features::survey(&viewer, found, SURVEYED_PER_KIND)
+}
+
+/// The features of a scaled landscape, and views of them over its mesh.
+fn scaled_survey(t: &Terrain, place: &Placement, lens: features::Lens) -> Survey {
+    let found = features::find(t, &features::Mask::of(t, &[]));
+    let corners = scenery::corner_heights(t);
+    let height = |d: &Vector3<f64>| scenery::sample(&t.domain, &corners, d);
+    let viewer = features::Viewer {
+        surface: features::Surface { height: &height, radius: t.domain.radius, step: t.domain.min_spacing() / 2. },
+        lens, judge: &features::Heuristic,
+    };
+    let found = features::survey(&viewer, &found, SURVEYED_PER_KIND);
+    let (layout, radius, place) = (t.domain.layout.clone(), t.domain.radius, place.clone());
+    let to_scene = move |d: &Vector3<f64>, h: f64| match &layout {
+        Layout::Patch { up, east, north, .. } => {
+            let (x, z) = Domain::tangent(*up, *east, *north, radius, d);
+            Vector3::new(x, h * place.exaggeration, -z) / place.scale + place.centre
+        }
+        Layout::Sphere { .. } => place.centre + d * (radius + h * place.exaggeration) / place.scale,
+    };
+    Survey { found, to_scene: Box::new(to_scene), above_ground: false, focus: None }
+}
+
+/// The landscape `o`'s features and views of them, built (from its `cache`, if it has one and
+/// was built before; otherwise simulated again) about its camera (passed in as `camera`), whose
+/// `angle` and image size frame the views.
+pub fn survey(o: &Value) -> Survey {
+    let mut params = terrain_params(o);
+    if o.get("scale").is_some() {
+        let place = Placement {
+            scale: number(o, "scale", 1000.),
+            exaggeration: number(o, "exaggeration", 1.),
+            centre: SceneFile::parse_vec3_def(o, "centre", Vector3::zeros()),
+        };
+        return scaled_survey(&evolved(o, params), &place, lens(o));
+    }
+    if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
+    let p = scenery_params(o);
+    let radius = params.planet.radius;
+    let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
+    let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
+    let levels = levels(o, globe_spacing);
+    // No close level: it would follow the camera, which is about to move.
+    let description = Description {
+        params, site: site_of(&o["domain"]), time: number(o, "time", 0.), planet_cells, levels,
+        focus: focus(o), exaggeration: p.exaggeration, close: None,
+    };
+    let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
+    let frame = world.frame.clone();
+    let finest_half = description.levels.first().map_or(0., |l| l.cells as f64 * l.spacing / 2.);
+    let focus = o.get("focus").is_none().then(|| frame.to_scene(&description.focus.centre(&frame, 0.5 * finest_half), 0.));
+    let finest = finest_spacing(o, &world.patches);
+    let found = features_of(&world.patches);
+    let World { planet, globe, patches, .. } = world;
+    let layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width, &p.hydraulics)).collect();
+    let relief = Relief::new(Arc::new(layers), &planet, radius, p.roughness, finest);
+    let found = view_features(&found, &relief, radius, finest, lens(o));
+    Survey { found, to_scene: Box::new(move |d, h| frame.to_scene(d, h)), above_ground: true, focus }
+}
+
+/// The landscape's `"features"`: `true` prints the best of each kind and how to see it, a file
+/// name (`.json`) writes them all, with their views as cameras, there too.
+fn report_features(o: &Value, survey: &Survey) {
+    let mut best: Vec<&features::Found> = vec![];
+    for f in &survey.found {
+        if !best.iter().any(|b| b.feature.kind == f.feature.kind) { best.push(f); }
+    }
+    say(format!("Landscape: {} features with views; the most salient of each kind:", survey.found.len()));
+    for f in best { say(format!("  {}", features::describe(f, &*survey.to_scene))); }
+    if let Some(path) = o["features"].as_str() {
+        let text = serde_json::to_string_pretty(&survey.json()).unwrap();
+        match std::fs::write(path, text) {
+            Ok(()) => say(format!("Landscape: features and views written to {}", path)),
+            Err(e) => say(format!("Landscape: couldn't write the features to {}: {}", path, e)),
+        }
+    }
+}
+
+/// A camera's `"feature"` (`features::Choice`) on the landscape `o` (with the scene's camera as
+/// `camera`): the camera's `location`, `lookat` (and `above_ground`) for the view chosen, the
+/// `focus` the landscape should keep its patches at (when it has none), and a description of
+/// what it sees. None if the landscape has no such feature, or no view of it.
+pub fn feature_camera(o: &Value, choice: &features::Choice) -> Option<(Value, Option<Vector3<f64>>, String)> {
+    let survey = survey(o);
+    let (found, shot) = choice.pick(&survey.found)?;
+    let camera = features::camera(shot, &*survey.to_scene, survey.above_ground);
+    Some((camera, survey.focus, features::describe(&features::Found { feature: found.feature.clone(), shots: vec![shot.clone()] }, &*survey.to_scene)))
 }
 
 /// The scenery's parameters from a landscape object.
@@ -742,6 +891,11 @@ fn scenery_params(o: &Value) -> SceneryParams {
     p.treeline = o["treeline"].as_f64();
     p.min_river_width = number(o, "min_river_width", p.min_river_width);
     p.ground_materials = o["ground_materials"].as_bool().unwrap_or(p.ground_materials);
+    p.hydraulics.flow = number(o, "river_flow", p.hydraulics.flow).max(0.);
+    p.sea = o.get("ocean").and_then(crate::ocean::shore_waves);
+    if let Some(w) = o["wind"].as_array() {
+        p.wind = [w.first().and_then(|v| v.as_f64()).unwrap_or(0.), w.get(1).and_then(|v| v.as_f64()).unwrap_or(0.)];
+    }
     p
 }
 
@@ -769,13 +923,15 @@ fn scenery_params(o: &Value) -> SceneryParams {
 /// - The mesh: `resolution` (vertices along a clipmap ring), `min_spacing` (m), `globe` (cells
 ///   per face edge beyond the rings), `roughness` of the detail below the finest cells.
 /// - Ground cover: `snowline` and `treeline` (m; by default from the climate, by latitude),
-///   `min_river_width` (m); or `"material"`, a material for the ground but rivers and lakes,
+///   `min_river_width` (m), `river_flow` (the rivers' discharge as a multiple of their mean
+///   annual flow: `terrain::hydraulics`; near the camera rivers get channels and transparent
+///   surfaces of their own, `terrain::rivers`); or `"material"`, a material for the ground but rivers and lakes,
 ///   whose graphs' `field` nodes read the simulations (blended between patches) and the climate.
 /// - `displacement`: a graph displacing the ground about the camera at render time, as on a
 ///   `terrain` (see `displaced_patch`), with `displacement_detail`, `vertical_displacement`
 ///   and so on as there; `displacement_reach` (m, default 1000) out from under the camera on
 ///   each side, on a heightfield of `displacement_spacing` (m, default 2).
-fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
+fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> (SceneObject, Vec<SceneObject>) {
     let p = scenery_params(o);
     // The world: the planet, the site, and the simulations nested about the focus, each
     // driving the next at its edge (`world`), kept in the `cache` directory if there is one.
@@ -802,17 +958,25 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
                 cells as f64 * spacing * spacing / 1e6, t.ice[i], at.x, at.y, at.z));
         }
     }
+    // Its features, found before the simulations are drawn (`terrain::features`).
+    let features = o.get("features").filter(|v| !matches!(v, Value::Bool(false)))
+        .map(|_| features_of(&world.patches[world.patches.len() - description.levels.len()..]));
     let World { planet, climate, globe, patches, close: close_level, .. } = world;
-    let built = Layer::of_world(patches, globe, close_level, p.min_river_width);
+    let built = Layer::of_world(patches, globe, close_level, p.min_river_width, &p.hydraulics);
 
     let start = web_time::Instant::now();
     if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
     let layers = Arc::new(built);
-    let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
+    let relief = Arc::new(Relief::new(layers.clone(), &planet, radius, p.roughness, finest));
+    if let Some(features) = features {
+        let found = view_features(&features, &relief, radius, finest, lens(o));
+        let frame = frame.clone();
+        report_features(o, &Survey { found, to_scene: Box::new(move |d, h| frame.to_scene(d, h)), above_ground: true, focus: None });
+    }
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
     let (foot, height) = frame.on_planet(&view.location);
     let ground = relief.height(&foot, &relief.slope(&foot), 1.);
-    say(format!("Landscape: the camera is {:.1} m above the ground under it ({:.1} m above sea level)", height - ground, ground));
+    say(format!("Landscape: the camera is {:.1} m above the ground under it (the ground {:.1} m above sea level)", height - ground, ground));
     let (o, displacement) = &procedural_displacement(o, height - ground, params.planet.seed);
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
     // Built first, so the displacement's graphs can read its fields.
@@ -823,6 +987,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     }
     let patches = displacement.as_ref().map(|d| displaced_patches(o, d, &relief, &frame, &view, &p, ground.clone()));
     let mesh = scenery::mesh(&relief, &frame, &view, &p, patches.as_ref().map(|(h, _)| h));
+    let ground_for_water = ground.clone();
     let geometry: Box<dyn Geometry + Send + Sync> = match patches {
         Some((_, terrains)) => {
             let mut parts: Vec<Box<dyn Geometry + Send + Sync>> = vec![Box::new(mesh)];
@@ -832,6 +997,9 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         None => Box::new(mesh),
     };
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
+    let _ = ground_for_water.clipmap.set(Clipmap::new(&relief, &frame, &view, &p));
+    let water = river_water(&relief, &frame, &view, &p, params.planet.seed);
+    let falls = waterfalls(&relief, &frame, params.planet.seed);
     let mut medium = LandscapeMedium::with_ground(ground, material);
     if o["eruption"].as_bool().unwrap_or(false) {
         let e = eruption(&planet, &relief, &frame, &params.climate.clone().unwrap_or_default());
@@ -839,7 +1007,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         say(format!("Landscape: erupting, {} lava lakes (at {}) and {} channels", e.lakes.len(), at.join(", "), e.channels.len()));
         medium = medium.with_eruption(Arc::new(e), params.planet.seed, o["sun_intensity"].as_f64().unwrap_or(1.));
     }
-    SceneObject { geometry, medium: Box::new(medium) }
+    (SceneObject { geometry, medium: Box::new(medium) }, water.into_iter().chain(falls).collect())
 }
 
 /// The eruption in progress about the scene (`terrain::eruption`): each young shield still
@@ -879,6 +1047,206 @@ fn eruption(planet: &crate::terrain::planet::Planet, relief: &Relief, frame: &cr
     let (east, north) = crate::terrain::climate::wind(climate, lat);
     let strength = east.hypot(north);
     eruption::Eruption::new(lakes, channels).with_wind(crate::na::Vector2::new(east, -north), 1. + 6. * strength)
+}
+
+/// The rivers' water near the camera, where the mesh is fine enough to carve their channels
+/// (`terrain::rivers`): transparent, so their beds show through.
+/// The waterfalls' jets (`terrain::rivers::Fall`), each a curtain of falling water.
+fn waterfalls(relief: &Relief, frame: &Frame, seed: u64) -> Vec<SceneObject> {
+    use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
+    use crate::terrain::rivers::patch_dir;
+    let mut out = vec![];
+    for l in relief.layers.iter() {
+        let Some(carve) = l.rivers.as_ref().and_then(|r| r.carve.get()) else { continue };
+        for f in &carve.falls {
+            let d = patch_dir(&l.domain, f.node.p);
+            if !relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) { continue; }
+            let (vertices, triangles) = f.sheet(48, 8);
+            let positions: Vec<Vector3<f64>> = vertices.iter().map(|(q, h, _)| frame.to_scene(&patch_dir(&l.domain, *q), *h)).collect();
+            // Normals across the sheet: facing out along the jet, as a flat sheet's would.
+            let out_dir = frame.to_scene(&patch_dir(&l.domain, f.point(1., 0.)), f.top) - frame.to_scene(&d, f.top);
+            let normals = vec![out_dir.normalize(); positions.len()];
+            let mesh = SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles, texcoords: vec![] }]);
+            let material = crate::terrain::river_water::FallingWater {
+                frame: frame.clone(), top: f.top, breakup: f.jet.breakup, noise: crate::noise::PerlinNoise::shuffled(seed.wrapping_add(0xfa11)),
+            };
+            let geometry = crate::terrain::river_water::Curtain { mesh, frame: frame.clone(), top: f.top, breakup: f.jet.breakup };
+            out.push(SceneObject { geometry: Box::new(geometry), medium: Box::new(crate::material::texture::Solid { m: Box::new(material) }) });
+        }
+    }
+    out
+}
+
+fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &SceneryParams, seed: u64) -> Option<SceneObject> {
+    use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
+    use crate::terrain::rivers::patch_dir;
+    let clipmap = Clipmap::new(relief, frame, view, p);
+    let (mut positions, mut normals, mut triangles) = (vec![], vec![], vec![]);
+    for l in relief.layers.iter() {
+        let Some(carve) = l.rivers.as_ref().and_then(|r| r.carve.get()) else { continue };
+        let keep = |q: crate::terrain::channel::Point, half: f64| {
+            let d = patch_dir(&l.domain, q);
+            let finest = relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l));
+            let (x, z) = frame.tangent(&d);
+            finest && clipmap.local(x, z).is_some_and(|s| s < half)
+        };
+        let (mut vertices, mut tris) = carve.ribbon(keep);
+        // Lakes: flat water at their levels over their cells of the drawn ground's basins
+        // (`terrain::basins`), where this layer is drawn.
+        if let Some(basins) = l.rivers.as_ref().and_then(|r| r.basins.get()) {
+            let finest = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) };
+            for (lo, hi, level) in basins.water(finest) {
+                let k = vertices.len();
+                for (x, z) in [(lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1])] { vertices.push(([x, z], level)); }
+                tris.push([k, k + 1, k + 2]);
+                tris.push([k, k + 2, k + 3]);
+            }
+        }
+        let base = positions.len();
+        for (q, level) in vertices {
+            let d = patch_dir(&l.domain, q);
+            positions.push(frame.to_scene(&d, level));
+            normals.push((frame.to_scene(&d, 0.) - frame.centre()).normalize());
+        }
+        triangles.extend(tris.into_iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
+    }
+    // How many rivers each patch draws, and how much of it is ice.
+    for l in relief.layers.iter() {
+        let Some(r) = &l.rivers else { continue };
+        if r.courses.is_empty() && l.spacing > 1e4 { continue; }
+        let length: f64 = r.courses.iter().map(|c| c.nodes.windows(2).map(|w| crate::terrain::rivers::dist(w[0].p, w[1].p)).sum::<f64>()).sum();
+        say(format!("Landscape: the {:.0} m patch has {} river courses, {:.0} km of them", l.spacing, r.courses.len(), length / 1000.));
+    }
+    // Where the nearest river is, to frame it.
+    let near = relief.layers.iter().filter_map(|l| {
+        let carve = l.rivers.as_ref()?.carve.get()?;
+        let (foot, _) = frame.on_planet(&view.location);
+        let q = crate::terrain::rivers::patch_point(&l.domain, &foot)?;
+        let (p, level, node) = carve.nearest(q)?;
+        // Only rivers drawn: where this layer is the finest.
+        let d = patch_dir(&l.domain, p);
+        if !relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) { return None; }
+        let at = frame.to_scene(&patch_dir(&l.domain, p), level);
+        // A place to see it from: on a bank a few metres from the water, eyes 1.7 m above the
+        // ground, looking along it 150 m, where the relief doesn't hide the water.
+        let (_, along, _) = carve.water_at(p)?;
+        let across = [-along[1], along[0]];
+        let ground = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.height(&d, &relief.slope(&d), 1.) };
+        let shift = |o: crate::terrain::channel::Point, a: f64, c: f64| [o[0] + along[0] * a + across[0] * c, o[1] + along[1] * a + across[1] * c];
+        let views = [(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)].into_iter().flat_map(|(dir, side)| [4., 10., 25.].map(|off| (dir, side * (node.half + off))));
+        let seen = views.filter_map(|(dir, side)| {
+            let eye_q = shift(p, 0., side);
+            let eye = ground(eye_q) + 1.7;
+            let target = shift(p, 150. * dir, 0.);
+            let clear = (1..30).all(|k| {
+                let t = k as f64 / 30.;
+                let q = [eye_q[0] + (target[0] - eye_q[0]) * t, eye_q[1] + (target[1] - eye_q[1]) * t];
+                ground(q) + 0.3 < eye + (level - eye) * t
+            });
+            clear.then(|| (frame.to_scene(&patch_dir(&l.domain, eye_q), eye), frame.to_scene(&patch_dir(&l.domain, target), level)))
+        }).next();
+        Some(((at - view.location).norm(), at, node, seen))
+    }).min_by(|a, b| a.0.total_cmp(&b.0));
+    // The nearest lake, and a place on its shore to look across it from: walking out from
+    // one of its stretches of water until the ground rises above it, eyes 1.7 m above the
+    // ground there, looking back across.
+    let lake = relief.layers.iter().filter_map(|l| {
+        let r = l.rivers.as_ref()?;
+        let (foot, _) = frame.on_planet(&view.location);
+        let q = crate::terrain::rivers::patch_point(&l.domain, &foot)?;
+        let ground = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.height(&d, &relief.slope(&d), 1.) };
+        let finest = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) };
+        let mut cells: Vec<(crate::terrain::channel::Point, f64, f64, f64)> = r.basins.get()?.water(finest).into_iter()
+            .map(|(lo, hi, level)| {
+                let c = [(lo[0] + hi[0]) / 2., (lo[1] + hi[1]) / 2.];
+                (c, 0.5 * (hi[1] - lo[1]), level, (c[0] - q[0]).hypot(c[1] - q[1]))
+            }).collect();
+        // Nearest first, so the search for a shore stops at the first that has one (each walks
+        // the ground hundreds of times).
+        cells.sort_by(|a, b| a.3.total_cmp(&b.3));
+        cells.into_iter().find_map(|(c, half, level, dist)| {
+            // The shore: towards the camera first, then round.
+            let toward = (q[1] - c[1]).atan2(q[0] - c[0]);
+            (0..8).map(|k| toward + k as f64 * std::f64::consts::FRAC_PI_4).find_map(|a| {
+                let (dx, dz) = (a.cos(), a.sin());
+                (1..200).map(|i| i as f64 * 0.05 * half).find(|&r| ground([c[0] + dx * r, c[1] + dz * r]) > level + 0.5)
+                    .map(|r| {
+                        let shore = [c[0] + dx * (r + 2.), c[1] + dz * (r + 2.)];
+                        let eye = frame.to_scene(&patch_dir(&l.domain, shore), ground(shore) + 1.7);
+                        let across = [c[0] - dx * 4. * half, c[1] - dz * 4. * half];
+                        (dist, eye, frame.to_scene(&patch_dir(&l.domain, across), level))
+                    })
+            })
+        })
+    }).min_by(|a, b| a.0.total_cmp(&b.0));
+    if let Some((distance, eye, at)) = lake {
+        say(format!("Landscape: the nearest lake is {:.0} m away; see it from [{:.0}, {:.1}, {:.0}] looking at [{:.0}, {:.1}, {:.0}]", distance, eye.x, eye.y, eye.z, at.x, at.y, at.z));
+    }
+    // The waterfalls, the tallest and the nearest, to frame them; and a place to see the
+    // tallest from: downstream and to one side, a little above the ground.
+    // Each fall's height, discharge, lip, middle and viewpoint.
+    type Seen = (f64, f64, Vector3<f64>, Vector3<f64>, Vector3<f64>);
+    let falls: Vec<Seen> = relief.layers.iter().filter_map(|l| Some((l, l.rivers.as_ref()?.carve.get()?)))
+        .flat_map(|(l, carve)| carve.falls.iter().filter(move |f| {
+            // Only where this layer is the finest: elsewhere a finer one's rivers are drawn.
+            let d = patch_dir(&l.domain, f.node.p);
+            relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l))
+        }).map(move |f| {
+            let h = f.top - f.foot;
+            let at = frame.to_scene(&patch_dir(&l.domain, f.node.p), f.top);
+            let middle = frame.to_scene(&patch_dir(&l.domain, f.point(f.jet.speed * f.jet.time_to(h / 2.), 0.)), f.top - h / 2.);
+            let (mx, mh) = (f.jet.speed * f.jet.time_to(h / 2.), f.top - h / 2.);
+            // A viewpoint that sees the fall's middle over the relief: downstream first, then
+            // round to either side, near then farther.
+            let ground = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.height(&d, &relief.slope(&d), 1.) };
+            let candidates = [3. * h + 60., 6. * h + 150.].into_iter().flat_map(|r| [0., 30., -30., 60., -60., 90., -90., 120., -120.].map(|deg: f64| (r, deg.to_radians())));
+            let from = candidates.filter_map(|(r, a)| {
+                let q = f.point(mx + r * a.cos(), r * a.sin());
+                let eye = ground(q) + 2.;
+                let clear = (1..40).all(|k| {
+                    let t = k as f64 / 40.;
+                    let p = f.point(mx + r * a.cos() * (1. - t), r * a.sin() * (1. - t));
+                    t > 0.9 || ground(p) + 1. < eye + (mh - eye) * t
+                });
+                clear.then(|| frame.to_scene(&patch_dir(&l.domain, q), eye))
+            }).next().unwrap_or(middle);
+            (h, f.node.discharge, at, middle, from)
+        })).collect();
+    if let Some(tallest) = falls.iter().max_by(|a, b| a.0.total_cmp(&b.0)) {
+        let nearest = falls.iter().min_by(|a, b| (a.2 - view.location).norm().total_cmp(&(b.2 - view.location).norm())).unwrap();
+        let v = |p: &Vector3<f64>| format!("[{:.0}, {:.1}, {:.0}]", p.x, p.y, p.z);
+        say(format!("Landscape: {} waterfalls; the tallest falls {:.0} m ({:.1} m³/s) from {} (seen from {} looking at {}); the nearest, {:.0} m, is {:.0} m away at {} (seen from {} looking at {})",
+            falls.len(), tallest.0, tallest.1, v(&tallest.2), v(&tallest.4), v(&tallest.3), nearest.0, (nearest.2 - view.location).norm(), v(&nearest.2), v(&nearest.4), v(&nearest.3)));
+    }
+    if let Some((distance, at, n, seen)) = near {
+        say(format!("Landscape: the nearest river, {:.0} m wide and {:.2} m deep (Froude {:.2}, {:.0} mg/L of silt, grains {:.1} mm), is {:.0} m away at [{:.0}, {:.1}, {:.0}]",
+            2. * n.half, 1.5 * n.depth, n.froude, n.turbidity, 1000. * n.grain, distance, at.x, at.y, at.z));
+        if let Some((from, to)) = seen {
+            say(format!("Landscape: see the river from [{:.0}, {:.1}, {:.0}] looking at [{:.0}, {:.1}, {:.0}]", from.x, from.y, from.z, to.x, to.y, to.z));
+        }
+    }
+    if triangles.is_empty() { return None; }
+    say(format!("Landscape: rivers' water in {} triangles", triangles.len()));
+    let mesh = SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles, texcoords: vec![] }]);
+    // Clear water, a little more absorbing than the sea's (its colour from suspended sediment
+    // is for step 3).
+    // Shaded by the flow under each point (`terrain::river_water`).
+    let waves = crate::terrain::river_water::LakeWaves::new(relief, frame, p.wind, seed);
+    let water = Arc::new(crate::terrain::river_water::RiverWater {
+        relief: relief.clone(), frame: frame.clone(), noise: crate::noise::PerlinNoise::shuffled(seed.wrapping_add(0x5a7e5)),
+        waves, currents: crate::terrain::river_water::RiverWaves::new(seed.wrapping_add(0x71de)),
+    });
+    let lookup = water.clone();
+    let surface = crate::terrain::rivers::WaterSurface { mesh, centre: frame.centre(), attenuation: Box::new(move |p| lookup.attenuation(p)) };
+    Some(SceneObject { geometry: Box::new(surface), medium: Box::new(crate::material::texture::Solid { m: Box::new(ArcMaterial(water)) }) })
+}
+
+/// A shared material.
+struct ArcMaterial<M>(Arc<M>);
+
+impl<M: MaterialModel + Sync + Send> MaterialModel for ArcMaterial<M> {
+    fn scatter(&self, r: &Ray, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> crate::material::model::ScatteredRay { self.0.scatter(r, i, s) }
+    fn sun_glint(&self, r: &Ray, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Option<Color> { self.0.sun_glint(r, i, s) }
 }
 
 /// Cameras higher than this above the ground, metres, see no detail worth displacing: from

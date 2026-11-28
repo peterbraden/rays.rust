@@ -25,6 +25,7 @@ defaults.
 | `curves` | `curves`* (each `points`* (four Bézier control points), `width` (one or `[root, tip]`), `normals` for ribbons), `kind: cylinder` (`flat`, `cylinder`, `ribbon`), `split: 3` | Hair-thin strands (pbrt's curves). |
 | `fur` | `center`, `radius: 1`, `count: 20000`, `length: 0.2`, `width: [0.01, 0.002]`, `droop: 0.3`, `curl: 0.15`, `kind: cylinder`, `seed: 0` | Strands of curves growing from a sphere. |
 | `subdivision` | `src` (a mesh file) or `points` and `triangles` (index triples), `levels: 3` | A Loop subdivision surface: the smooth surface a coarse triangle mesh describes. |
+| `breaker` | `center: [0, 0, 0]`, `height: 2`, `depth: 2`, `width: 40`, `stage: 0.9`, `peel: 0.8`, `resolution: [240, 120]`, `seed: 0` | A plunging wave at a shore, travelling towards -z, its lip thrown over a tube of air (`procedural::breaker`); a closed body of water. As an object it is water (a dielectric that lets shadow rays through); give a `volume` the same `shape` for the water inside. See `demo/scenes/shorebreak.json`. |
 
 ## Polynomial surfaces
 

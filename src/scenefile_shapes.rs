@@ -153,6 +153,9 @@ impl SceneFile {
                 assert!(triangles.iter().flatten().all(|&i| i < n), "subdivision triangle indices must be under the {} points", n);
                 Box::new(crate::shapes::subdivision::subdivide(positions, triangles, SceneFile::parse_int(&o["levels"], 3) as u32))
             },
+            // {"type": "breaker", "center": [x, y, z], "height": 2, ...}: a plunging wave
+            // (`procedural::breaker`).
+            "breaker" => Box::new(crate::procedural::breaker::Breaker::parse(o).geometry()),
             // {"type": "torus", "major": R, "minor": r}: about the y axis, centred on the origin.
             "torus" => Box::new(Torus::new(num(o, "major"), num(o, "minor"))),
             // {"type": "quadric", "squares": [A, B, C], "mixed": [D, E, F], "linear": [G, H, I],

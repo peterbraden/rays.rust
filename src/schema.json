@@ -187,6 +187,12 @@
           "doc": "With a full-scale landscape: location's and lookat's y are heights above the ground under each (best with the landscape's focus given)."
         },
         {
+          "name": "feature",
+          "kind": "json",
+          "default": null,
+          "doc": "With a landscape: look at one of its features from the best view a survey of it found (terrain::features), replacing location and lookat. true for the best view of any; a kind (peak, volcano, pass, cliff, glacier, lake, confluence, gorge, headland); or {\"kind\", \"rank\" (0 the most salient of the kind; of \"any\", by its best view), \"view\" (0 the best)}. A full-scale landscape keeps its patches where they were surveyed."
+        },
+        {
           "name": "aperture",
           "kind": "number",
           "default": 0.2,
@@ -885,6 +891,24 @@
         }
       ],
       "example": {"type": "disc", "center": [0, 1, 0], "normal": [0, 0.5, 1], "radius": 1.5, "material": "M"}
+    },
+    "breaker": {
+      "label": "Breaking wave",
+      "group": "Shapes",
+      "doc": "A plunging breaker close up: a wave at a shore throwing its lip forward over a tube of air (procedural::breaker), travelling towards -z with its crest along x, a closed body of water. As an object, its surface is water's dielectric and lets shadow rays through; give a volume the same shape for the water inside.",
+      "fields": [
+        {"name": "center", "kind": "vec3", "default": [0, 0, 0], "doc": "The still water's level under the middle of the crest."},
+        {"name": "height", "kind": "number", "default": 2, "doc": "Trough to crest, m.", "min": 0.05},
+        {"name": "depth", "kind": "number", "default": 2, "doc": "Still water to the bed under the crest, m.", "min": 0.05},
+        {"name": "width", "kind": "number", "default": 40, "doc": "The crest's length along x, m.", "min": 0.1},
+        {"name": "stage", "kind": "number", "default": 0.9, "doc": "How far the lip has thrown at the crest's middle, 0 (a steep face) to 1 (about to land).", "min": 0, "max": 1},
+        {"name": "peel", "kind": "number", "default": 0.8, "doc": "How much the stage changes from one end of the crest to the other (the wave peeling)."},
+        {"name": "lace", "kind": "number", "default": 1, "doc": "How much foam earlier waves left on the water before it, 0 (glassy, the first of a set) to 1.", "min": 0, "max": 1},
+        {"name": "variation", "kind": "number", "default": 1, "doc": "How much the wave varies along its crest: its height, its lip's thickness and throw, and the crest's line bending in plan (0 for none).", "min": 0},
+        {"name": "resolution", "kind": "vec2", "default": [360, 600], "doc": "Points around a cross-section, and sections along the crest (fine enough for the cross waves' relief: 10 cm apart on a 60 m wave)."},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Varies the height along the crest."}
+      ],
+      "example": {"type": "breaker", "height": 2, "depth": 2, "width": 40, "stage": 0.9}
     },
     "torus": {
       "label": "Torus",
@@ -2265,6 +2289,19 @@
           "doc": "Draw rivers at least this wide, m."
         },
         {
+          "name": "river_flow",
+          "kind": "number",
+          "default": 1,
+          "doc": "Full scale: the rivers' discharge, as a multiple of their mean annual flow (10 fills their channels).",
+          "min": 0
+        },
+        {
+          "name": "wind",
+          "kind": "vec2",
+          "default": [4, 0],
+          "doc": "Full scale: the wind over the lakes (scene x and z, m/s), raising waves by their fetch along it (JONSWAP, as the ocean's)."
+        },
+        {
           "name": "map",
           "kind": "path",
           "default": null,
@@ -2785,6 +2822,12 @@
           ]
         },
         {
+          "name": "features",
+          "kind": "json",
+          "default": null,
+          "doc": "List its features (peaks, passes, cliffs, glaciers, lakes, confluences, gorges, headlands; terrain::features): true prints the most salient of each kind and where it is seen best from; a file name (.json) also writes them all there, each with its best views as cameras."
+        },
+        {
           "name": "eruption",
           "kind": "boolean",
           "default": false,
@@ -2987,6 +3030,12 @@
       "doc": "A sea of Tessendorf waves on the planet's surface, physically lit (sun glitter, Fresnel sky reflection), displaced near detail_center and shaded by its slopes beyond. A material or medium given replaces the ocean's own.",
       "fields": [
         {"name": "wind", "kind": "vec2", "default": [7, 2], "doc": "Wind velocity [x, z], m/s."},
+        {
+          "name": "swell",
+          "kind": "object",
+          "default": null,
+          "doc": "Swell from a distant storm: long-crested waves on the sea's surface, and breaking with the wind's sea on the shore of a landscape before it: {\"height\" (significant, m, default 1), \"period\" (s, default 10), \"direction\" ([x, z] it travels, default [-1, 0])}. A sea with swell is rendered on the CPU."
+        },
         {"name": "time", "kind": "number", "default": 0, "doc": "Time of the wave animation, s."},
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Random realisation of the waves."},
         {
@@ -3033,6 +3082,13 @@
           "default": 300,
           "doc": "Distance from detail_center over which waves are displaced, m.",
           "min": 1
+        },
+        {
+          "name": "surf_grid",
+          "kind": "number",
+          "default": 1,
+          "doc": "Over a landscape, the spacing (m) of the grid on which the surf is found about detail_center, where breaking waves are drawn in relief.",
+          "min": 0.05
         },
         {"name": "debug", "kind": "boolean", "default": false, "doc": "Shade by surface normal."}
       ],
@@ -5913,6 +5969,24 @@
           "kind": "shape",
           "default": null,
           "doc": "The medium fills only the inside of this shape (eg. the same as a glass object's)."
+        },
+        {
+          "name": "whitewater",
+          "kind": "json",
+          "default": null,
+          "doc": "Density from the white water a breaker's lip throws up where it lands: a breaker's fields (procedural::breaker::Whitewater); give min and max."
+        },
+        {
+          "name": "aeration",
+          "kind": "json",
+          "default": null,
+          "doc": "Density from the air a breaker's thrown lip carries, most towards its tip: a breaker's fields (procedural::breaker::Aeration); give it the breaker's shape."
+        },
+        {
+          "name": "spray",
+          "kind": "json",
+          "default": null,
+          "doc": "Density from the spray a breaker throws off its crest, following the crest: a breaker's fields (procedural::breaker::Spray); give min and max."
         },
         {
           "name": "albedo",

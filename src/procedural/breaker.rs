@@ -660,7 +660,19 @@ impl crate::volume::DensityField for Whitewater {
         let splash = if dy > 0. { fresh * ahead * (1. - rise).powi(2) } else { 0. };
         let thinning = 0.25 + 0.75 * (-0.5 * age).exp();
         let lumps = 0.5 + 0.5 * self.noise.noise(p.x / 0.25, p.y / 0.25, p.z / 0.25) + 0.3 * self.noise.noise(p.x / 0.08 + 9.1, p.y / 0.08, p.z / 0.08);
-        (landed * (mass * thinning).max(splash) * (1.6 * lumps - 0.3)).clamp(0., 1.)
+        // The plume: spray the landing lip throws up, to twice the wave's height, most just
+        // after it lands; widening as it rises and blown back seaward (+z) over the wave by the
+        // wind off the land; densest at its foot, feathered to wisps at its top; in billows.
+        let tall = ((p.y - ty) / (2. * h)).clamp(0., 1.);
+        let plume = if p.y > ty - 0.1 * h {
+            let when = (-((age - 0.5) / 0.9).powi(2)).exp();
+            let lean = 0.15 * h + 0.9 * h * tall.powf(1.5);
+            let width = 0.3 * h + 0.6 * h * tall;
+            let n = |s: f64, o: f64| self.noise.noise(p.x / s + o, p.y / s, p.z / s);
+            let billows = 0.5 + 0.45 * n(0.45, 31.3) + 0.3 * n(0.15, 2.9) + 0.15 * n(0.05, 6.1);
+            when * (-((dz - lean) / width).powi(2)).exp() * (1. - tall).powf(1.3) * (2.2 * billows - 0.7)
+        } else { 0. };
+        (landed * ((mass * thinning).max(splash) * (1.6 * lumps - 0.3)).max(plume)).clamp(0., 1.)
     }
 
     fn majorant(&self) -> f64 { 1. }

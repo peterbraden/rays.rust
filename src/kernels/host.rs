@@ -118,7 +118,22 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
         }
     }
     next.l += f32s(&v.l.rgb).extend(0.);
+    let deferring = kept.iter().any(|&(_, light)| light != 0);
+    if deferring {
+        let f = pathtrace::bits_as_float;
+        next.hit = Vec4::new(f(kept[0].0), f(kept[0].1), f(kept[1].0), f(kept[1].1));
+        let reach = |k: usize| v.deferred.get(k).map_or(pathtrace::DISTANCE_UNBOUNDED, |d| pathtrace::pack_distance(d.distance as f32));
+        next.state.z = reach(0) | (reach(1) << 16);
+    }
     if v.done {
+        if deferring {
+            // A round for its shadow rays alone, from off the surface on the side its ray came
+            // from, as the host's own start (`integrator::host_bounce`).
+            let side = if ray.rd.dot(&hit.geometric) < 0. { hit.geometric } else { -hit.geometric };
+            let from = hit.point - origin;
+            next.o = f32s(&(from + side * (4e-6 * (1. + from.amax())))).extend(p.o.w);
+            next.state.y = (p.state.y & (pathtrace::PATH_MEDIA | pathtrace::PATH_PROVEN)) | PATH_ACTIVE | pathtrace::PATH_DEFERRED | pathtrace::PATH_SHADOWS_ONLY;
+        }
         return next;
     }
     // The next ray leaves from where the scene's own code put it, off the surface by what
@@ -136,17 +151,11 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
     if host_shapes(flat) {
         next.hit = f32s(&(hit.point - origin)).extend(HOST_VERTEX);
     }
-    if kept.iter().any(|&(_, light)| light != 0) {
-        let f = pathtrace::bits_as_float;
-        next.hit = Vec4::new(f(kept[0].0), f(kept[0].1), f(kept[1].0), f(kept[1].1));
-        let reach = |k: usize| v.deferred.get(k).map_or(pathtrace::DISTANCE_UNBOUNDED, |d| pathtrace::pack_distance(d.distance as f32));
-        next.state.z = reach(0) | (reach(1) << 16);
-    }
     next.d = f32s(&v.ray.rd).extend(v.prev_pdf as f32);
     next.beta = f32s(&v.beta.rgb).extend(v.depth as f32);
     let flag = |on: bool, bit: u32| if on { bit } else { 0 };
     // (A surface leaves what the path has done in media as it was.)
-    next.state.y = (p.state.y & (pathtrace::PATH_MEDIA | pathtrace::PATH_PROVEN)) | PATH_ACTIVE | flag(kept.iter().any(|&(_, light)| light != 0), pathtrace::PATH_DEFERRED) | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
+    next.state.y = (p.state.y & (pathtrace::PATH_MEDIA | pathtrace::PATH_PROVEN)) | PATH_ACTIVE | flag(deferring, pathtrace::PATH_DEFERRED) | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
     next
 }
 

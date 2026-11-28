@@ -2599,6 +2599,11 @@ pub const PATH_PROVEN: u32 = 1 << 24;
 /// (`pack_distance`, 16 bits each: the first ray's below): what lies beyond doesn't block it.
 pub const PATH_DEFERRED: u32 = 1 << 25;
 
+/// A path that ended at its last vertex but for the shadow rays it left (`PATH_DEFERRED`): its
+/// next round traces those alone, not its own ray, and ends it (`shade`). Those of the deepest
+/// vertices, in crevices, are the costliest of all to trace on the host.
+pub const PATH_SHADOWS_ONLY: u32 = 1 << 26;
+
 /// `pack_distance`'s code for no bound.
 pub const DISTANCE_UNBOUNDED: u32 = 0xffff;
 
@@ -3011,7 +3016,14 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
             ray = shadow_ray(s, &ray, probe_from.extend(1.0));
             ray.state.x = found.state.x;
         }
-        let (hit, weight) = finder.find(s, &ray);
+        // (A path with shadow rays alone to trace has no ray of its own: it meets nothing.)
+        let (hit, weight) = if job == 0 && own.state.y & PATH_SHADOWS_ONLY != 0 {
+            let mut none = own;
+            none.state.z = NONE;
+            (none, 1.0)
+        } else {
+            finder.find(s, &ray)
+        };
         if job == 0 {
             found = hit;
             // (The weight of the walk to what it meets, on all the path gathers from here.)
@@ -3341,6 +3353,9 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
     let max_depth = s.params.dims.w;
     let flags = s.params.offs2.w;
     let n_emitters = s.params.counts.z;
+    if flags_p & PATH_SHADOWS_ONLY != 0 {
+        return finish(p, ro, rd, beta, l, rays, rng, flags_p & !PATH_SHADOWS_ONLY, prev_pdf, depth, q0, q1);
+    }
 
     let hit = Hit { t: p.hit.x, prim: p.state.z };
     rays += 1;

@@ -468,8 +468,7 @@ pub struct HostVertex {
     pub done: bool,
     /// Whether to keep its sun's and sky's shadow rays for the device to trace, where its
     /// material allows (`functions::defer`); and after it, those kept, their light times the
-    /// throughput, already in `l` unshadowed. None if the path ended here: those it kept are
-    /// traced here.
+    /// throughput, already in `l` unshadowed, also if the path ended here.
     pub defer: bool,
     pub deferred: Vec<crate::material::functions::Deferred>,
 }
@@ -493,8 +492,9 @@ pub fn host_vertex(s: &Scene, flat: &FlatScene, v: &mut HostVertex, hit: &Hit, s
     };
     let covered = (hit.prim as usize) < listed && !flat.prim_cover.is_empty();
     let mut deferred = host_bounce_deferring(&mut p, s, o, hit, covered.then(|| flat.covered_at(hit.prim, &hit.point)).flatten().as_ref(), v.defer);
-    if p.done {
-        // No next round to trace them: here, taking back what is blocked.
+    if p.done && !v.defer {
+        // No next round to trace them: here, taking back what is blocked. (Deferring, the
+        // caller gives the path a round for them alone: `kernels::host::shade`.)
         for d in deferred.drain(..) {
             let through = s.objects.transmittance(&d.ray, d.distance, f64::MIN_POSITIVE);
             p.l = p.l - d.light * (Color::white() - through);
@@ -941,11 +941,19 @@ pub mod tests {
     /// (a material the host shades, whose light may be deferred) shadowed from a sun and a
     /// point light by a sphere and a box the kernels shade, and a rock ball of its own. Were
     /// the kernels to ignore the kept rays, the shadows would be lit; were they to trace the
-    /// point light's past the light, the box behind it would shadow the floor.
+    /// point light's past the light, the box behind it would shadow the floor. And with paths
+    /// that end at their first vertex, whose kept rays take a round of their own
+    /// (`PATH_SHADOWS_ONLY`).
     #[test]
     fn test_shadow_rays_traced_by_the_kernels_are_the_hosts() {
+        for depth in [4, 0] {
+            shadow_rays_traced_by_the_kernels_are_the_hosts(depth);
+        }
+    }
+
+    fn shadow_rays_traced_by_the_kernels_are_the_hosts(max_depth: u32) {
         let s = SceneFile::from_string(r#"{
-            "width": 32, "height": 24, "background": [0.2, 0.25, 0.3], "max_depth": 4,
+            "width": 32, "height": 24, "background": [0.2, 0.25, 0.3], "max_depth": MAX_DEPTH,
             "sun": { "direction": [-1, 2, -1], "intensity": 2 },
             "lights": [ { "location": [1, 1.5, 0.5], "intensity": 3 } ],
             "camera": { "location": [0, 2.5, -5], "lookat": [0, 0.3, 0], "up": [0, 1, 0], "angle": 0.6 },
@@ -959,7 +967,7 @@ pub mod tests {
                 { "type": "sphere", "location": [-1.2, 0.35, 0.2], "radius": 0.35, "material": "R" },
                 { "type": "box", "min": [1.8, 2.2, 1.1], "max": [2.6, 2.6, 1.7], "material": "F" }
             ]
-        }"#.to_string());
+        }"#.replace("MAX_DEPTH", &max_depth.to_string()));
         let flat = FlatScene::build(&s).unwrap();
         let render = |defer: bool| {
             let mut kernels = Kernels::new(&s, &flat).unwrap();
@@ -979,12 +987,12 @@ pub mod tests {
         let (kept, deferred) = render(true);
         assert_eq!(none, 0);
         let vertices = s.image.width * s.image.height * 64;
-        assert!(deferred as usize > vertices / 2, "{} rays deferred", deferred);
+        assert!(deferred as usize > vertices / 2, "depth {}: {} rays deferred", max_depth, deferred);
         // The same paths, so pixel by pixel: to the packing (a part in 256 of a ray's light).
         let mean: f64 = traced.iter().map(|c| c.rgb.sum()).sum::<f64>() / traced.len() as f64;
         for (k, (a, b)) in traced.iter().zip(&kept).enumerate() {
             let d = (a.rgb - b.rgb).abs().max();
-            assert!(d <= 0.01 * mean + 0.005 * a.rgb.max(), "pixel {}: {:?} against {:?}", k, b, a);
+            assert!(d <= 0.01 * mean + 0.005 * a.rgb.max(), "depth {}, pixel {}: {:?} against {:?}", max_depth, k, b, a);
         }
     }
 

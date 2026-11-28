@@ -188,6 +188,10 @@ struct Half {
 /// buffer the waiting paths are gathered in side by side and scattered back from once shaded,
 /// the dispatch over the host's queue (a copy of its header), and what is read: that header,
 /// then the gathered paths.
+/// The turns of a block whose host reads are guessed apart (`HostQueue::guess`); later ones
+/// share the last's.
+const GUESSED_TURNS: usize = 16;
+
 struct HostQueue {
     /// The paths, the queues and `gathered`; the second with the parameters under which a
     /// kernel's appends go to side 0 of the queue, where the next rounds begin.
@@ -196,8 +200,11 @@ struct HostQueue {
     dispatch: wgpu::Buffer,
     readback: wgpu::Buffer,
     /// How many paths to read with the header, before their number is known: somewhat more
-    /// than waited last time. (More waiting than that takes a second read.)
-    guess: std::sync::atomic::AtomicUsize,
+    /// than waited at the same turn of the block before (`GUESSED_TURNS`), since the turns of
+    /// a block differ a hundredfold (a pass's first vertices, then the few paths that bounce
+    /// onto host materials again) but repeat from block to block. (More waiting than that
+    /// takes a second read, queued behind the other half's rounds.)
+    guess: [std::sync::atomic::AtomicUsize; GUESSED_TURNS],
 }
 
 fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
@@ -554,7 +561,7 @@ impl GpuRenderer {
                 layout: &host_layout,
                 entries: &[entry(0, &params_buffers[side]), entry(1, &paths_buffer), entry(2, &queue_buffer), entry(3, &gathered)],
             }));
-            HostQueue { groups, gathered, dispatch, readback, guess: std::sync::atomic::AtomicUsize::new(pixels as usize) }
+            HostQueue { groups, gathered, dispatch, readback, guess: std::array::from_fn(|_| std::sync::atomic::AtomicUsize::new(pixels as usize)) }
             });
             Half { rows, params_buffers, queue_buffer, dispatch_buffer, round_groups, start_group, host }
         }).collect();
@@ -642,23 +649,22 @@ impl GpuRenderer {
             let slot = if h == 0 { slot } else { self.run_slot(false) };
             self.encode_rounds(&mut encoder, h, slot);
             self.queue.submit(Some(encoder.finish()));
-            reads.push(Some(self.request_host(h)));
+            reads.push(Some(self.request_host(h, 0)));
         }
         while reads.iter().any(Option::is_some) {
             for h in 0..n {
                 let Some(read) = reads[h].take() else { continue };
-                if !self.serve_host(s, flat, first, h, read).await? {
-                    continue;
-                }
+                let turn = read.1;
+                let Some(rounds) = self.serve_host(s, flat, first, h, read).await? else { continue };
                 let slot = self.run_slot(true);
                 let mut encoder = self.device.create_command_encoder(&Default::default());
                 if let Some(slot) = slot {
                     // How many paths these rounds start with: those the host sent on.
                     encoder.copy_buffer_to_buffer(&self.halves[h].queue_buffer, 12, &self.rounds_buffer, 4 * slot as u64, 4);
                 }
-                self.encode_rounds(&mut encoder, h, slot);
+                self.encode_rounds_up_to(&mut encoder, h, slot, rounds);
                 self.queue.submit(Some(encoder.finish()));
-                reads[h] = Some(self.request_host(h));
+                reads[h] = Some(self.request_host(h, turn + 1));
             }
         }
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -685,14 +691,15 @@ impl GpuRenderer {
 
     /// Half `h`'s paths waiting for the host gathered (`pathtrace::gather_host`), and their
     /// count and as many as are guessed to wait copied to be read: queued, not waited for.
-    /// Returns the guess and the submission to wait for.
-    fn request_host(&self, h: usize) -> (u64, wgpu::SubmissionIndex) {
+    /// Returns the guess and the submission to wait for. `turn` is which of the block's turns
+    /// this is for the half.
+    fn request_host(&self, h: usize, turn: usize) -> (u64, usize, wgpu::SubmissionIndex) {
         let half = &self.halves[h];
         let host = half.host.as_ref().expect("a scene with host materials");
         let (gather, _) = self.host_kernels.as_ref().expect("a scene with host materials");
         let size = std::mem::size_of::<PathState>() as u64;
         let header = 16 * pathtrace::HOST_QUEUE as u64;
-        let guess = (host.guess.load(std::sync::atomic::Ordering::Relaxed) as u64).min(host.gathered.size() / size);
+        let guess = (host.guess[turn.min(GUESSED_TURNS - 1)].load(std::sync::atomic::Ordering::Relaxed) as u64).min(host.gathered.size() / size);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_buffer_to_buffer(&half.queue_buffer, header, &host.dispatch, 0, 16);
         {
@@ -703,13 +710,16 @@ impl GpuRenderer {
         }
         encoder.copy_buffer_to_buffer(&half.queue_buffer, header, &host.readback, 0, 16);
         encoder.copy_buffer_to_buffer(&host.gathered, 0, &host.readback, 16, guess * size);
-        (guess, self.queue.submit(Some(encoder.finish())))
+        (guess, turn, self.queue.submit(Some(encoder.finish())))
     }
 
     /// The host's turn for half `h`, once its read (`request_host`) is done: the paths
     /// waiting shaded (`host::shade`), and scattered back to their slots, those that go on
-    /// queued for the next rounds (`scatter_host`). Whether any waited.
-    async fn serve_host(&self, s: &Scene, flat: &FlatScene, first: &[usize], h: usize, (guess, read): (u64, wgpu::SubmissionIndex)) -> Result<bool, String> {
+    /// queued for the next rounds (`scatter_host`). None if none waited; else how many rounds
+    /// those that go on can take at most: a path whose next vertex is its D-th has at most
+    /// `max_depth` + 1 - D left, so the rounds after the host's turn needn't be a whole
+    /// pass's, most of which, late in a pass, would be empty dispatches the host waits out.
+    async fn serve_host(&self, s: &Scene, flat: &FlatScene, first: &[usize], h: usize, (guess, turn, read): (u64, usize, wgpu::SubmissionIndex)) -> Result<Option<u32>, String> {
         use std::sync::atomic::Ordering;
         let half = &self.halves[h];
         let host = half.host.as_ref().expect("a scene with host materials");
@@ -726,7 +736,7 @@ impl GpuRenderer {
         };
         host.readback.unmap();
         if count == 0 {
-            return Ok(false);
+            return Ok(None);
         }
         if count > guess {
             // More waited than was read with the header: the rest.
@@ -738,7 +748,7 @@ impl GpuRenderer {
             paths.extend(bytemuck::pod_collect_to_vec::<u8, PathState>(&host.readback.get_mapped_range(rest).unwrap()));
             host.readback.unmap();
         }
-        host.guess.store((count + count / 4 + 64) as usize, Ordering::Relaxed);
+        host.guess[turn.min(GUESSED_TURNS - 1)].store((count + count / 4 + 64) as usize, Ordering::Relaxed);
         let began = web_time::Instant::now();
         let origin = self.origin;
         // (`RAYS_HOST_SHADOWS=1` traces the host's vertices' shadow rays on the host, to compare.)
@@ -761,6 +771,8 @@ impl GpuRenderer {
             }
         }
         let shaded: Vec<PathState> = shaded.into_iter().map(|(p, _, _)| p).collect();
+        let shallowest = shaded.iter().filter(|p| p.state.y & pathtrace::PATH_ACTIVE != 0).map(|p| p.beta.w as u32).min();
+        let rounds = shallowest.map_or(0, |d| (self.params.dims.w + 1).saturating_sub(d).max(1));
         self.queue.write_buffer(&host.gathered, 0, bytemuck::cast_slice(&shaded));
         let seconds = began.elapsed().as_secs_f64();
         // The next rounds begin at side 0 of the queue, which the scattered paths that go on
@@ -781,7 +793,7 @@ impl GpuRenderer {
         block.host_seconds += seconds;
         block.stats.record(crate::scheduler::Stage::Host, count, seconds);
         block.stats.merge_objects(&objects.objects);
-        Ok(true)
+        Ok(Some(rounds))
     }
 
     /// A pass's paths, from their camera rays, and its first queue, uploaded: pixel i's
@@ -861,8 +873,13 @@ impl GpuRenderer {
     /// last left alive, starting from side 0 of the queue. With a `slot`, each round's count
     /// is kept for the scheduler's measurements.
     fn encode_rounds(&self, encoder: &mut wgpu::CommandEncoder, h: usize, slot: Option<usize>) {
+        self.encode_rounds_up_to(encoder, h, slot, self.params.dims.w + 1);
+    }
+
+    /// `encode_rounds`, `rounds` of them (at most a pass's).
+    fn encode_rounds_up_to(&self, encoder: &mut wgpu::CommandEncoder, h: usize, slot: Option<usize>, rounds: u32) {
         let half = &self.halves[h];
-        for round in 0..=self.params.dims.w {
+        for round in 0..rounds.min(self.params.dims.w + 1) {
             let side = (round % 2) as usize;
             // A compute pass a kernel, so that each can be timed (`Timers`).
             use crate::scheduler::Stage;

@@ -574,6 +574,17 @@ from the cells' `edges`; 113 → 4.31), bamboo_screen (bamboo_wall: canes as upr
 rounded by a `wave`, the bricks' ends their nodes; 757 → 4.63) and cedar_bark
 (chinese_cedar_bark: long strips of stretched cells, dark furrows between; 22.2 → 4.34).
 
+And seven more: gingham (gingham_check: two `square` waves crossing, their sum mapped white,
+mid and dark green; 144 → 44.1, the loss hard on a strict lattice the photograph's doesn't line
+up with, though it looks right), corduroy (ribbed_corduroy: fine sage ribs; 1327 → 13.2),
+slate_roof (roof_slates_03: grey slates in overlapping courses, lichen, shadowed lower edges;
+50.4 → 2.89), granite_block_wall (japanese_stone_wall: speckled blocks from `cells` with the
+`chebyshev` metric, stretched and warped into roughly squared stones; 116 → 4.36), raked_dirt
+(raked_dirt: earth combed by a faint `wave`, straw strewn over it; 122 → 3.75), slushy_ruts
+(snow_04: wheel ruts through snow to mud, as bands of a sine across the track, broken by noise;
+32.6 → 18.2, its snow more speckled than the scan's) and parquet (rectangular_parquet: rows of
+short oak strips, a `brick` turned to lie flat across the rows; 96.4 → 7.28).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

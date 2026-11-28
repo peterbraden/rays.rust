@@ -940,6 +940,8 @@ impl SceneFile {
                 obj["src"].as_str().or(obj["item"]["src"].as_str()).map_or(String::new(), |s| format!(" {}", s)));
             let built: Vec<Arc<SceneObject>> = if obj["type"] == "tree" {
                 SceneFile::parse_tree(&obj, materials, media)
+            } else if obj["type"] == "cottage" {
+                SceneFile::parse_cottage(&obj, materials)
             } else if obj["type"] == "forest" {
                 SceneFile::parse_forest(&obj, materials, media, geometries, landscape.as_deref()).into_iter().collect()
             } else if obj["type"] == "grass" && (obj.get("where").is_some() || matches!(obj["heightmap"].as_str(), Some("landscape" | "surface"))) {
@@ -4244,6 +4246,162 @@ impl SceneFile {
             },
             _ => unreachable!(),
         }
+    }
+
+    /// `{"type": "cottage", "style": "log" | "stone", "location": [x, y, z], "yaw": degrees,
+    /// "seed": 0}`: a cottage standing on the ground at `location` (`procedural::building`), its
+    /// door facing +z turned by `yaw`: of logs, or of rubble stone with a slate roof and a
+    /// chimney on each gable. Its size and weather (defaults for logs, then stone):
+    /// `"width"` (along the ridge, 7, 7.5), `"depth"` (5), `"wall_height"` (2.5, 2.4),
+    /// `"pitch"` (degrees, 38, 40), `"overhang"` (0.6, 0.2) and `"gable_overhang"` (0.5, 0.06),
+    /// `"log_radius"` (0.13), `"wall_thickness"` (stone, 0.55), `"plinth"` (0.4, 0), `"snow"`
+    /// (its depth on the roof, 0.3), `"icicles"` (0 to 1, 0.5), `"melt"` (how far the house's warmth
+    /// has melted the roof's snow, 0 to 1, 0.2), `"chimney"` (true, false, or
+    /// which gables carry a stack: "both", "left", "right", "none"; a gable with one has no
+    /// window) and `"wreath"`
+    /// (true). Each part has a material of its own, replaced by a name or a definition in
+    /// `"materials"`: `logs`, `log_ends`, `chinking`, `stone` (and for rubble `stone_2`,
+    /// `stone_3`), `dressed_stone`, `mortar`, `pots`, `roof`, `trim`, `door`, `iron`, `snow`,
+    /// `icicles`, `wreath`, `ribbon`, and `window`: by default glass over a lamplit room,
+    /// `"light"` (4) bright at `"light_temperature"` (2700 K); `"lit": false` for dark glass.
+    pub fn parse_cottage(o: &Value, materials: &Map<String, Value>) -> Vec<Arc<SceneObject>> {
+        use crate::procedural::building::{Chimney, Cottage, Part, Style};
+        let d = match o["style"].as_str().unwrap_or("log") {
+            "log" => Cottage::default(),
+            "stone" => Cottage::stone(),
+            x => panic!("Unknown cottage style '{}': expected log or stone", x),
+        };
+        let stone = d.style == Style::Stone;
+        let n = |k: &str, v: f64| SceneFile::parse_number(&o[k], v);
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let cottage = Cottage {
+            style: d.style, wall_thickness: n("wall_thickness", d.wall_thickness).clamp(0.2, 1.2),
+            width: n("width", d.width).max(2.), depth: n("depth", d.depth).max(2.),
+            wall_height: n("wall_height", d.wall_height).max(1.), pitch: n("pitch", d.pitch).clamp(5., 70.),
+            overhang: n("overhang", d.overhang).max(0.), gable_overhang: n("gable_overhang", d.gable_overhang).max(if stone { 0. } else { 0.2 }),
+            log_radius: n("log_radius", d.log_radius).clamp(0.05, 0.4), plinth: n("plinth", d.plinth).max(0.),
+            snow: n("snow", d.snow).max(0.), icicles: n("icicles", d.icicles).clamp(0., 1.), melt: n("melt", d.melt).clamp(0., 1.),
+            chimney: match &o["chimney"] {
+                Value::Null => d.chimney,
+                Value::Bool(true) => Chimney::Both,
+                Value::Bool(false) => Chimney::None,
+                Value::String(c) => match c.as_str() {
+                    "both" => Chimney::Both, "left" => Chimney::Left, "right" => Chimney::Right, "none" => Chimney::None,
+                    x => panic!("Unknown cottage chimney '{}': expected both, left, right or none", x),
+                },
+                x => panic!("A cottage's chimney is true, false, or \"both\", \"left\", \"right\" or \"none\", not {}", x),
+            },
+            wreath: o["wreath"].as_bool().unwrap_or(d.wreath),
+            seed,
+        };
+        let built = cottage.build();
+        let place = Affine3::from_matrix_unchecked(
+            Translation3::from(SceneFile::parse_vec3_def(o, "location", Vector3::zeros())).to_homogeneous()
+                * Rotation3::from_axis_angle(&Vector3::y_axis(), n("yaw", 0.).to_radians()).to_homogeneous());
+        let given = &o["materials"];
+        let material = |name: &str, default: Value| -> Box<dyn MaterialModel + Sync + Send> {
+            match given.get(name) {
+                Some(m) => SceneFile::require_material(m, materials, &format!("cottage {}", name)),
+                None => SceneFile::parse_material_definition(&default, &format!("cottage {}", name), materials),
+            }
+        };
+        // Logs left out for years: silvered grey-brown, the grain standing up, split by checks
+        // along it; noise and cells stretched along each log.
+        let logs = |along: [f64; 3]| -> Value {
+            use serde_json::json;
+            let stretch = |by: f64, input: Value| json!({"node": "transform", "scale": along.map(|a| if a > 1. { by } else { 1. }), "input": input});
+            // Fine grain raised by the weather, and a few long thin checks, splits along the
+            // grain where the log dried, some open and some closed.
+            let grain = stretch(40., json!({"node": "fractal", "scale": 0.025, "smallest": 0.002, "seed": seed + 11}));
+            let checks = json!({"node": "multiply", "inputs": [
+                {"node": "smoothstep", "from": 0.018, "to": 0.0,
+                    "input": stretch(12., json!({"node": "cells", "style": "edges", "scale": 0.15, "seed": seed + 13}))},
+                {"node": "smoothstep", "from": 0.05, "to": 0.25, "input": {"node": "fractal", "scale": 0.6, "seed": seed + 21}}]});
+            // Weathering over the wall, and each log its own shade.
+            let weather = json!({"node": "add", "inputs": [{"node": "fractal", "scale": 0.8, "seed": seed + 12},
+                {"node": "multiply", "inputs": [0.8, {"node": "add", "inputs": [-0.5,
+                    stretch(25., json!({"node": "cells", "style": "id", "scale": 0.2, "seed": seed + 15}))]}]}]});
+            json!({"type": "lambertian", "albedo": {"pattern": checks.clone(), "color_map": [
+                    [0, {"pattern": {"node": "add", "inputs": [{"node": "multiply", "inputs": [1.0, grain.clone()]}, {"node": "multiply", "inputs": [0.7, weather]},
+                        // Darker in the seams between the logs, where water and dirt lie.
+                        {"node": "multiply", "inputs": [-1.1, {"node": "smoothstep", "from": 0.05, "to": 0.5,
+                            "input": {"node": "occlusion", "radius": 0.1, "rays": 4}}]}]},
+                         "color_map": [[-0.6, [0.1, 0.088, 0.075]], [0.0, [0.19, 0.17, 0.15]], [0.6, [0.29, 0.27, 0.24]]]}],
+                    [1, [0.03, 0.025, 0.02]]]},
+                "normal": {"graph": {"node": "add", "inputs": [{"node": "multiply", "inputs": [0.0008, grain]},
+                    {"node": "multiply", "inputs": [-0.003, checks]}]}, "amount": 1}})
+        };
+        let paint = |dark: [f64; 3], light: [f64; 3], seed: u64| -> Value {
+            serde_json::json!({"type": "lambertian", "albedo": {"pattern": {"node": "add", "inputs": [
+                {"node": "fractal", "scale": 0.3, "seed": seed},
+                {"node": "multiply", "inputs": [0.5, {"node": "fractal", "scale": 0.02, "smallest": 0.002, "seed": seed + 1}]}]},
+                "color_map": [[-0.6, dark], [0.5, light]]}})
+        };
+        let defaults = |part: Part| -> Value {
+            use serde_json::json;
+            match part {
+                Part::LogsAlongX => logs([16., 1., 1.]),
+                Part::LogsAlongZ => logs([1., 1., 16.]),
+                Part::LogEnds => json!({"type": "lambertian", "albedo": {"pattern": {"node": "fractal", "scale": 0.05, "seed": seed + 14},
+                    "color_map": [[-0.5, [0.1, 0.09, 0.075]], [0.5, [0.2, 0.17, 0.14]]]}}),
+                Part::Stone => json!({"type": "snow_cover", "cover": if stone { 0.12 } else { 0.22 }, "drift": 0.1, "seed": seed + 6,
+                    "snow": {"preset": "fresh"}, "material": {"type": "rock", "preset": "granite", "lichen": 0.2, "seed": seed}}),
+                // Rubble of the stones about: greys and buffs, lichened, catching a little
+                // snow on their ledges.
+                Part::Stone2 | Part::Stone3 => {
+                    let (preset, colour) = if part == Part::Stone2 { ("basalt", [0.24, 0.23, 0.22]) } else { ("granite", [0.4, 0.38, 0.35]) };
+                    json!({"type": "snow_cover", "cover": 0.12, "drift": 0.08, "seed": seed + 7,
+                        "snow": {"preset": "fresh"}, "material": {"type": "rock", "preset": preset, "color": colour, "lichen": 0.15, "seed": seed + 1}})
+                },
+                Part::Dressed => json!({"type": "snow_cover", "cover": 0.12, "drift": 0.08, "seed": seed + 8,
+                    "snow": {"preset": "fresh"}, "material": {"type": "rock", "preset": "limestone", "color": [0.47, 0.45, 0.41], "lichen": 0.08, "seed": seed + 2}}),
+                Part::Pots => json!({"type": "library", "name": "terracotta", "seed": seed}),
+                Part::Mortar if stone => json!({"type": "lambertian", "albedo": {"pattern": {"node": "fractal", "scale": 0.1, "seed": seed + 22},
+                    "color_map": [[-0.5, [0.24, 0.23, 0.21]], [0.5, [0.36, 0.35, 0.32]]]}}),
+                Part::Mortar => json!({"type": "lambertian", "albedo": [0.3, 0.29, 0.27]}),
+                // Slate, blue-grey, each a little different, dull where weathered.
+                Part::Roof if stone => json!({"type": "plastic", "roughness": 0.4, "albedo": {"pattern": {"node": "add", "inputs": [
+                    {"node": "cells", "style": "id", "scale": 0.15, "seed": seed + 23},
+                    {"node": "multiply", "inputs": [0.5, {"node": "fractal", "scale": 0.3, "seed": seed + 24}]}]},
+                    "color_map": [[0.0, [0.04, 0.045, 0.055]], [0.6, [0.07, 0.075, 0.085]], [1.2, [0.1, 0.1, 0.105]]]}}),
+                Part::Roof => json!({"type": "lambertian", "albedo": [0.1, 0.075, 0.06]}),
+                // Paint that has seen some winters: matt, uneven, greyed.
+                Part::Trim => paint([0.53, 0.52, 0.48], [0.68, 0.67, 0.62], seed + 16),
+                Part::Door => paint([0.2, 0.05, 0.035], [0.33, 0.085, 0.05], seed + 17),
+                Part::Chinking => json!({"type": "lambertian", "albedo": {"pattern": {"node": "fractal", "scale": 0.04, "seed": seed + 18},
+                    "color_map": [[-0.5, [0.05, 0.05, 0.03]], [0.5, [0.13, 0.12, 0.07]]]}}),
+                Part::Iron => json!({"type": "plastic", "albedo": [0.03, 0.03, 0.03], "roughness": 0.35}),
+                // Not icing: a fine unevenness where it fell and the wind moved it.
+                Part::Snow => json!({"type": "snow", "preset": "fresh", "sparkle": 0.05, "seed": seed,
+                    "normal": {"graph": {"node": "add", "inputs": [
+                        {"node": "fractal", "scale": 0.25, "smallest": 0.004, "amplitude": 0.005, "seed": seed + 19},
+                        {"node": "fractal", "scale": 0.03, "smallest": 0.002, "amplitude": 0.0008, "seed": seed + 20}]}, "amount": 1}}),
+                Part::Icicles => json!({"type": "ice", "preset": "white"}),
+                Part::Wreath => json!({"type": "lambertian", "albedo": [0.025, 0.07, 0.03]}),
+                Part::Ribbon => json!({"type": "plastic", "albedo": [0.55, 0.03, 0.03], "roughness": 0.25}),
+            }
+        };
+        let mut objects: Vec<Arc<SceneObject>> = built.parts.meshes.into_iter().map(|(part, meshes)| {
+            let m = material(part.name(), defaults(part));
+            let geometry = Transform::new(Arc::new(SmoothMesh::from_indexed(&meshes)) as Arc<dyn crate::shapes::geometry::Geometry + Sync + Send>, place);
+            Arc::new(SceneObject { geometry: Box::new(geometry), medium: Box::new(Solid { m }) })
+        }).collect();
+        let lit = o["lit"].as_bool().unwrap_or(true);
+        for (i, w) in built.windows.into_iter().enumerate() {
+            let m: Box<dyn MaterialModel + Sync + Send> = if lit && given.get("window").is_none() {
+                // Glass over a lamplit room (`building::WindowPane`).
+                Box::new(crate::procedural::building::WindowPane::new(Emission::blackbody(n("light_temperature", 2700.)),
+                    n("light", 4.), seed.wrapping_mul(31).wrapping_add(i as u64)))
+            } else if lit {
+                material("window", Value::Null)
+            } else {
+                material("window", serde_json::json!({"type": "plastic", "albedo": [0.01, 0.01, 0.012], "roughness": 0.02}))
+            };
+            let patch = crate::shapes::bilinear::BilinearPatch::new(w[0], w[1], w[2], w[3]);
+            let geometry = Transform::new(Arc::new(patch) as Arc<dyn crate::shapes::geometry::Geometry + Sync + Send>, place);
+            objects.push(Arc::new(SceneObject { geometry: Box::new(geometry), medium: Box::new(Solid { m }) }));
+        }
+        objects
     }
 
     /// A noise texture over a base material. Needs the materials map to resolve the base.

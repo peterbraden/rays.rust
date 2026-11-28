@@ -145,6 +145,7 @@ pub mod procedural {
     pub mod grass;
     pub mod rock;
     pub mod iceberg;
+    pub mod building;
     pub mod nubis_clouds;
     pub mod cauliflower;
     pub mod hogan_kew_cirrus;

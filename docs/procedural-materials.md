@@ -523,6 +523,100 @@ slabs into the earth, which matches the scan at its scale but not close up; its 
 left them dark or chalky) and moss_carpet (aerial_grass_rock, 15 m: yellow-green moss over
 rock, bare patches and grit; 35.5 → 0.92).
 
+And four more: coral_rubble (coral_mud_01: a pale cream crust broken by hollows of rounded coral
+grains; 7.73 → 0.89, its hollows softer edged close up than the scan's), seedling_soil
+(mud_forest: dark crumbly soil with seedlings, leaf bits and twigs; 315 → 0.76, its twigs long
+close up), cobblestones (cobblestone_floor_08: blue-grey and buff setts in wavering rows of
+grit, a `brick` laid flat; 21.6 → 3.63, but the fit pinched the setts into stars, so only its
+colours were applied) and pitted_ochre_rock (rock_pitted_mossy: orange rock crazed by cracks,
+grey patina and pits; 41.1 → 1.25, its colours alone, as the fit's cracks became loops).
+
+And ten more, for breadth: their structure as written and only their colours and size fitted
+(twenty iterations, scored on the fitting patch): wood_chip_mulch (wood_chips: tan and gold
+slivers over dark gaps; 452 → 6.53), plane_bark (bark_platanus: a mosaic of grey, olive and
+pale flakes; 2443 → 2.46), thatch (thatch_roof_angled: silver-grey reeds in bundles; 904 →
+3.28), autumn_leaf_scatter (forest_floor: red, orange and yellow leaves in drifts on grey
+grit; 29.1 → 1.71), dry_stone_wall (stacked_stone_wall: flat rounded rust-brown stones in rough
+courses, a warped `brick`; 368 → 9.71, more regular than the scan's), clay_roof_tiles
+(clay_roof_tiles: columns of narrow orange tiles, grimed; 117 → 5.07), concrete_blocks
+(concrete_block_wall: dark speckled blocks in stretcher bond; 249 → 13.6), grass_path
+(grass_path_2: pale grit and stones with tufts of grass; 63.9 → 1.23), weathered_boards
+(weathered_planks: dark upright boards, streaked grain and knots; 499 → 2.65) and
+stone_block_wall (rock_wall_08: rough grey blocks in courses; 220 → 3.95). The walls, roofs,
+boards and bark are fitted as walls (`"view": "wall"`); bricks there are moved a quarter of
+their depth off the wall's plane, as alternate courses are offset by half of it.
+
+And nine more, fitted the same way: hessian (hessian_230: an open weave of jute threads, each
+direction a `wave` over a `gradient`, the second along y and z together so the weave holds on
+floors and walls; 34.5 → 9.44), rusty_corrugated_iron (rusty_corrugated_iron: ridges in the
+bump, rust streaked down the sheet; 1057 → 0.92), cracked_red_ground (cracked_red_ground:
+mottled red-brown earth with faint cracks; 483 → 4.16), pebble_concrete
+(pebble_embedded_concrete: grey cement studded with small pebbles, washed paler in streaks; 419
+→ 7.82), mossy_cobbles (mossy_cobblestone: grey and buff setts with moss in every joint; 45.0 →
+1.76), snowy_asphalt (asphalt_snow: tarmac under broken, lacy snow; 32.5 → 10.2), wood_shingles
+(roof_slates_02: silver-grey split shakes in overlapping courses, each course shadowed by a
+`ramp` wave; 22.5 → 4.19), eucalyptus_bark (eucalyptus_bark: smooth brown bark peeling to olive
+and grey; 732 → 6.91) and lunar_regolith (moon_01: faintly mottled grey dust with soft craters
+in the bump; 37.8 → 29.5, the scan nearly featureless, so little for the loss to compare).
+
+And ten more, of buildings and things, fitted the same way: red_plaster (red_plaster_weathered:
+mottled terracotta render with dark runs and chips; 154 → 4.00), whitewashed_brick
+(whitewashed_brick: worn white over brick, red and blue-grey showing through; 539 → 2.67),
+mossy_brick (mossy_brick: dark sooty brick with moss in the joints; 78.7 → 2.05),
+green_painted_metal (green_metal_rust: faded green paint with rust spots, orange halos and runs,
+from one `cells` node's `f1`; 81.1 → 1.76), peeling_paint_wood (wood_peeling_paint_weathered:
+dark paint torn off along the grain, the tears a fractal stretched across; 851 → 5.58, its
+paint browner and blotchier than the scan's), denim (denim_fabric: a fine twill, a `wave` along
+[1, 1, 1] so it runs diagonally on floors and walls, faded in streaks; 12.3 → 5.11, without the
+scan's seam), osb (oriented_strand_board: three layers of `disc` sprites as flakes; 403 → 4.08),
+cracked_plaster (worn_cracked_plaster: pale plates crazed by cracks, grime gathered towards them
+from the cells' `edges`; 113 → 4.31), bamboo_screen (bamboo_wall: canes as upright `brick`s,
+rounded by a `wave`, the bricks' ends their nodes; 757 → 4.63) and cedar_bark
+(chinese_cedar_bark: long strips of stretched cells, dark furrows between; 22.2 → 4.34).
+
+And seven more: gingham (gingham_check: two `square` waves crossing, their sum mapped white,
+mid and dark green; 144 → 44.1, the loss hard on a strict lattice the photograph's doesn't line
+up with, though it looks right), corduroy (ribbed_corduroy: fine sage ribs; 1327 → 13.2),
+slate_roof (roof_slates_03: grey slates in overlapping courses, lichen, shadowed lower edges;
+50.4 → 2.89), granite_block_wall (japanese_stone_wall: speckled blocks from `cells` with the
+`chebyshev` metric, stretched and warped into roughly squared stones; 116 → 4.36), raked_dirt
+(raked_dirt: earth combed by a faint `wave`, straw strewn over it; 122 → 3.75), slushy_ruts
+(snow_04: wheel ruts through snow to mud, as bands of a sine across the track, broken by noise;
+32.6 → 18.2, its snow more speckled than the scan's) and parquet (rectangular_parquet: rows of
+short oak strips, a `brick` turned to lie flat across the rows; 96.4 → 7.28).
+
+And eight from ambientCG's scans, whose sizes it gives in centimetres: berber_carpet
+(Carpet016: a cream loop pile flecked brown; 838 → 21.4), woven_rug (Carpet015: rust ribs with
+pale ticks, a flat `brick`'s ids picking which; 478 → 6.56), upholstery_weave (Fabric061: a fine
+two-tone `checker`; 1199 → 104), quilted_cotton (Fabric048: white pillows, the product of two
+`wave`s, grey into the seams; 386 → 202), bamboo_blind (Wicker013: slats as `brick` courses
+along the wall, fine cords; 114 → 3.65), basket_weave (Wicker006: dark strips over pale where a
+`checker` brings the pale ones over; 942 → 32.1), marble_checkerboard (Tiles074: cream and
+white-veined black marble in a `checker`; 103 → 1.50) and kraft_paper (Paper004: fibrous brown
+paper with faint ribs; 779 → 29.0). A `checker` is moved half a cell off the ground's and a
+wall's planes, so neither lies on a boundary. The regular weaves score high only because the
+loss can't line a strict lattice up with the photograph's; they look as their scans do.
+
+And six more from ambientCG: scaly_bark (Bark014: elongated reddish plates, stretched cells,
+with moss in the fissures; 18.6 → 7.73), lawn (Grass004: two layers of thin `leaf` sprites as
+blades; 831 → 5.68), oak_floorboards (WoodFloor051: long boards, a flat `brick`, staggered;
+33.3 → 4.94), road_markings (Road007: asphalt with a dashed centre line and edge lines 3 m out,
+`triangle` waves across the road for the lines and a `square` wave along it for the dashes;
+1830 → 54.1, its colours only, as the fitted size moved the edge lines out of the frame),
+lichen_crusted_rock (Rock045: buff rock with `disc` rosettes of lichen and green crust; 93.8 →
+24.9) and crushed_stone (Gravel020: angular grey chippings in two layers of `stone` sprites;
+440 → 3.26).
+
+And seven more: chevron_parquet (ambientCG WoodFloor057: two flat `brick`s turned 45° either
+way, chosen by a `square` wave across the floor, so each column's strips lean the other way;
+94.5 → 8.01), algae_planks (ambientCG Planks038: olive boards greened by algae along the grain;
+16.4 → 2.85), mossy_pebble_paving (ambientCG PavingStones139: `disc` sprites as cobbles in moss;
+117 → 2.01), rubble_slate_wall (castle_wall_slates: flat slates in thick pale mortar, a warped
+`brick`; 12.8 → 5.84, more regular than the scan), leafy_lawn (leafy_grass: thin grass strewn
+with leaves; 6.45 → 1.68), concrete_rubble (rubble: broken slabs as large `stone` sprites; 24.6
+→ 1.07) and pantiles (roof_tiles: orange tiles fluted by a `scallop` wave; 15.2 → 11.6, its
+channels fainter than the scan's).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

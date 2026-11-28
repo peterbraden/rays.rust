@@ -383,6 +383,16 @@ impl Breaker {
             arc[j]
         };
         let top = surface[crest].y.max(1e-6);
+        // How thick the water is at each point: how near the surface comes to it elsewhere
+        // (over half a height away along it), the jet's thickness on the lip. The cross waves
+        // move each side of the lip along its own normal, opposite ways, so on a thin jet they
+        // are kept to a share of its thickness (at full strength the lip thinned and thickened
+        // in bands, the sky showing through where thin).
+        let thin: Vec<f64> = (0..n_wave).map(|j| {
+            let near = (0..n_wave).filter(|&k| (arc[k] - arc[j]).abs() > 0.5 * h)
+                .map(|k| (wave[k] - wave[j]).norm()).fold(f64::INFINITY, f64::min);
+            crate::math::smoothstep(0.1 * h, 0.6 * h, near)
+        }).collect();
         let mut loop_ = Vec::with_capacity(count);
         let mut weight = Vec::with_capacity(count);
         let mut roller: Vec<(f64, f64)> = Vec::with_capacity(count);
@@ -405,6 +415,7 @@ impl Breaker {
             let near_tip = crate::math::smoothstep(0.05, 0.35, (arc[j] - tip_arc).abs());
             let up = (p.y / top).clamp(0., 1.);
             loop_.push(p);
+            let near_tip = near_tip * thin[j];
             if places[j] < tip_at {
                 weight.push(near_tip * (GLASSY + (1. - GLASSY) * (1. - up).powi(2)));
                 roller.push((churn * 0.2 * h * up.powi(3), churn * (0.3 + 0.7 * up)));
@@ -713,7 +724,9 @@ impl BreakerWater {
             let x = p.x + 1.2 * (p.y - self.trough) + 0.6 * n(p.y / 0.7 + 3.9, p.z / 0.7, p.x / 1.5);
             let line = 1. - (n(x / 0.18 + 41.3, p.y / 1.3, p.z / 1.3) + 0.3 * n(x / 0.07 + 2.2, p.y / 0.5, p.z / 0.5)).abs();
             let patches = crate::math::smoothstep(0.0, 0.3, n(p.x / 4. + 13.7, p.y / 2., p.z / 2.));
-            cover = cover.max(face * patches * crate::math::smoothstep(0.7, 0.73, line));
+            // (Where the noise is within a tenth of zero: within 0.3, the lines were a decimetre
+            // wide, broad bands seen from in the tube.)
+            cover = cover.max(face * patches * crate::math::smoothstep(0.89, 0.92, line));
         }
         cover.clamp(0., 1.)
     }

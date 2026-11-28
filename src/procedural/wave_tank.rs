@@ -389,3 +389,51 @@ mod tests {
         assert!((end.y - height).abs() < 0.1 * height, "{}", end.y);
     }
 }
+
+#[cfg(test)]
+mod breaking {
+    use super::*;
+
+    /// A solitary wave H/h = 0.45 shoaling up a 1:15 slope to a shelf, run until its face
+    /// overturns (or a step limit), writing profiles to RAYS_TANK_PROFILES (JSON) for drawing.
+    #[test]
+    #[ignore]
+    fn measure_a_solitary_wave_breaking_on_a_slope() {
+        let (g, h, height) = (1., 1., 0.45);
+        let bed = vec![Vector2::new(0., -h), Vector2::new(12., -h), Vector2::new(25.5, -0.1), Vector2::new(32., -0.1)];
+        let (eta, phi) = solitary(height, h, 5., g);
+        let mut tank = Tank::new(bed, g, 401, eta, phi);
+        let mut profiles = vec![];
+        let mut steps = 0;
+        let started = std::time::Instant::now();
+        // Until its face overturns, and then on as its jet plunges, until the steps grow too
+        // short (the jet's markers crowding) or the jet's tip comes down to the water before it.
+        let mut broke: Option<(f64, Vector2<f64>, f64)> = None;
+        let mut after = 0;
+        while steps < 4000 && after < 400 {
+            let dt = tank.time_step(0.3);
+            tank.step(dt);
+            steps += 1;
+            if steps % 5 == 0 { tank.smooth(); }
+            if broke.is_none() && tank.overturned() {
+                let c = tank.crest();
+                broke = Some((tank.time, c, tank.depth(c.x)));
+            }
+            if broke.is_some() { after += 1; }
+            if dt < 2e-4 { break; }
+            if steps % 25 == 0 || (broke.is_some() && after % 20 == 0) {
+                let c = tank.crest();
+                println!("t {:.3} dt {:.5} crest [{:.3}, {:.3}] depth {:.3}", tank.time, dt, c.x, c.y, tank.depth(c.x));
+                profiles.push(serde_json::json!({"t": tank.time, "points": tank.surface.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()}));
+            }
+        }
+        let (tb, c, hb) = broke.expect("the wave never broke");
+        println!("{} steps in {:.1?}: face vertical at t {:.3}, crest [{:.3}, {:.3}] over depth {:.3}, crest / depth {:.2}; run on to t {:.3}",
+            steps, started.elapsed(), tb, c.x, c.y, hb, c.y / hb, tank.time);
+        profiles.push(serde_json::json!({"t": tank.time, "points": tank.surface.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()}));
+        if let Ok(path) = std::env::var("RAYS_TANK_PROFILES") {
+            std::fs::write(path, serde_json::json!({"bed": tank.bed.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "profiles": profiles}).to_string()).unwrap();
+        }
+        assert!(tank.overturned());
+    }
+}

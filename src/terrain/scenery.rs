@@ -330,6 +330,10 @@ impl Layer {
 
     fn wet(&self, d: &Vector3<f64>) -> bool {
         let (Some(water), Some((x, z))) = (&self.water, self.tangent(d)) else { return false };
+        // (Not across a playa: the rivers that reach a closed basin's floor spread and sink
+        // into it, or feed its lake, drawn as brine. Routed on, cell to cell, they were drawn
+        // as straight lines across the salt.)
+        if self.fields.at(&self.domain, crate::graph::Field::Playa, d, 0.).unwrap_or(0.) > 0.3 { return false; }
         water.wet(point_cell(&self.domain, [x, z]), [x, z])
     }
 }

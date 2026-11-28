@@ -21,7 +21,8 @@
    "width": 60,
    "stage": 1.0,
    "peel": 1.5,
-   "seed": 3
+   "seed": 3,
+   "lace": 0
   }
  },
  "camera": {
@@ -80,7 +81,8 @@
    "width": 60,
    "stage": 1.0,
    "peel": 1.5,
-   "seed": 3
+   "seed": 3,
+   "lace": 0
   },
   {
    "type": "volume",

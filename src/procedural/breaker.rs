@@ -43,6 +43,9 @@ pub struct Breaker {
     /// How much the wave varies along its crest (0 for none, 1 by default): its height, how
     /// thick its lip is and how far it throws, and the crest's line, bending in plan.
     pub variation: f64,
+    /// How much foam earlier waves left on the water before it (0 to 1: none for the first of
+    /// a set, glassy).
+    pub lace: f64,
     /// This section's lip's thickness and throw, as multiples of the usual.
     pub lip: f64,
     pub throw: f64,
@@ -64,8 +67,8 @@ const CAVITY: f64 = 0.33;
 /// The trough's level below still water and the crest's above, as fractions of the height.
 const TROUGH: f64 = 0.3;
 /// The lip's thickness at its tip and over the cavity's roof, as fractions of the height.
-const TIP: f64 = 0.04;
-const ROOF: f64 = 0.23;
+const TIP: f64 = 0.10;
+const ROOF: f64 = 0.30;
 /// How far the lip throws, at its fullest: the angle round the cavity its tip reaches beyond
 /// the roof (radians).
 const THROW: f64 = 2.1;
@@ -88,6 +91,7 @@ impl Breaker {
             stage: n("stage", 0.9).clamp(0., 1.),
             peel: n("peel", 0.8),
             variation: n("variation", 1.).max(0.),
+            lace: n("lace", 1.).clamp(0., 1.),
             lip: 1.,
             throw: 1.,
             finger: 0.,
@@ -472,6 +476,7 @@ pub struct BreakerWater {
     /// The trough's level and the wave's height, for where foam lies.
     trough: f64,
     height: f64,
+    lace: f64,
 }
 
 impl BreakerWater {
@@ -480,6 +485,7 @@ impl BreakerWater {
             noise: crate::noise::PerlinNoise::shuffled(breaker.seed.wrapping_add(0x5717)),
             trough: breaker.center.y - TROUGH * breaker.height,
             height: breaker.height,
+            lace: breaker.lace,
         }
     }
 
@@ -497,7 +503,7 @@ impl BreakerWater {
         let level = crate::math::smoothstep(0.85, 0.97, normal.y);
         let low = 1. - crate::math::smoothstep(0.1, 0.25, up);
         let mut cover = 0.;
-        if level * low > 0. {
+        if level * low * self.lace > 0. {
             // The lace foam leaves on water: gathered into a network of thin lines along the
             // edges between the cells of water welling up beneath (where the second-nearest
             // of scattered points is nearly as near as the nearest), with dark water between;
@@ -516,6 +522,8 @@ impl BreakerWater {
             let net = lines(0.7, (0.015 + 0.06 * thick) * (0.3 + 1.4 * vary), 11) * broken;
             let fine = lines(0.22, (0.008 + 0.02 * thick) * (0.3 + 1.4 * vary), 23) * crate::math::smoothstep(0.45, 0.7, thick);
             let filled = crate::math::smoothstep(0.8, 0.95, thick);
+            // (Less of it: the thinnest lines go first, then the net.)
+            let thick = thick - 0.6 * (1. - self.lace);
             cover = level * low * net.max(fine).max(filled) * crate::math::smoothstep(0.15, 0.35, thick);
         }
         // The lines, where the face rises (not the level water, nor the back, which faces

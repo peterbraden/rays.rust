@@ -43066,29 +43066,29 @@
     "doc": "Scaly bark: reddish-brown plates, longer than they are wide, separated by dark fissures, with green moss and algae in the fissures and over patches of the trunk; modelled on ambientCG's Bark014.",
     "variables": {
       "bark": [
-        0.4,
-        0.25,
-        0.15
+        0.2648,
+        0.1948,
+        0.13
       ],
       "bark2": [
-        0.26,
-        0.16,
-        0.09
+        0.184,
+        0.0997,
+        0.0498
       ],
       "dark": [
-        0.08,
-        0.05,
-        0.03
+        0.0574,
+        0.0474,
+        0.0299
       ],
       "moss": [
-        0.28,
-        0.3,
-        0.12
+        0.275,
+        0.2665,
+        0.0918
       ],
       "pale": [
-        0.48,
-        0.38,
-        0.28
+        0.4961,
+        0.3939,
+        0.2867
       ]
     },
     "material": {
@@ -43371,33 +43371,74 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 18.621877,
+            "fitted": 7.734115
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.70533,
+            "variables.bark": [
+              0.2648,
+              0.1948,
+              0.13
+            ],
+            "variables.bark2": [
+              0.184,
+              0.0997,
+              0.0498
+            ],
+            "variables.pale": [
+              0.4961,
+              0.3939,
+              0.2867
+            ],
+            "variables.dark": [
+              0.0574,
+              0.0474,
+              0.0299
+            ],
+            "variables.moss": [
+              0.275,
+              0.2665,
+              0.0918
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7053
   },
   "lawn": {
     "show": "landscape",
     "doc": "A lawn: short, dense grass, blade over blade in a dozen greens, yellower at the tips, the soil barely showing between; modelled on ambientCG's Grass004.",
     "variables": {
       "green": [
-        0.25,
-        0.4,
-        0.1
+        0.1178,
+        0.2036,
+        0.0137
       ],
       "green2": [
-        0.14,
-        0.24,
-        0.05
+        0.0811,
+        0.0694,
+        0.02
       ],
       "tip": [
-        0.45,
-        0.52,
-        0.22
+        0.2897,
+        0.2969,
+        0.1048
       ],
       "soil": [
-        0.08,
-        0.1,
-        0.03
+        0.0284,
+        0.0666,
+        0.0155
       ]
     },
     "material": {
@@ -43606,32 +43647,68 @@
             ],
             "chroma": 0.06
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 831.293137,
+            "fitted": 5.683659
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.974,
+            "variables.green": [
+              0.1178,
+              0.2036,
+              0.0137
+            ],
+            "variables.green2": [
+              0.0811,
+              0.0694,
+              0.02
+            ],
+            "variables.tip": [
+              0.2897,
+              0.2969,
+              0.1048
+            ],
+            "variables.soil": [
+              0.0284,
+              0.0666,
+              0.0155
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.974
   },
   "oak_floorboards": {
     "doc": "Oak floorboards: long boards a hand wide, laid with staggered ends, each its own shade of honey brown with the grain streaming along it; modelled on ambientCG's WoodFloor051.",
     "variables": {
       "oak": [
-        0.5,
-        0.33,
-        0.2
+        0.3888,
+        0.2426,
+        0.1437
       ],
       "oak2": [
-        0.38,
-        0.24,
-        0.14
+        0.2636,
+        0.1485,
+        0.0752
       ],
       "light": [
-        0.6,
-        0.44,
-        0.3
+        0.5738,
+        0.4129,
+        0.2795
       ],
       "seam": [
-        0.2,
-        0.12,
-        0.07
+        0.19,
+        0.1136,
+        0.0656
       ]
     },
     "material": {
@@ -43855,33 +43932,69 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 33.297752,
+            "fitted": 4.942928
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.73975,
+            "variables.oak": [
+              0.3888,
+              0.2426,
+              0.1437
+            ],
+            "variables.oak2": [
+              0.2636,
+              0.1485,
+              0.0752
+            ],
+            "variables.light": [
+              0.5738,
+              0.4129,
+              0.2795
+            ],
+            "variables.seam": [
+              0.19,
+              0.1136,
+              0.0656
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7398
   },
   "road_markings": {
     "show": "landscape",
     "doc": "A road: dark asphalt, gritty and patched, with a dashed white centre line and solid white lines at its edges, worn in places; modelled on ambientCG's Road007.",
     "variables": {
       "tar": [
-        0.12,
-        0.12,
-        0.12
+        0.0705,
+        0.07,
+        0.0662
       ],
       "tar2": [
-        0.08,
-        0.08,
-        0.08
+        0.0617,
+        0.0615,
+        0.0585
       ],
       "grit": [
-        0.22,
-        0.22,
-        0.21
+        0.1353,
+        0.1346,
+        0.1285
       ],
       "paint": [
-        0.75,
-        0.75,
-        0.72
+        0.2207,
+        0.2194,
+        0.2088
       ]
     },
     "material": {
@@ -44209,7 +44322,42 @@
             ],
             "chroma": 0.02
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 1830.226349,
+            "fitted": 54.094586
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": "colours only: the fitted scale pushed the edge lines out of the scan's frame, where they are 3 m from the centre",
+          "values": {
+            "scale": 1.2334,
+            "variables.tar": [
+              0.0705,
+              0.07,
+              0.0662
+            ],
+            "variables.tar2": [
+              0.0617,
+              0.0615,
+              0.0585
+            ],
+            "variables.grit": [
+              0.1353,
+              0.1346,
+              0.1285
+            ],
+            "variables.paint": [
+              0.2207,
+              0.2194,
+              0.2088
+            ]
+          }
+        }
       }
     ]
   },
@@ -44218,29 +44366,29 @@
     "doc": "Lichen-crusted rock: buff and grey stone, rough and mottled, spotted with pale grey rosettes of lichen and patches of green crust; modelled on ambientCG's Rock045.",
     "variables": {
       "rock": [
-        0.5,
-        0.46,
-        0.36
+        0.3577,
+        0.3508,
+        0.3023
       ],
       "rock2": [
-        0.36,
-        0.33,
-        0.25
+        0.1919,
+        0.1815,
+        0.1197
       ],
       "lichen": [
-        0.68,
-        0.68,
-        0.62
+        0.445,
+        0.4348,
+        0.3637
       ],
       "green": [
-        0.45,
-        0.48,
-        0.28
+        0.3917,
+        0.3504,
+        0.1914
       ],
       "dark": [
-        0.18,
-        0.17,
-        0.13
+        0.1264,
+        0.1262,
+        0.0949
       ]
     },
     "material": {
@@ -44467,38 +44615,79 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 93.842577,
+            "fitted": 24.883764
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.70304,
+            "variables.rock": [
+              0.3577,
+              0.3508,
+              0.3023
+            ],
+            "variables.rock2": [
+              0.1919,
+              0.1815,
+              0.1197
+            ],
+            "variables.dark": [
+              0.1264,
+              0.1262,
+              0.0949
+            ],
+            "variables.lichen": [
+              0.445,
+              0.4348,
+              0.3637
+            ],
+            "variables.green": [
+              0.3917,
+              0.3504,
+              0.1914
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.703
   },
   "crushed_stone": {
     "show": "landscape",
     "doc": "Crushed stone: angular grey chippings of many sizes packed together, the larger ones mottled and pale, dark grit between; modelled on ambientCG's Gravel020.",
     "variables": {
       "light": [
-        0.62,
-        0.62,
-        0.62
+        0.526,
+        0.5285,
+        0.5112
       ],
       "mid": [
-        0.45,
-        0.45,
-        0.46
+        0.206,
+        0.2098,
+        0.1874
       ],
       "dark": [
-        0.3,
-        0.3,
-        0.31
+        0.1738,
+        0.1736,
+        0.1844
       ],
       "rim": [
-        0.16,
-        0.16,
-        0.17
+        0.0456,
+        0.0409,
+        0.0357
       ],
       "fines": [
-        0.22,
-        0.22,
-        0.22
+        0.2002,
+        0.2004,
+        0.1945
       ]
     },
     "material": {
@@ -44865,8 +45054,49 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 440.188901,
+            "fitted": 3.255861
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.2188,
+            "variables.light": [
+              0.526,
+              0.5285,
+              0.5112
+            ],
+            "variables.mid": [
+              0.206,
+              0.2098,
+              0.1874
+            ],
+            "variables.dark": [
+              0.1738,
+              0.1736,
+              0.1844
+            ],
+            "variables.rim": [
+              0.0456,
+              0.0409,
+              0.0357
+            ],
+            "variables.fines": [
+              0.2002,
+              0.2004,
+              0.1945
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.2188
   }
 }

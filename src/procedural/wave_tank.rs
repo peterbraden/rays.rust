@@ -509,6 +509,60 @@ pub fn solitary(height: f64, depth: f64, x0: f64, g: f64) -> (impl Fn(f64) -> f6
     (eta, phi)
 }
 
+/// The sections of a breaker for drawing one (`breaker::Breaker` with `"model":
+/// "simulated"`): a solitary wave H/h = 0.45 run up a slope of 1 in `slope` until its jet
+/// touches down, and `frames` of its surface from as long before its face overturns as it
+/// takes from then to touchdown, evenly in time, each `points` points along the surface
+/// (closer where it curves) from three crest heights behind its crest to two and a half in
+/// front. In units of the crest's height above the still water as it overturns, x shoreward
+/// from a point moving with the wave (the crest as it overturns, at the speed it had then).
+pub fn breaker_frames(slope: f64, frames: usize, points: usize) -> Vec<Vec<Vector2<f64>>> {
+    let mut record: Vec<(f64, Vec<Vector2<f64>>)> = vec![];
+    let b = break_on_slope(0.45, slope, 0.08, |tank| record.push((tank.time, tank.surface.clone())));
+    assert!(b.tube.is_some(), "the wave on 1:{} never closed a tube", slope);
+    let crest_at = |t: f64| {
+        let k = record.partition_point(|r| r.0 < t).min(record.len() - 1);
+        *record[k].1.iter().max_by(|a, b| a.y.total_cmp(&b.y)).unwrap()
+    };
+    let (t1, t2) = (b.overturned, b.time);
+    let t0 = t1 - (t2 - t1);
+    let unit = b.crest.y;
+    let speed = (crest_at(t1).x - crest_at(t1 - 0.5).x) / 0.5;
+    (0..frames).map(|f| {
+        let t = t0 + (t2 - t0) * f as f64 / (frames - 1) as f64;
+        let k = record.partition_point(|r| r.0 < t).min(record.len() - 1);
+        let surface = &record[k].1;
+        let origin = b.crest.x + speed * (record[k].0 - t1);
+        let (from, to) = (origin - 3. * unit, origin + 2.5 * unit);
+        let first = surface.iter().position(|p| p.x >= from).unwrap().saturating_sub(1);
+        let last = (surface.len() - 1 - surface.iter().rev().position(|p| p.x <= to).unwrap() + 1).min(surface.len() - 1);
+        let line = &surface[first..=last];
+        let m = line.len();
+        let mut s = vec![0.; m];
+        for i in 1..m { s[i] = s[i - 1] + (line[i] - line[i - 1]).norm(); }
+        // Closer where the surface curves (the jet's tip), at most seven times.
+        let mut w = vec![1.; m];
+        for i in 1..m - 1 {
+            let (a, c) = (line[i] - line[i - 1], line[i + 1] - line[i]);
+            let kappa = a.perp(&c).atan2(a.dot(&c)).abs() / (0.5 * (a.norm() + c.norm())).max(1e-12);
+            w[i] = 1. + (0.5 * kappa * unit).min(6.);
+        }
+        for _ in 0..4 {
+            let v = w.clone();
+            for i in 1..m - 1 { w[i] = 0.25 * v[i - 1] + 0.5 * v[i] + 0.25 * v[i + 1]; }
+        }
+        let mut cum = vec![0.; m];
+        for i in 1..m { cum[i] = cum[i - 1] + 0.5 * (w[i - 1] + w[i]) * (s[i] - s[i - 1]); }
+        (0..points).map(|j| {
+            let c = cum[m - 1] * j as f64 / (points - 1) as f64;
+            let i = cum.partition_point(|&v| v < c).clamp(1, m - 1);
+            let u = (c - cum[i - 1]) / (cum[i] - cum[i - 1]).max(1e-300);
+            let p = line[i - 1] + (line[i] - line[i - 1]) * u;
+            Vector2::new((p.x - origin) / unit, p.y / unit)
+        }).collect()
+    }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,5 +713,20 @@ mod breaking {
         if let Ok(path) = std::env::var("RAYS_TANK_SWEEP") {
             std::fs::write(path, serde_json::Value::Array(out).to_string()).unwrap();
         }
+    }
+
+    /// Writes the breaker's simulated sections, `breaker_frames(15., 33, 240)`, to
+    /// src/procedural/breaker_frames.json, which `breaker::Breaker` reads (a run of a few
+    /// minutes, so kept rather than run as a scene loads).
+    #[test]
+    #[ignore]
+    fn write_breaker_frames() {
+        let frames = breaker_frames(15., 33, 240);
+        let round = |v: f64| (v * 1e4).round() / 1e4;
+        let json = serde_json::json!({
+            "source": "wave_tank::breaker_frames(15., 33, 240): a solitary wave H/h 0.45 on a 1:15 slope, from overturning less the time to touchdown, to touchdown",
+            "frames": frames.iter().map(|f| f.iter().map(|p| [round(p.x), round(p.y)]).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        });
+        std::fs::write("src/procedural/breaker_frames.json", json.to_string()).unwrap();
     }
 }

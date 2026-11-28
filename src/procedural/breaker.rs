@@ -25,6 +25,20 @@ use serde_json::Value;
 /// far it bulges, m, and how much it is churned): `Breaker::churned_section`.
 pub type ChurnedSection = (Vec<Vector2<f64>>, Vec<f64>, Vec<(f64, f64)>);
 
+/// The wave tank's sections of a breaker (`wave_tank::breaker_frames`, kept in
+/// breaker_frames.json): frames evenly in time from before its face overturns to its jet's
+/// touchdown, each the same number of points from behind its crest to in front, x shoreward,
+/// in units of its crest's height.
+fn simulated_frames() -> &'static Vec<Vec<Vector2<f64>>> {
+    static FRAMES: std::sync::OnceLock<Vec<Vec<Vector2<f64>>>> = std::sync::OnceLock::new();
+    FRAMES.get_or_init(|| {
+        let v: Value = serde_json::from_str(include_str!("breaker_frames.json")).unwrap();
+        v["frames"].as_array().unwrap().iter().map(|f| {
+            f.as_array().unwrap().iter().map(|p| Vector2::new(p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect()
+        }).collect()
+    })
+}
+
 /// A plunging breaker, the wave travelling towards -z, its crest along x.
 #[derive(Clone, Debug)]
 pub struct Breaker {
@@ -56,6 +70,11 @@ pub struct Breaker {
     pub churn: f64,
     /// How many points across a section and sections along the crest.
     pub resolution: (usize, usize),
+    /// Whether its sections are the wave tank's (`"model": "simulated"`: a breaker followed
+    /// by potential flow from before its face overturns to its jet's touchdown,
+    /// `wave_tank::breaker_frames`) rather than drawn (New's elliptical cavity under a thrown
+    /// lip, the default).
+    pub simulated: bool,
     pub seed: u64,
 }
 
@@ -97,6 +116,7 @@ impl Breaker {
             finger: 0.,
             churn: 0.,
             resolution: (resolution.0.max(60), resolution.1.max(2)),
+            simulated: o["model"].as_str() == Some("simulated"),
             seed: SceneFile::parse_int(&o["seed"], 0) as u64,
         }
     }
@@ -154,6 +174,7 @@ impl Breaker {
     /// roller's rounded mass high on the bore's front, its lumps over the front, the crest and
     /// the top of the back, a little over the water before it.
     pub fn churned_section(&self, stage: f64, count: usize) -> ChurnedSection {
+        if self.simulated { return self.simulated_section(stage, count); }
         let h = self.height;
         let bed = -self.depth - 0.05 * h;
         let (front, back) = (-12. * h, 8. * h);
@@ -283,6 +304,150 @@ impl Breaker {
         (loop_, weight, roller)
     }
 
+    /// The wave tank's surface at `stage`, between its two nearest frames, scaled to the
+    /// wave's height (the tank's crest height above the water before it as the face
+    /// overturns) and turned to travel towards -z, as points from the water in front to the
+    /// back; with the indices of the lip's tip (the crest itself until the face overturns)
+    /// and of the crest.
+    fn simulated_surface(&self, stage: f64) -> (Vec<Vector2<f64>>, usize, usize) {
+        let frames = simulated_frames();
+        let f = stage.clamp(0., 1.) * (frames.len() - 1) as f64;
+        let i = (f as usize).min(frames.len() - 2);
+        let u = f - i as f64;
+        let h = self.height;
+        let surface: Vec<Vector2<f64>> = frames[i].iter().zip(&frames[i + 1]).rev()
+            .map(|(p, q)| { let r = p + (q - p) * u; Vector2::new(-r.x * h, r.y * h) }).collect();
+        let crest = (0..surface.len()).max_by(|&a, &b| surface[a].y.total_cmp(&surface[b].y)).unwrap();
+        // The tip: from the crest towards the front, the most shoreward point (least z) before
+        // the surface turns back seaward by a twentieth of the height (over the jet's
+        // underside); none where it never does.
+        let mut tip = crest;
+        for k in (0..crest).rev() {
+            if surface[k].x < surface[tip].x { tip = k; }
+            else if surface[k].x > surface[tip].x + 0.05 * h { break; }
+            if k == 0 { tip = crest; }
+        }
+        (surface, tip, crest)
+    }
+
+    /// The middle of the simulated wave's cavity at `stage`: the centroid of what the lip
+    /// encloses, from its tip back along its underside and down the face to near the water
+    /// before it (seaward of the tip), closed by the line from there back to the tip. Below the
+    /// crest, in front, where the face hasn't overturned.
+    fn simulated_cavity(&self, stage: f64) -> Vector2<f64> {
+        let (surface, tip, crest) = self.simulated_surface(stage);
+        let h = self.height;
+        let low = 0.15 * surface[crest].y;
+        let foot = (0..tip).rev().find(|&k| surface[k].y < low && surface[k].x > surface[tip].x + 0.05 * h);
+        let ring = match foot { Some(k) if tip > k + 2 => &surface[k..=tip], _ => return surface[crest] - Vector2::new(0.3 * h, 0.5 * h) };
+        let (mut a, mut c) = (0., Vector2::zeros());
+        for i in 0..ring.len() {
+            let (p, q) = (ring[i], ring[(i + 1) % ring.len()]);
+            let cross = p.perp(&q);
+            a += cross / 2.;
+            c += (p + q) * cross / 6.;
+        }
+        if a.abs() < 1e-9 { surface[crest] } else { c / a }
+    }
+
+    /// As `churned_section`, the wave tank's (`simulated`): its surface between the water in
+    /// front, level to the section's front, and the back of the wave, falling to the still
+    /// water behind; the cross waves and the roller shared out as on the drawn wave's face,
+    /// lip and back.
+    fn simulated_section(&self, stage: f64, count: usize) -> ChurnedSection {
+        let h = self.height;
+        let bed = -self.depth - 0.05 * h;
+        let (front, back) = (-12. * h, 8. * h);
+        let (surface, tip, crest) = self.simulated_surface(stage);
+        let corners = 2;
+        let n_front = (count - corners) / 10;
+        let n_fall = (count - corners) / 12;
+        let n_still = (count - corners) / 12;
+        let n_wave = count - corners - n_front - n_fall - n_still;
+        let churn = self.churn.clamp(0., 1.);
+        const GLASSY: f64 = 0.35;
+        // The surface resampled to n_wave points evenly in its points (which are closer where
+        // it curves), keeping track of where the tip and crest fall.
+        let m = surface.len();
+        let at = |v: f64| {
+            let k = (v as usize).min(m - 2);
+            surface[k] + (surface[k + 1] - surface[k]) * (v - k as f64)
+        };
+        let places: Vec<f64> = (0..n_wave).map(|j| j as f64 * (m - 1) as f64 / (n_wave - 1) as f64).collect();
+        let wave: Vec<Vector2<f64>> = places.iter().map(|&v| at(v)).collect();
+        let (tip_at, crest_at) = (tip as f64, crest as f64);
+        let mut arc = vec![0.; n_wave];
+        for j in 1..n_wave { arc[j] = arc[j - 1] + (wave[j] - wave[j - 1]).norm(); }
+        let tip_arc = {
+            let j = places.partition_point(|&v| v < tip_at).min(n_wave - 1);
+            arc[j]
+        };
+        let top = surface[crest].y.max(1e-6);
+        let mut loop_ = Vec::with_capacity(count);
+        let mut weight = Vec::with_capacity(count);
+        let mut roller: Vec<(f64, f64)> = Vec::with_capacity(count);
+        loop_.push(Vector2::new(back, bed));
+        loop_.push(Vector2::new(front, bed));
+        weight.extend([0., 0.]);
+        roller.extend([(0., 0.), (0., 0.)]);
+        // The water in front, level out to the section's front.
+        let start = wave[0];
+        for i in 0..n_front {
+            let u = i as f64 / n_front as f64;
+            loop_.push(Vector2::new(front + (start.x - front) * u, start.y));
+            weight.push(if i == 0 { 0. } else { 1. });
+            roller.push((0., churn * 0.3 * u.powi(8)));
+        }
+        // The tank's surface: up the face, under the lip to its tip, back over it to the crest
+        // and down the back. (Smooth where the flow draws it smooth, as the drawn wave.)
+        for j in 0..n_wave {
+            let p = wave[j];
+            let near_tip = crate::math::smoothstep(0.05, 0.35, (arc[j] - tip_arc).abs());
+            let up = (p.y / top).clamp(0., 1.);
+            loop_.push(p);
+            if places[j] < tip_at {
+                weight.push(near_tip * (GLASSY + (1. - GLASSY) * (1. - up).powi(2)));
+                roller.push((churn * 0.2 * h * up.powi(3), churn * (0.3 + 0.7 * up)));
+            } else if places[j] <= crest_at {
+                weight.push(near_tip * GLASSY);
+                roller.push((churn * 0.2 * h * up.powi(3), churn * (0.3 + 0.7 * up)));
+            } else {
+                let u = (places[j] - crest_at) / ((m - 1) as f64 - crest_at).max(1e-9);
+                weight.push(GLASSY + (1. - GLASSY) * u);
+                roller.push((churn * 0.2 * h * (1. - u).powi(2), 0.5 * churn * (1. - u).powi(2)));
+            }
+        }
+        // The back falling to the still water (a smooth step, level at both ends), and the
+        // still water out to the back.
+        let end = wave[n_wave - 1];
+        let fall = end.x + 3. * h;
+        for i in 1..=n_fall {
+            let u = i as f64 / n_fall as f64;
+            let s = u * u * (3. - 2. * u);
+            loop_.push(Vector2::new(end.x + (fall - end.x) * u, end.y * (1. - s)));
+            weight.push(1.);
+            roller.push((0., 0.));
+        }
+        for i in 1..=n_still {
+            let u = i as f64 / n_still as f64;
+            loop_.push(Vector2::new(fall + (back - fall) * u, 0.));
+            weight.push(if i == n_still { 0. } else { 1. });
+            roller.push((0., 0.));
+        }
+        debug_assert_eq!(loop_.len(), count);
+        if signed_area(&loop_) < 0. {
+            loop_.reverse();
+            weight.reverse();
+            roller.reverse();
+        }
+        (loop_, weight, roller)
+    }
+
+    /// The level of the water before the wave, below still water (m).
+    fn trough(&self) -> f64 {
+        if self.simulated { 0. } else { -TROUGH * self.height }
+    }
+
     /// The breaker as a closed mesh: sections along the crest, each at its own stage (the
     /// wave peeling) and height (varying a little along the crest), joined, and capped at the
     /// ends.
@@ -341,11 +506,16 @@ impl Breaker {
     /// the more so the earlier): for placing a camera in the tube or the water the lip throws up
     /// as it lands.
     pub fn tube(&self, x: f64) -> (Vector3<f64>, Vector3<f64>, f64) {
-        let (varied, _, bend, stage) = self.at_raw(x);
+        let (varied, shape, bend, stage) = self.at_raw(x);
         let stage = stage.max(0.);
-        let (c, _, _) = varied.cavity();
+        let c = if self.simulated { varied.simulated_cavity(shape) } else { varied.cavity().0 };
         let (_, top) = varied.extremes();
-        let (tip, _) = varied.on_cavity(top + varied.reach(stage.min(1.)));
+        let tip = if self.simulated {
+            let (surface, tip, _) = varied.simulated_surface(shape);
+            surface[tip]
+        } else {
+            varied.on_cavity(top + varied.reach(stage.min(1.))).0
+        };
         let place = |p: Vector2<f64>| self.center + Vector3::new(x, p.y, p.x + bend);
         (place(c), place(tip), stage)
     }
@@ -485,7 +655,7 @@ impl BreakerWater {
     pub fn new(breaker: &Breaker) -> BreakerWater {
         BreakerWater {
             noise: crate::noise::PerlinNoise::shuffled(breaker.seed.wrapping_add(0x5717)),
-            trough: breaker.center.y - TROUGH * breaker.height,
+            trough: breaker.center.y + breaker.trough(),
             height: breaker.height,
             lace: breaker.lace,
         }
@@ -966,6 +1136,45 @@ mod tests {
         let volume: f64 = m.triangles.iter().map(|t| m.positions[t[0]].dot(&m.positions[t[1]].cross(&m.positions[t[2]])) / 6.).sum();
         let area = 0.5 * signed_area(&w.section(0.5, 200));
         assert!(volume > 0.5 * area * w.width && volume < 1.5 * area * w.width, "{} vs {}", volume, area * w.width);
+    }
+
+    #[test]
+    fn test_a_simulated_breakers_sections_are_simple_loops_that_overturn() {
+        let w = Breaker { simulated: true, ..wave() };
+        let h = w.height;
+        for k in 0..=20 {
+            let stage = k as f64 / 20.;
+            let s = w.section(stage, 300);
+            assert_eq!(s.len(), 300);
+            assert!(signed_area(&s) > 0.);
+            let n = s.len();
+            for i in 0..n {
+                for j in i + 2..n {
+                    if (j + 1) % n == i { continue; }
+                    assert!(!crosses(s[i], s[(i + 1) % n], s[j], s[(j + 1) % n]), "stage {}: edges {} and {} cross at {:?} {:?}", stage, i, j, s[i], s[j]);
+                }
+            }
+            let area: f64 = ear_clip(&s).iter().map(|t| 0.5 * ((s[t[1]] - s[t[0]]).perp(&(s[t[2]] - s[t[0]])))).sum();
+            assert!((area - 0.5 * signed_area(&s)).abs() < 1e-6 * area.abs(), "stage {}: {} {}", stage, area, 0.5 * signed_area(&s));
+            // Its crest the wave's height above the water before it, as the face overturns.
+            let crest = s.iter().map(|p| p.y).fold(f64::MIN, f64::max);
+            assert!(crest > 0.6 * h && crest < 1.2 * h, "stage {}: {}", stage, crest);
+        }
+        // Overturned at the end, the lip's tip shoreward of the face below it, and not at
+        // the start.
+        let (late, tip, crest) = w.simulated_surface(1.);
+        assert!(tip < crest && late[tip].x < late[crest].x - 0.2 * h, "{:?} {:?}", late[tip], late[crest]);
+        let (_, tip, crest) = w.simulated_surface(0.);
+        assert_eq!(tip, crest);
+        let m = w.closed();
+        let mut edges = std::collections::HashMap::new();
+        for t in &m.triangles {
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+            }
+        }
+        assert!(edges.values().all(|&c| c == 2), "{} open edges", edges.values().filter(|&&c| c != 2).count());
     }
 }
 

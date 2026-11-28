@@ -22,19 +22,20 @@
    "stage": 1.0,
    "peel": 1.5,
    "seed": 3,
-   "lace": 0
+   "lace": 0,
+   "model": "simulated"
   }
  },
  "camera": {
   "location": [
    -4,
-   0.15,
-   0.5
+   0.7,
+   0.3
   ],
   "lookat": [
    -16,
-   0.2,
-   0.4
+   0.8,
+   0.1
   ],
   "up": [
    0,
@@ -82,7 +83,8 @@
    "stage": 1.0,
    "peel": 1.5,
    "seed": 3,
-   "lace": 0
+   "lace": 0,
+   "model": "simulated"
   },
   {
    "type": "volume",

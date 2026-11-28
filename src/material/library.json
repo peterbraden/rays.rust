@@ -38943,19 +38943,19 @@
     "doc": "Gingham: cotton woven in an even check of green and white, the stripes crossing to dark green squares, with the weave's texture; modelled on Poly Haven's gingham_check.",
     "variables": {
       "white": [
-        0.8,
-        0.8,
-        0.76
+        0.8177,
+        0.8149,
+        0.7601
       ],
       "mid": [
-        0.3,
-        0.45,
-        0.38
+        0.1473,
+        0.2368,
+        0.1885
       ],
       "green": [
-        0.04,
-        0.24,
-        0.16
+        0.0131,
+        0.0786,
+        0.0441
       ]
     },
     "material": {
@@ -39071,27 +39071,58 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 143.631392,
+            "fitted": 44.079387
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.9921,
+            "variables.white": [
+              0.8177,
+              0.8149,
+              0.7601
+            ],
+            "variables.mid": [
+              0.1473,
+              0.2368,
+              0.1885
+            ],
+            "variables.green": [
+              0.0131,
+              0.0786,
+              0.0441
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.9921
   },
   "corduroy": {
     "doc": "Corduroy: sage-green cotton with a soft pile in fine parallel ribs, darker in the grooves between; modelled on Poly Haven's ribbed_corduroy.",
     "variables": {
       "pile": [
-        0.5,
-        0.56,
-        0.46
+        0.2578,
+        0.2934,
+        0.2201
       ],
       "groove": [
-        0.34,
-        0.4,
-        0.32
+        0.2434,
+        0.2572,
+        0.1806
       ],
       "sheen": [
-        0.58,
-        0.63,
-        0.54
+        0.3602,
+        0.4,
+        0.3168
       ]
     },
     "material": {
@@ -39213,37 +39244,68 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 1326.986049,
+            "fitted": 13.186719
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.71146,
+            "variables.pile": [
+              0.2578,
+              0.2934,
+              0.2201
+            ],
+            "variables.groove": [
+              0.2434,
+              0.2572,
+              0.1806
+            ],
+            "variables.sheen": [
+              0.3602,
+              0.4,
+              0.3168
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7115
   },
   "slate_roof": {
     "doc": "A slate roof: grey slates in overlapping courses, each its own shade, with pale crusts of lichen and shadowed lower edges; modelled on Poly Haven's roof_slates_03.",
     "variables": {
       "slate": [
-        0.3,
-        0.31,
-        0.32
+        0.1632,
+        0.1558,
+        0.1373
       ],
       "slate2": [
-        0.22,
-        0.23,
-        0.24
+        0.1521,
+        0.151,
+        0.1378
       ],
       "pale": [
-        0.45,
-        0.46,
-        0.46
+        0.2811,
+        0.2686,
+        0.2313
       ],
       "lichen": [
-        0.58,
-        0.58,
-        0.54
+        0.5769,
+        0.5765,
+        0.5337
       ],
       "shadow": [
-        0.06,
-        0.06,
-        0.06
+        0.0605,
+        0.0555,
+        0.0437
       ]
     },
     "material": {
@@ -39522,37 +39584,78 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 50.386197,
+            "fitted": 2.891722
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.90877,
+            "variables.slate": [
+              0.1632,
+              0.1558,
+              0.1373
+            ],
+            "variables.slate2": [
+              0.1521,
+              0.151,
+              0.1378
+            ],
+            "variables.pale": [
+              0.2811,
+              0.2686,
+              0.2313
+            ],
+            "variables.shadow": [
+              0.0605,
+              0.0555,
+              0.0437
+            ],
+            "variables.lichen": [
+              0.5769,
+              0.5765,
+              0.5337
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.9088
   },
   "granite_block_wall": {
     "doc": "A wall of granite blocks: big grey speckled stones of uneven, roughly squared shapes fitted together, with pale joints between them; modelled on Poly Haven's japanese_stone_wall.",
     "variables": {
       "stone": [
-        0.42,
-        0.42,
-        0.4
+        0.22,
+        0.1957,
+        0.159
       ],
       "stone2": [
-        0.32,
-        0.32,
-        0.31
+        0.2065,
+        0.2055,
+        0.1899
       ],
       "speck": [
-        0.6,
-        0.6,
-        0.58
+        0.5029,
+        0.479,
+        0.4404
       ],
       "dark": [
-        0.2,
-        0.2,
-        0.19
+        0.126,
+        0.1051,
+        0.0646
       ],
       "joint": [
-        0.3,
-        0.29,
-        0.26
+        0.153,
+        0.1375,
+        0.1099
       ]
     },
     "material": {
@@ -39767,38 +39870,79 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 115.666802,
+            "fitted": 4.357191
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.302,
+            "variables.stone": [
+              0.22,
+              0.1957,
+              0.159
+            ],
+            "variables.stone2": [
+              0.2065,
+              0.2055,
+              0.1899
+            ],
+            "variables.speck": [
+              0.5029,
+              0.479,
+              0.4404
+            ],
+            "variables.dark": [
+              0.126,
+              0.1051,
+              0.0646
+            ],
+            "variables.joint": [
+              0.153,
+              0.1375,
+              0.1099
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.302
   },
   "raked_dirt": {
     "show": "landscape",
     "doc": "Raked dirt: smooth grey-brown earth combed in faint parallel lines, with slivers of straw and dry leaves scattered over it; modelled on Poly Haven's raked_dirt.",
     "variables": {
       "dirt": [
-        0.36,
-        0.34,
-        0.3
+        0.1312,
+        0.1001,
+        0.0641
       ],
       "dirt2": [
-        0.26,
-        0.24,
-        0.21
+        0.1978,
+        0.1581,
+        0.1117
       ],
       "pale": [
-        0.46,
-        0.44,
-        0.4
+        0.2773,
+        0.2201,
+        0.146
       ],
       "straw": [
-        0.62,
-        0.55,
-        0.32
+        0.2735,
+        0.2045,
+        0.1187
       ],
       "straw2": [
-        0.4,
-        0.33,
-        0.18
+        0.3109,
+        0.2657,
+        0.1388
       ]
     },
     "material": {
@@ -40030,33 +40174,74 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 121.619057,
+            "fitted": 3.752487
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.3494,
+            "variables.dirt": [
+              0.1312,
+              0.1001,
+              0.0641
+            ],
+            "variables.dirt2": [
+              0.1978,
+              0.1581,
+              0.1117
+            ],
+            "variables.pale": [
+              0.2773,
+              0.2201,
+              0.146
+            ],
+            "variables.straw": [
+              0.2735,
+              0.2045,
+              0.1187
+            ],
+            "variables.straw2": [
+              0.3109,
+              0.2657,
+              0.1388
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.3494
   },
   "slushy_ruts": {
     "show": "landscape",
     "doc": "Ruts in snow: wheel tracks pressed through a snowy track to dark wet mud, their edges ragged with slush; modelled on Poly Haven's snow_04.",
     "variables": {
       "snow": [
-        0.8,
-        0.81,
-        0.84
+        0.823,
+        0.8309,
+        0.8502
       ],
       "snow2": [
-        0.62,
-        0.63,
-        0.66
+        0.1789,
+        0.1676,
+        0.1398
       ],
       "mud": [
-        0.22,
-        0.2,
-        0.17
+        0.003,
+        0.003,
+        0.003
       ],
       "mud2": [
-        0.35,
-        0.32,
-        0.28
+        0.1568,
+        0.14,
+        0.0964
       ]
     },
     "material": {
@@ -40347,32 +40532,68 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 32.613883,
+            "fitted": 18.177074
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.3759,
+            "variables.snow": [
+              0.823,
+              0.8309,
+              0.8502
+            ],
+            "variables.snow2": [
+              0.1789,
+              0.1676,
+              0.1398
+            ],
+            "variables.mud": [
+              0.003,
+              0.003,
+              0.003
+            ],
+            "variables.mud2": [
+              0.1568,
+              0.14,
+              0.0964
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.3759
   },
   "parquet": {
     "doc": "Strip parquet: narrow oak strips in staggered rows, each its own shade of honey and brown, the grain running along them; modelled on Poly Haven's rectangular_parquet.",
     "variables": {
       "oak": [
-        0.45,
-        0.3,
-        0.13
+        0.1998,
+        0.1139,
+        0.0357
       ],
       "oak2": [
-        0.32,
-        0.2,
-        0.08
+        0.169,
+        0.0937,
+        0.0259
       ],
       "light": [
-        0.58,
-        0.42,
-        0.2
+        0.4137,
+        0.2594,
+        0.0912
       ],
       "seam": [
-        0.15,
-        0.09,
-        0.04
+        0.1105,
+        0.0651,
+        0.0227
       ]
     },
     "material": {
@@ -40576,8 +40797,44 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 96.443393,
+            "fitted": 7.275561
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.2122,
+            "variables.oak": [
+              0.1998,
+              0.1139,
+              0.0357
+            ],
+            "variables.oak2": [
+              0.169,
+              0.0937,
+              0.0259
+            ],
+            "variables.light": [
+              0.4137,
+              0.2594,
+              0.0912
+            ],
+            "variables.seam": [
+              0.1105,
+              0.0651,
+              0.0227
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.2122
   }
 }

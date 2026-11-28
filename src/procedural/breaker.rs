@@ -498,10 +498,25 @@ impl BreakerWater {
         let low = 1. - crate::math::smoothstep(0.1, 0.25, up);
         let mut cover = 0.;
         if level * low > 0. {
-            // The lace: two octaves, its edges sharpened.
-            // (Fine: patches a third of a metre across, holes between; coarser ones read as stains.)
-            let lace = 0.65 * n(p.x / 0.35 + 31.7, p.y / 0.35, p.z / 0.35) + 0.35 * n(p.x / 0.12 + 5.2, p.y / 0.12, p.z / 0.12);
-            cover = level * low * crate::math::smoothstep(0.08, 0.12, lace);
+            // The lace foam leaves on water: gathered into a network of thin lines along the
+            // edges between the cells of water welling up beneath (where the second-nearest
+            // of scattered points is nearly as near as the nearest), with dark water between;
+            // a finer net within where the foam is thicker, filling in where it is thickest.
+            // (Thresholded noise gave solid blotches, stains on the water.)
+            let warp = 0.35 * n(p.x / 1.1 + 2.9, 0.3, p.z / 1.1) + 0.1 * n(p.x / 0.3 + 8.1, 0.6, p.z / 0.3);
+            let (u, w) = (p.x + warp, p.z - 0.8 * warp);
+            // The lines' widths vary, and they break off in places.
+            let vary = 0.5 + 0.5 * n(p.x / 0.25 + 17.7, 0.4, p.z / 0.25);
+            let broken = crate::math::smoothstep(-0.35, -0.1, n(p.x / 0.45 + 23.9, 0.9, p.z / 0.45));
+            let thick = 0.5 + 0.5 * (0.7 * n(p.x / 3. + 41.1, 0.7, p.z / 3.) + 0.3 * n(p.x / 1. + 7.3, 0.2, p.z / 1.));
+            let lines = |cell: f64, width: f64, seed: u32| {
+                let gap = cell_gap(u / cell, w / cell, seed) * cell;
+                1. - crate::math::smoothstep(0.3 * width, width, gap)
+            };
+            let net = lines(0.7, (0.015 + 0.06 * thick) * (0.3 + 1.4 * vary), 11) * broken;
+            let fine = lines(0.22, (0.008 + 0.02 * thick) * (0.3 + 1.4 * vary), 23) * crate::math::smoothstep(0.45, 0.7, thick);
+            let filled = crate::math::smoothstep(0.8, 0.95, thick);
+            cover = level * low * net.max(fine).max(filled) * crate::math::smoothstep(0.15, 0.35, thick);
         }
         // The lines, where the face rises (not the level water, nor the back, which faces
         // seaward, +z): where a noise stretched along the flow crosses zero, the crest's
@@ -786,6 +801,24 @@ impl CrossWaves {
     pub fn height(&self, p: &Vector3<f64>) -> f64 {
         self.waves.iter().map(|(k, a, phase)| a * (k.dot(p) + phase).sin()).sum()
     }
+}
+
+/// In the plane, at (x, y) in units of the cells (one scattered point each, hashed from the
+/// cell and `seed`), the gap between the distances to the second-nearest point and the
+/// nearest (Worley's F2 - F1): small along the edges between cells, none on them.
+fn cell_gap(x: f64, y: f64, seed: u32) -> f64 {
+    let (cx, cy) = (x.floor(), y.floor());
+    let (mut f1, mut f2) = (f64::MAX, f64::MAX);
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let (ix, iy) = (cx as i64 + dx, cy as i64 + dy);
+            let h = |k: u32| crate::noise::worley_hash(ix as u32, iy as u32, k, seed);
+            let (px, py) = (ix as f64 + h(0), iy as f64 + h(1));
+            let d = ((px - x).powi(2) + (py - y).powi(2)).sqrt();
+            if d < f1 { f2 = f1; f1 = d; } else if d < f2 { f2 = d; }
+        }
+    }
+    f2 - f1
 }
 
 /// Twice the signed area of a loop (positive anticlockwise).

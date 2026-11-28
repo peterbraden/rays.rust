@@ -30051,29 +30051,29 @@
     "doc": "Wood-chip mulch: a dense mat of shredded bark and wood chips, slivers of tan, gold and brown over dark gaps; modelled on Poly Haven's wood_chips.",
     "variables": {
       "soil": [
-        0.09,
-        0.06,
-        0.03
+        0.0377,
+        0.0184,
+        0.0058
       ],
       "light": [
-        0.55,
-        0.39,
-        0.17
+        0.4991,
+        0.2951,
+        0.103
       ],
       "mid": [
-        0.36,
-        0.23,
-        0.1
+        0.0894,
+        0.0331,
+        0.004
       ],
       "dark": [
-        0.2,
-        0.12,
-        0.05
+        0.1042,
+        0.0624,
+        0.021
       ],
       "rim": [
-        0.07,
-        0.05,
-        0.03
+        0.0642,
+        0.0465,
+        0.0286
       ]
     },
     "material": {
@@ -30429,38 +30429,79 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 451.77376,
+            "fitted": 6.53231
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.3774,
+            "variables.light": [
+              0.4991,
+              0.2951,
+              0.103
+            ],
+            "variables.mid": [
+              0.0894,
+              0.0331,
+              0.004
+            ],
+            "variables.dark": [
+              0.1042,
+              0.0624,
+              0.021
+            ],
+            "variables.soil": [
+              0.0377,
+              0.0184,
+              0.0058
+            ],
+            "variables.rim": [
+              0.0642,
+              0.0465,
+              0.0286
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.3774
   },
   "plane_bark": {
     "show": "bark",
     "doc": "Plane-tree bark: a mosaic of thin flakes, each its own shade of grey-brown, olive and pale grey where older bark has peeled away, with dark edges between; modelled on Poly Haven's bark_platanus.",
     "variables": {
       "bark": [
-        0.3,
-        0.27,
-        0.24
+        0.0894,
+        0.0667,
+        0.0511
       ],
       "bark2": [
-        0.22,
-        0.19,
-        0.16
+        0.0627,
+        0.0372,
+        0.0232
       ],
       "olive": [
-        0.34,
-        0.33,
-        0.25
+        0.1208,
+        0.0762,
+        0.0481
       ],
       "dark": [
-        0.12,
-        0.1,
-        0.08
+        0.0286,
+        0.0186,
+        0.0139
       ],
       "pale": [
-        0.42,
-        0.4,
-        0.36
+        0.2002,
+        0.1518,
+        0.1158
       ]
     },
     "material": {
@@ -30665,32 +30706,73 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 2442.877634,
+            "fitted": 2.460622
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.71455,
+            "variables.bark": [
+              0.0894,
+              0.0667,
+              0.0511
+            ],
+            "variables.bark2": [
+              0.0627,
+              0.0372,
+              0.0232
+            ],
+            "variables.olive": [
+              0.1208,
+              0.0762,
+              0.0481
+            ],
+            "variables.pale": [
+              0.2002,
+              0.1518,
+              0.1158
+            ],
+            "variables.dark": [
+              0.0286,
+              0.0186,
+              0.0139
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7146
   },
   "thatch": {
     "doc": "Thatch: reeds laid in bundles running down the roof, weathered silver-grey, dark in the gaps between the stems; modelled on Poly Haven's thatch_roof_angled.",
     "variables": {
       "reed": [
-        0.33,
-        0.35,
-        0.36
+        0.0973,
+        0.0949,
+        0.0873
       ],
       "reed2": [
-        0.22,
-        0.23,
-        0.24
+        0.0846,
+        0.0653,
+        0.0457
       ],
       "light": [
-        0.5,
-        0.52,
-        0.52
+        0.2404,
+        0.2189,
+        0.1848
       ],
       "gap": [
-        0.06,
-        0.06,
-        0.06
+        0.0336,
+        0.0313,
+        0.0266
       ]
     },
     "material": {
@@ -30907,48 +30989,84 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 903.942648,
+            "fitted": 3.27644
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.71224,
+            "variables.reed": [
+              0.0973,
+              0.0949,
+              0.0873
+            ],
+            "variables.reed2": [
+              0.0846,
+              0.0653,
+              0.0457
+            ],
+            "variables.light": [
+              0.2404,
+              0.2189,
+              0.1848
+            ],
+            "variables.gap": [
+              0.0336,
+              0.0313,
+              0.0266
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7122
   },
   "autumn_leaf_scatter": {
     "show": "landscape",
     "doc": "Autumn leaves scattered over a bare grey path: red, orange and yellow leaves, some in drifts, on gritty grey-tan earth; modelled on Poly Haven's forest_floor.",
     "variables": {
       "ground": [
-        0.4,
-        0.37,
-        0.32
+        0.2909,
+        0.189,
+        0.0988
       ],
       "ground2": [
-        0.28,
-        0.25,
-        0.21
+        0.1459,
+        0.0978,
+        0.0343
       ],
       "grit": [
-        0.55,
-        0.52,
-        0.47
+        0.6005,
+        0.4878,
+        0.3362
       ],
       "red": [
-        0.4,
-        0.1,
-        0.04
+        0.3562,
+        0.0895,
+        0.0339
       ],
       "orange": [
-        0.7,
-        0.32,
-        0.06
+        0.5965,
+        0.1817,
+        0.0359
       ],
       "yellow": [
-        0.8,
-        0.62,
-        0.12
+        0.8399,
+        0.6146,
+        0.0964
       ],
       "brown": [
-        0.3,
-        0.18,
-        0.08
+        0.099,
+        0.0151,
+        0.003
       ]
     },
     "material": {
@@ -31223,37 +31341,88 @@
             ],
             "chroma": 0.08
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 29.079375,
+            "fitted": 1.705355
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.80409,
+            "variables.ground": [
+              0.2909,
+              0.189,
+              0.0988
+            ],
+            "variables.ground2": [
+              0.1459,
+              0.0978,
+              0.0343
+            ],
+            "variables.grit": [
+              0.6005,
+              0.4878,
+              0.3362
+            ],
+            "variables.red": [
+              0.3562,
+              0.0895,
+              0.0339
+            ],
+            "variables.orange": [
+              0.5965,
+              0.1817,
+              0.0359
+            ],
+            "variables.yellow": [
+              0.8399,
+              0.6146,
+              0.0964
+            ],
+            "variables.brown": [
+              0.099,
+              0.0151,
+              0.003
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.8041
   },
   "dry_stone_wall": {
     "doc": "A dry-stone wall of flat, rounded rust-brown and grey stones laid in rough courses, dark in the deep joints between them; modelled on Poly Haven's stacked_stone_wall.",
     "variables": {
       "stone": [
-        0.42,
-        0.24,
-        0.16
+        0.1541,
+        0.0712,
+        0.0311
       ],
       "stone2": [
-        0.3,
-        0.18,
-        0.12
+        0.0971,
+        0.0682,
+        0.0395
       ],
       "grey": [
-        0.42,
-        0.36,
-        0.32
+        0.1955,
+        0.1206,
+        0.0649
       ],
       "edge": [
-        0.16,
-        0.1,
-        0.07
+        0.1161,
+        0.0559,
+        0.0268
       ],
       "joint": [
-        0.1,
-        0.07,
-        0.05
+        0.0689,
+        0.0363,
+        0.0187
       ]
     },
     "material": {
@@ -31488,32 +31657,73 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 368.083362,
+            "fitted": 9.713134
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.76336,
+            "variables.stone": [
+              0.1541,
+              0.0712,
+              0.0311
+            ],
+            "variables.stone2": [
+              0.0971,
+              0.0682,
+              0.0395
+            ],
+            "variables.grey": [
+              0.1955,
+              0.1206,
+              0.0649
+            ],
+            "variables.edge": [
+              0.1161,
+              0.0559,
+              0.0268
+            ],
+            "variables.joint": [
+              0.0689,
+              0.0363,
+              0.0187
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7634
   },
   "clay_roof_tiles": {
     "doc": "Clay roof tiles: narrow orange-red tiles in long overlapping rows down the roof, each its own shade, many darkened by grime and lichen, with dark gaps between; modelled on Poly Haven's clay_roof_tiles.",
     "variables": {
       "tile": [
-        0.58,
-        0.26,
-        0.12
+        0.2644,
+        0.1071,
+        0.0397
       ],
       "tile2": [
-        0.42,
-        0.18,
-        0.09
+        0.2272,
+        0.0476,
+        0.009
       ],
       "grime": [
-        0.2,
-        0.12,
-        0.08
+        0.0626,
+        0.0241,
+        0.0088
       ],
       "gap": [
-        0.07,
-        0.04,
-        0.03
+        0.0103,
+        0.003,
+        0.003
       ]
     },
     "material": {
@@ -31775,32 +31985,68 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 116.973236,
+            "fitted": 5.065703
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.71999,
+            "variables.tile": [
+              0.2644,
+              0.1071,
+              0.0397
+            ],
+            "variables.tile2": [
+              0.2272,
+              0.0476,
+              0.009
+            ],
+            "variables.grime": [
+              0.0626,
+              0.0241,
+              0.0088
+            ],
+            "variables.gap": [
+              0.0103,
+              0.003,
+              0.003
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.72
   },
   "concrete_blocks": {
     "doc": "A wall of concrete blocks, dark grey and speckled with pale aggregate, in stretcher bond with thin joints; modelled on Poly Haven's concrete_block_wall.",
     "variables": {
       "face": [
-        0.17,
-        0.17,
-        0.15
+        0.0796,
+        0.0639,
+        0.0448
       ],
       "face2": [
-        0.11,
-        0.11,
-        0.1
+        0.0351,
+        0.0268,
+        0.0165
       ],
       "fleck": [
-        0.42,
-        0.41,
-        0.38
+        0.4233,
+        0.4122,
+        0.381
       ],
       "joint": [
-        0.1,
-        0.1,
-        0.09
+        0.0432,
+        0.035,
+        0.0232
       ]
     },
     "material": {
@@ -31998,53 +32244,89 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 248.731823,
+            "fitted": 13.631958
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.1646,
+            "variables.face": [
+              0.0796,
+              0.0639,
+              0.0448
+            ],
+            "variables.face2": [
+              0.0351,
+              0.0268,
+              0.0165
+            ],
+            "variables.fleck": [
+              0.4233,
+              0.4122,
+              0.381
+            ],
+            "variables.joint": [
+              0.0432,
+              0.035,
+              0.0232
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.1646
   },
   "grass_path": {
     "show": "landscape",
     "doc": "A worn path: pale grey-beige grit and small stones trodden hard, with scattered tufts of grass; modelled on Poly Haven's grass_path_2.",
     "variables": {
       "ground": [
-        0.45,
-        0.42,
-        0.35
+        0.3833,
+        0.2965,
+        0.1742
       ],
       "ground2": [
-        0.32,
-        0.29,
-        0.23
+        0.0271,
+        0.0317,
+        0.003
       ],
       "light": [
-        0.68,
-        0.66,
-        0.6
+        0.7102,
+        0.6786,
+        0.5957
       ],
       "mid": [
-        0.5,
-        0.47,
-        0.41
+        0.4732,
+        0.3794,
+        0.2228
       ],
       "dark": [
-        0.3,
-        0.27,
-        0.22
+        0.1875,
+        0.1702,
+        0.1314
       ],
       "rim": [
-        0.2,
-        0.18,
-        0.14
+        0.1826,
+        0.1663,
+        0.132
       ],
       "green": [
-        0.3,
-        0.4,
-        0.12
+        0.3151,
+        0.3649,
+        0.1127
       ],
       "green2": [
-        0.5,
-        0.5,
-        0.28
+        0.5128,
+        0.49,
+        0.286
       ]
     },
     "material": {
@@ -32388,32 +32670,88 @@
             ],
             "chroma": 0.06
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 63.922947,
+            "fitted": 1.225262
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.2188,
+            "variables.ground": [
+              0.3833,
+              0.2965,
+              0.1742
+            ],
+            "variables.ground2": [
+              0.0271,
+              0.0317,
+              0.003
+            ],
+            "variables.light": [
+              0.7102,
+              0.6786,
+              0.5957
+            ],
+            "variables.mid": [
+              0.4732,
+              0.3794,
+              0.2228
+            ],
+            "variables.dark": [
+              0.1875,
+              0.1702,
+              0.1314
+            ],
+            "variables.rim": [
+              0.1826,
+              0.1663,
+              0.132
+            ],
+            "variables.green": [
+              0.3151,
+              0.3649,
+              0.1127
+            ],
+            "variables.green2": [
+              0.5128,
+              0.49,
+              0.286
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.2188
   },
   "weathered_boards": {
     "doc": "Weathered boards: dark brown planks standing side by side, their grain streaked and blotched by the weather, with a few knots and dark gaps between; modelled on Poly Haven's weathered_planks.",
     "variables": {
       "wood": [
-        0.2,
-        0.15,
-        0.11
+        0.0784,
+        0.0549,
+        0.0423
       ],
       "wood2": [
-        0.12,
-        0.09,
-        0.07
+        0.0607,
+        0.049,
+        0.0401
       ],
       "light": [
-        0.3,
-        0.24,
-        0.18
+        0.1646,
+        0.1167,
+        0.0802
       ],
       "gap": [
-        0.03,
-        0.025,
-        0.02
+        0.0159,
+        0.0117,
+        0.0073
       ]
     },
     "material": {
@@ -32434,7 +32772,7 @@
           },
           "translate": [
             0,
-            0,
+            1.7,
             2.5
           ],
           "rotate": [
@@ -32468,7 +32806,7 @@
                         },
                         "translate": [
                           0,
-                          0,
+                          1.7,
                           2.5
                         ],
                         "rotate": [
@@ -32575,7 +32913,7 @@
                   },
                   "translate": [
                     0,
-                    0,
+                    1.7,
                     2.5
                   ],
                   "rotate": [
@@ -32664,37 +33002,73 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 499.486572,
+            "fitted": 2.64825
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 1.3924,
+            "variables.wood": [
+              0.0784,
+              0.0549,
+              0.0423
+            ],
+            "variables.wood2": [
+              0.0607,
+              0.049,
+              0.0401
+            ],
+            "variables.light": [
+              0.1646,
+              0.1167,
+              0.0802
+            ],
+            "variables.gap": [
+              0.0159,
+              0.0117,
+              0.0073
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.3924
   },
   "stone_block_wall": {
     "doc": "A wall of rough-dressed grey stone blocks in courses, each its own shade, streaked dark by the weather, with recessed joints; modelled on Poly Haven's rock_wall_08.",
     "variables": {
       "stone": [
-        0.3,
-        0.29,
-        0.27
+        0.0816,
+        0.0662,
+        0.05
       ],
       "stone2": [
-        0.19,
-        0.18,
-        0.17
+        0.0647,
+        0.056,
+        0.0457
       ],
       "light": [
-        0.4,
-        0.39,
-        0.36
+        0.1458,
+        0.1252,
+        0.0988
       ],
       "stain": [
-        0.13,
-        0.13,
-        0.12
+        0.1143,
+        0.1108,
+        0.098
       ],
       "joint": [
-        0.11,
-        0.1,
-        0.09
+        0.0439,
+        0.0377,
+        0.0311
       ]
     },
     "material": {
@@ -32910,8 +33284,49 @@
             ],
             "chroma": 0.03
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 219.834832,
+            "fitted": 3.945145
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 1,
+          "loss_kind": "floor+detail+solved",
+          "date": "2026-11-28",
+          "applied": true,
+          "values": {
+            "scale": 0.7,
+            "variables.stone": [
+              0.0816,
+              0.0662,
+              0.05
+            ],
+            "variables.stone2": [
+              0.0647,
+              0.056,
+              0.0457
+            ],
+            "variables.light": [
+              0.1458,
+              0.1252,
+              0.0988
+            ],
+            "variables.stain": [
+              0.1143,
+              0.1108,
+              0.098
+            ],
+            "variables.joint": [
+              0.0439,
+              0.0377,
+              0.0311
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7
   }
 }

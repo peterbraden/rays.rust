@@ -312,8 +312,11 @@ impl Breaker {
             // the shoulder still standing and where it has landed.
             height: self.height * (1. + v * (0.45 * ((-((raw - 1.) / 0.5).powi(2)).exp() - 1.) + 0.1 * wander(9., 1.7))),
             // (Over metres and less too: the falling water isn't even.)
-            lip: 1. + v * (0.35 * wander(5., 3.1) + 0.25 * wander(1.2, 8.3) + 0.2 * wander(0.6, 14.9)),
-            throw: 1. + v * (0.08 * wander(6., 4.9) + 0.06 * wander(1.5, 9.7) + 0.03 * wander(0.5, 12.1)),
+            // (Gently below a few metres: seen along the tube from inside, each thicker or
+            // further-thrown band of the lip was a ring, and a noise of one scale spaces them
+            // evenly, a tunnel of hoops.)
+            lip: 1. + v * (0.35 * wander(5., 3.1) + 0.08 * wander(1.7, 8.3) + 0.04 * wander(0.7, 14.9)),
+            throw: 1. + v * (0.08 * wander(6., 4.9) + 0.025 * wander(2.3, 9.7)),
             // The falling water's edge torn into fingers, decimetres across.
             finger: v * 0.15 * (wander(0.3, 16.3) + 0.6 * wander(0.12, 18.1)),
             // Past the landing, the turbulent roller of the broken bore, settling as it ages.
@@ -508,6 +511,7 @@ impl BreakerWater {
         // patches broke the crest's edge into tufts.)
         let face = (1. - level) * (1. - crate::math::smoothstep(-0.1, 0.3, normal.z)) * (1. - 0.85 * (1. - crate::math::smoothstep(-0.5, -0.1, normal.y)))
             * (1. - crate::math::smoothstep(0.3, 0.6, normal.y));
+
         if face > 0. {
             // (The flow runs along the crest as well as up the face as the wave peels: the lines
             // lie diagonally, across the crest's coordinate as it rises.)

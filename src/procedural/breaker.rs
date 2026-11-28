@@ -544,15 +544,18 @@ impl BreakerWater {
     /// undulation half a metre across.
     fn relief(&self, p: &Vector3<f64>, streaked: f64) -> f64 {
         let n = |x: f64, y: f64, z: f64| self.noise.noise(x, y, z);
-        // (Small: a breaking wave's face is glassy, and stronger ripples smeared everything seen
-        // through or in it.)
-        let ripples = 0.00024 * n(p.x / 0.03, p.y / 0.03, p.z / 0.03)
-            + 0.00012 * n(p.x / 0.015 + 7.1, p.y / 0.015, p.z / 0.015)
-            + 0.0005 * n(p.x / 0.08 + 3.3, p.y / 0.08, p.z / 0.08);
-        // (Diagonal, as the foam's lines: along the crest alone they ringed the tube's roof.)
+        // Capillary ripples, three octaves. (Cut to a fifth once, for a blur that was the
+        // camera's focus; a breaking wave's face is rippled enough to glitter all over.)
+        let ripples = 0.0007 * n(p.x / 0.03, p.y / 0.03, p.z / 0.03)
+            + 0.00035 * n(p.x / 0.015 + 7.1, p.y / 0.015, p.z / 0.015)
+            + 0.0012 * n(p.x / 0.08 + 3.3, p.y / 0.08, p.z / 0.08);
+        // Streaks drawn out along the flow up the face, diagonal as it peels (along the crest
+        // alone they ringed the tube's roof): narrow across, a few centimetres, long along it,
+        // tens; slopes about a fifth, so each throws a glint, as the scales of a breaking
+        // wave's face do.
         let x = p.x + 1.2 * (p.y - self.trough);
-        // (Faint: stronger, they swirled over every surface like brushstrokes.)
-        let streaks = streaked * 0.0005 * n(x / 0.1 + 11.9, p.y / 1.2, p.z / 1.2);
+        let streaks = streaked * (0.0012 * n(x / 0.05 + 11.9, p.y / 0.6, p.z / 0.6)
+            + 0.0005 * n(x / 0.022 + 4.4, p.y / 0.25, p.z / 0.25));
         let swell = 0.01 * n(p.x / 0.5 + 21.4, p.y / 0.5, p.z / 0.5);
         ripples + streaks + swell
     }

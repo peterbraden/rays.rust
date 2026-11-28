@@ -515,6 +515,14 @@ of noise rather than sprites, which drew it as hexagons; 11.8 → 0.77), shell_g
 broken shell) and sparse_grass (sparse_grass: green shoots over brown soil, straw across them;
 3.82 → 0.84).
 
+And four more: patchy_snow (snow_03: snow melting off in lumps over dark ground; 9.89 → 0.76,
+blockier close up than the scan), rocky_trail (rocky_trail: tan dirt packed with grit and
+stones; 268 → 1.54, its stones more even in size than the scan's), slabby_path
+(forest_ground_04: flat grey slabs and flakes in brown earth; 963 → 0.88, the fit fading the
+slabs into the earth, which matches the scan at its scale but not close up; its colours alone
+left them dark or chalky) and moss_carpet (aerial_grass_rock, 15 m: yellow-green moss over
+rock, bare patches and grit; 35.5 → 0.92).
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

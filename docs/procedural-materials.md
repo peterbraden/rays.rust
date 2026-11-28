@@ -531,6 +531,21 @@ grit, a `brick` laid flat; 21.6 → 3.63, but the fit pinched the setts into sta
 colours were applied) and pitted_ochre_rock (rock_pitted_mossy: orange rock crazed by cracks,
 grey patina and pits; 41.1 → 1.25, its colours alone, as the fit's cracks became loops).
 
+And ten more, for breadth: their structure as written and only their colours and size fitted
+(twenty iterations, scored on the fitting patch): wood_chip_mulch (wood_chips: tan and gold
+slivers over dark gaps; 452 → 6.53), plane_bark (bark_platanus: a mosaic of grey, olive and
+pale flakes; 2443 → 2.46), thatch (thatch_roof_angled: silver-grey reeds in bundles; 904 →
+3.28), autumn_leaf_scatter (forest_floor: red, orange and yellow leaves in drifts on grey
+grit; 29.1 → 1.71), dry_stone_wall (stacked_stone_wall: flat rounded rust-brown stones in rough
+courses, a warped `brick`; 368 → 9.71, more regular than the scan's), clay_roof_tiles
+(clay_roof_tiles: columns of narrow orange tiles, grimed; 117 → 5.07), concrete_blocks
+(concrete_block_wall: dark speckled blocks in stretcher bond; 249 → 13.6), grass_path
+(grass_path_2: pale grit and stones with tufts of grass; 63.9 → 1.23), weathered_boards
+(weathered_planks: dark upright boards, streaked grain and knots; 499 → 2.65) and
+stone_block_wall (rock_wall_08: rough grey blocks in courses; 220 → 3.95). The walls, roofs,
+boards and bark are fitted as walls (`"view": "wall"`); bricks there are moved a quarter of
+their depth off the wall's plane, as alternate courses are offset by half of it.
+
 ### Presets modelled on scans
 
 ![The first ten presets and their scans](material-fit-scans.png)

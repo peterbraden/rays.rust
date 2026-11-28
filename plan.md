@@ -3052,3 +3052,33 @@ Left, by what they would recover:
   16 the error is a bias, which more samples don't remove. The limit stays at 2 pixels.
 - So the ground leaves the host only with its colour evaluated at each hit: the cover's classes
   and the library materials' patterns in the kernels (the graph evaluator in `shared`).
+
+## 21. Host vertices' shadow rays traced on the device
+
+Known (profiles of the GPU's host queue, 10 s samples): shadow rays are 32% of the host's
+shading on pebble-beach, 17% on terrain-alpine, 22% on landscape. All the scene's shadow tests
+go through `s.objects.transmittance`; the sun's and the sky's from `functions::direct_lighting`,
+`sun_light_mis` and `sky_light_mis`, each multiplied into the vertex's `emit`, which the host
+adds to the path's light times its throughput (`integrator::host_bounce`). The kernels already
+trace two shadow rays after a path's own in the next round (`find_all`'s jobs 1 and 2, for
+crepuscular rays, only for camera rays), on the model of light added unshadowed and taken back
+if blocked (`shadowed`).
+
+Design:
+1. While a GPU host vertex is shaded, the sun's and sky's shadow rays (to infinity: not a moon's,
+   whose rays stop short of it) are recorded, two at most, instead of traced: each returns its
+   light unshadowed and keeps it (`functions::defer`). More, or other lights' rays, are traced.
+2. Only for a material that declares its `emit` is the lighting functions' sum, unscaled
+   (`MaterialModel::direct_emit`: Lambertian, plastic, dry rock, snow and ice's BSDFs; mix, bump
+   and surface layers when all their materials are; the landscape's `Land`). Others scale or
+   build their emit (noise, layered, leaf, subsurface); for them deferral would be wrong, so
+   they trace as now.
+3. The host multiplies each kept light by the throughput, packs it (RGB9E5) and adds to the
+   path's light the packed value, so that what the kernel takes back cancels exactly; and puts
+   the two rays in `hit` (a direction, octahedral, or the sun's exactly, and the light) under
+   `PATH_DEFERRED`. A path that ends at the vertex traces its kept rays on the host.
+4. `find_all` reads them in place of crepuscular samples (which a host path never has: it isn't
+   a camera ray) and traces them as jobs 1 and 2, from the path's next origin.
+
+Assumed, to measure: the device's extra traversal costs less than the host's; the picture
+changes only by the packing (0.1% of a ray's brightest channel) and the kernels' f32.
